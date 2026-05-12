@@ -26,8 +26,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-langchain = ["langchain-core>=0.1"]
-llamaindex = ["llama-index-core>=0.10"]
+langchain = ["langchain-core>=0.3,<0.4"]
+llamaindex = ["llama-index-core>=0.10,<0.13"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",

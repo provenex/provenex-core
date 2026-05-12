@@ -2,7 +2,7 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`1.0.0`**.
+This document specifies the schema. The current schema version is **`1.1.0`**.
 
 ## Design properties
 
@@ -18,13 +18,14 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "issued_at": "2026-05-08T14:32:07.441Z",
   "issuer": "provenex-core/0.1.0",
   "output": { ... },
   "sources": [ ... ],
   "policy": { ... },
   "summary": { ... },
+  "transparency_log": { ... },
   "signature": { ... }
 }
 ```
@@ -32,13 +33,14 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. `1.0.0` for this revision. |
+| `schema_version` | string | Semver. `1.1.0` for this revision. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
 | `issuer` | string | Software identifier, e.g. `provenex-core/0.1.0`. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
 | `policy` | object | The verification policy in effect. See below. |
 | `summary` | object | Aggregate counts and overall status. See below. |
+| `transparency_log` | object | Optional. Present iff the receipt was produced against a Merkle transparency log (1.1.0+). See below. |
 | `signature` | object | Optional. Present iff the receipt was signed. See below. |
 
 ## `output`
@@ -74,7 +76,9 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
   "chunk_length": 936,
   "authorized": true,
   "verification_outcome": "VERIFIED",
-  "normalization_applied": ["unicode_nfc", "strip_zero_width", "whitespace_collapse"]
+  "normalization_applied": ["unicode_nfc", "strip_zero_width", "whitespace_collapse"],
+  "leaf_index": 4217,
+  "inclusion_proof": ["sha256:<hex>", "sha256:<hex>", "..."]
 }
 ```
 
@@ -90,6 +94,8 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
 | `authorized` | boolean \| null | Authorization state at retrieval time. `null` if `UNVERIFIED`. |
 | `verification_outcome` | string | One of `VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`. |
 | `normalization_applied` | array of string | Ordered list of normalization steps applied. Used to reproduce the pipeline byte-for-byte. |
+| `leaf_index` | integer | Optional (1.1.0+). Position of this fingerprint in the transparency log. Omitted on receipts produced without a log. |
+| `inclusion_proof` | array of string | Optional (1.1.0+). RFC 6962 audit path as `sha256:<hex>` strings. Verifiable offline against `transparency_log.tree_root`. |
 
 ### Verification outcomes
 
@@ -156,6 +162,43 @@ Recording the policy on the receipt means an auditor can reason about what happe
 | `PASS` | Every chunk is `VERIFIED`. |
 | `PARTIAL` | At least one non-`VERIFIED` outcome, but no chunks would be blocked under the policy in effect. |
 | `FAIL` | At least one chunk would be blocked under the policy in effect. |
+
+## `transparency_log`
+
+Optional. Present iff the receipt was produced against a Merkle transparency log (schema 1.1.0+). Records the log head at issuance time. Combined with the per-source `leaf_index` and `inclusion_proof` fields, anyone holding the receipt can verify offline that each fingerprint was committed to the log at its claimed position.
+
+```json
+{
+  "transparency_log": {
+    "tree_size": 4218,
+    "tree_root": "sha256:<64 hex chars>"
+  }
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `transparency_log.tree_size` | integer | Number of leaves in the log at issuance. |
+| `transparency_log.tree_root` | string | RFC 6962 tree head as `sha256:<hex>`. |
+
+The format follows [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962) (the Certificate Transparency tree hash construction): `leaf_hash = SHA256(0x00 || leaf_bytes)`, `node_hash = SHA256(0x01 || left || right)`, with the recursion splitting at the largest power of two less than the subtree size for non-power-of-two trees. The leaf bytes for each row are the canonical payload that the index HMAC also signs, so a verified inclusion proof shows that an authentic row was committed to the log at the claimed position.
+
+Verification:
+
+```python
+from provenex.core.merkle import verify_inclusion_proof
+
+leaf = build_canonical_payload_from_source(source)  # same bytes the HMAC signs
+proof = [bytes.fromhex(h.removeprefix("sha256:")) for h in source["inclusion_proof"]]
+root = bytes.fromhex(receipt["transparency_log"]["tree_root"].removeprefix("sha256:"))
+ok = verify_inclusion_proof(
+    leaf=leaf,
+    leaf_index=source["leaf_index"],
+    tree_size=receipt["transparency_log"]["tree_size"],
+    proof=proof,
+    root=root,
+)
+```
 
 ## `signature`
 

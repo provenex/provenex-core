@@ -62,6 +62,27 @@ Every row is signed when it's written. At read time the signature is recomputed 
 
 The open source implementation uses SQLite ([`provenex/index/sqlite_index.py`](../provenex/index/sqlite_index.py)). Production deployments swap in the hosted Provenex index, which implements the same `ProvenanceIndex` abstract interface ([`provenex/index/base.py`](../provenex/index/base.py)). The swap is one line of code.
 
+#### Transparency log
+
+The per-row HMAC detects tampering with any single row. It does not detect insertion or removal of rows by an attacker who holds the signing key. To close that gap, the optional [`MerkleSQLiteProvenanceIndex`](../provenex/index/merkle_sqlite_index.py) extends the SQLite index with an [RFC 6962](https://www.rfc-editor.org/rfc/rfc6962) Merkle transparency log over the same rows.
+
+The leaf bytes for each row are the canonical payload the HMAC already signs:
+
+```
+leaf = fingerprint \n document_id \n document_version \n ingested_at \n chunk_offset \n chunk_length
+leaf_hash = SHA256(0x00 || leaf)
+node_hash = SHA256(0x01 || left || right)
+```
+
+Two operations matter for verification:
+
+- **`tree_root()`** returns the current tree head. The hosted commercial product publishes signed tree heads periodically; a witness can gossip them and detect divergence (the standard CT pattern). The OSS reference implementation does not gossip — that's a hosted-product feature — but the tree head is still useful as a local anchor.
+- **`inclusion_proof(fingerprint)`** returns a logarithmic-size audit path. Anyone holding the receipt and the tree head can verify offline that a specific fingerprint was committed to the log at the claimed position, using `provenex.core.merkle.verify_inclusion_proof` — no need to scan the whole index.
+
+When a receipt is produced against a `MerkleSQLiteProvenanceIndex`, each source record carries its `leaf_index` and `inclusion_proof`, and the receipt as a whole carries `transparency_log.tree_size` and `transparency_log.tree_root`. The signature covers all of it, so tampering with any field — including the log head — invalidates the receipt. See [`docs/receipt_format.md`](receipt_format.md) for the on-the-wire schema.
+
+The two layers compose: HMAC for per-row integrity (a single forged row is detectable by anyone with the key), Merkle log for whole-log integrity (insertion or removal of rows changes the tree head, detectable by anyone with the previous head).
+
 ### 3. Verification
 
 When a retriever returns a chunk, Provenex:
@@ -113,7 +134,7 @@ Nothing the index or the receipt stores can be reversed to document content. Fin
 
 The system is designed against three threats.
 
-**Tampering with the index.** Mitigated: every row is HMAC-signed; a modification anywhere in `fingerprint, document_id, document_version, ingested_at, chunk_offset, chunk_length` invalidates the signature, and the verification outcome is `TAMPERED`. An attacker would need the signing key to forge a row that verifies.
+**Tampering with the index.** Mitigated: every row is HMAC-signed; a modification anywhere in `fingerprint, document_id, document_version, ingested_at, chunk_offset, chunk_length` invalidates the signature, and the verification outcome is `TAMPERED`. An attacker would need the signing key to forge a row that verifies. When the optional transparency log is in use (`MerkleSQLiteProvenanceIndex`), an attacker who *does* hold the signing key still cannot insert or remove rows without changing the publicly-observable tree head — and any verifier who has previously seen the tree head can detect the change.
 
 **Injection of unindexed content.** Mitigated: a chunk that wasn't ingested through Provenex has no matching fingerprint, returns `UNVERIFIED`, and is surfaced on the receipt. A strict policy (`block_unverified=True`) refuses to pass it to the LLM at all.
 
@@ -132,6 +153,8 @@ What this system explicitly does not protect against:
 - [`provenex/core/fingerprinter.py`](../provenex/core/fingerprinter.py) — top-level fingerprint API
 - [`provenex/index/base.py`](../provenex/index/base.py) — abstract `ProvenanceIndex` and `VerificationOutcome`
 - [`provenex/index/sqlite_index.py`](../provenex/index/sqlite_index.py) — SQLite implementation with HMAC-signed rows
+- [`provenex/index/merkle_sqlite_index.py`](../provenex/index/merkle_sqlite_index.py) — SQLite index with an RFC 6962 transparency log layered over the same rows
+- [`provenex/core/merkle.py`](../provenex/core/merkle.py) — RFC 6962 Merkle tree primitive and stateless inclusion-proof verifier
 - [`provenex/policy/policy.py`](../provenex/policy/policy.py) — `VerificationPolicy`, block/flag matrix, status reduction
 - [`provenex/core/receipt.py`](../provenex/core/receipt.py) — receipt model, builder, signer interface, signature verification
 

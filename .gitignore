@@ -17,6 +17,13 @@ htmlcov/
 .ruff_cache/
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
+
+# Benchmarking artifacts — local-only; numbers are summarized in docs/scaling.md
+bench_reports/
+bench/wiki_cache/
+
 .DS_Store
 .idea/
 .vscode/

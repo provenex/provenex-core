@@ -40,7 +40,7 @@ from ..index.base import VerificationOutcome
 from ..policy.policy import VerificationPolicy, overall_status
 
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 ISSUER = "provenex-core/0.1.0"
 
 
@@ -110,6 +110,12 @@ class SourceRecord:
     """A single source chunk's entry on the receipt.
 
     Attributes match the ``sources[]`` schema in the project spec.
+
+    The transparency-log fields (``leaf_index``, ``inclusion_proof``) are
+    optional and present only when the receipt was produced against an
+    index that maintains an RFC 6962 transparency log (added in schema
+    version 1.1.0). When present, ``inclusion_proof`` can be verified
+    offline against the receipt's ``transparency_log.tree_root``.
     """
 
     chunk_index: int
@@ -122,10 +128,12 @@ class SourceRecord:
     authorized: Optional[bool]
     verification_outcome: VerificationOutcome
     normalization_applied: List[str] = field(default_factory=list)
+    leaf_index: Optional[int] = None
+    inclusion_proof: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize this source record to a plain dict (JSON-ready)."""
-        return {
+        d: Dict[str, Any] = {
             "chunk_index": self.chunk_index,
             "fingerprint": self.fingerprint,
             "document_id": self.document_id,
@@ -137,6 +145,11 @@ class SourceRecord:
             "verification_outcome": self.verification_outcome.value,
             "normalization_applied": list(self.normalization_applied),
         }
+        if self.leaf_index is not None:
+            d["leaf_index"] = self.leaf_index
+        if self.inclusion_proof is not None:
+            d["inclusion_proof"] = list(self.inclusion_proof)
+        return d
 
 
 @dataclass
@@ -159,6 +172,7 @@ class ProvenanceReceipt:
     signature_value: Optional[str] = None
     schema_version: str = SCHEMA_VERSION
     issuer: str = ISSUER
+    transparency_log: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -184,6 +198,8 @@ class ProvenanceReceipt:
             },
             "summary": dict(self.summary),
         }
+        if self.transparency_log is not None:
+            d["transparency_log"] = dict(self.transparency_log)
         if self.signature_algorithm is not None:
             d["signature"] = {
                 "algorithm": self.signature_algorithm,
@@ -266,6 +282,8 @@ class ReceiptBuilder:
         outcome: VerificationOutcome,
         entry: Any = None,
         normalization_applied: Optional[List[str]] = None,
+        leaf_index: Optional[int] = None,
+        inclusion_proof: Optional[List[str]] = None,
     ) -> None:
         """Add one source chunk to the receipt under construction.
 
@@ -278,6 +296,11 @@ class ReceiptBuilder:
                 receipt are set to ``None``.
             normalization_applied: The normalization steps that were applied
                 to compute the fingerprint.
+            leaf_index: Position of this fingerprint in the transparency
+                log, if one is in use (schema version 1.1.0+).
+            inclusion_proof: RFC 6962 audit path for ``leaf_index`` as a
+                list of ``sha256:<hex>`` strings. Verifiable offline against
+                the receipt's ``transparency_log.tree_root``.
         """
         record = SourceRecord(
             chunk_index=len(self._sources),
@@ -290,6 +313,8 @@ class ReceiptBuilder:
             authorized=getattr(entry, "authorized", None),
             verification_outcome=outcome,
             normalization_applied=list(normalization_applied or []),
+            leaf_index=leaf_index,
+            inclusion_proof=inclusion_proof,
         )
         self._sources.append(record)
 
@@ -313,6 +338,7 @@ class ReceiptBuilder:
         self,
         output_text: str,
         signer: Optional[ReceiptSigner] = None,
+        transparency_log: Optional[Dict[str, Any]] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -324,6 +350,12 @@ class ReceiptBuilder:
                 ``None``, the receipt is returned unsigned (the ``signature``
                 block is omitted from the JSON). Unsigned receipts are useful
                 in development; production should always sign.
+            transparency_log: Optional dict carrying the log head at
+                issuance, typically ``{"tree_size": int, "tree_root":
+                "sha256:<hex>"}``. Present when the source records carry
+                ``leaf_index`` / ``inclusion_proof`` fields. Recorded under
+                the receipt's ``transparency_log`` key and covered by the
+                signature.
 
         Returns:
             The completed :class:`ProvenanceReceipt`.
@@ -335,6 +367,7 @@ class ReceiptBuilder:
             sources=list(self._sources),
             policy=self._policy,
             summary=self._summary(),
+            transparency_log=dict(transparency_log) if transparency_log else None,
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm
