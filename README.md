@@ -128,8 +128,6 @@ python provenex-core/examples/standalone_demo.py
 
 `examples/standalone_demo.py` runs the full story end-to-end — ingest a document, get a signed receipt with a cryptographic inclusion proof, watch the HMAC catch a tampered row, then re-verify the proof **with the database deleted** using only the receipt fields and the published tree root. It's the demo we'd show a sceptical compliance team.
 
-> Want a shareable asciicast? See [`docs/recording_demo.md`](https://github.com/provenex/provenex-core/blob/main/docs/recording_demo.md) for the asciinema recipe.
-
 ## CLI
 
 ```bash
