@@ -80,7 +80,7 @@ Three components:
 
 **3. Receipt.** After verification, a JSON receipt is issued that records the chunks, their outcomes, the policy in effect, a SHA-256 of the LLM output, and a signature over the whole thing. The receipt is the artifact you keep.
 
-See [`docs/how_it_works.md`](docs/how_it_works.md) for the full algorithm, including the architectural distinction between fingerprint-based identity and embedding-based similarity. See [`docs/receipt_format.md`](docs/receipt_format.md) for the schema spec.
+See [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md) for the full algorithm, including the architectural distinction between fingerprint-based identity and embedding-based similarity. See [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md) for the schema spec.
 
 ## How this fits alongside Pinecone Nexus, Weaviate, and other vector DBs
 
@@ -111,11 +111,24 @@ The technical reason this works: Provenex's integration surface is the retriever
 
 ```bash
 pip install provenex-core                  # core only (pure stdlib)
-pip install provenex-core[langchain]       # + LangChain integration
-pip install provenex-core[llamaindex]      # + LlamaIndex integration (coming)
+pip install "provenex-core[langchain]"     # + LangChain integration
+pip install "provenex-core[llamaindex]"    # + LlamaIndex integration (coming)
 ```
 
-Python 3.10+. The core has zero third-party dependencies — it's pure stdlib. LangChain and LlamaIndex are optional extras.
+`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies — it's pure stdlib. LangChain and LlamaIndex are optional extras.
+
+### Try it in 30 seconds
+
+```bash
+pip install provenex-core
+git clone https://github.com/provenex/provenex-core.git   # for the demo script
+export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+python provenex-core/examples/standalone_demo.py
+```
+
+`examples/standalone_demo.py` runs the full story end-to-end — ingest a document, get a signed receipt with a cryptographic inclusion proof, watch the HMAC catch a tampered row, then re-verify the proof **with the database deleted** using only the receipt fields and the published tree root. It's the demo we'd show a sceptical compliance team.
+
+> Want a shareable asciicast? See [`docs/recording_demo.md`](https://github.com/provenex/provenex-core/blob/main/docs/recording_demo.md) for the asciinema recipe.
 
 ## CLI
 
@@ -157,17 +170,17 @@ The index stores fingerprints — one-way SHA-256 hashes — and metadata. **No 
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 
 ## Links
 
 **Reading:**
 
 - [Five Things People Mean by "AI Provenance" (And Which One Is For You)](https://provenex.ai/blog/five-things-ai-provenance) — the category map, and where Provenex sits
-- [`docs/how_it_works.md`](docs/how_it_works.md) — full algorithm, threat model, and architectural comparison to embedding-based systems
-- [`docs/receipt_format.md`](docs/receipt_format.md) — receipt schema specification
-- [`docs/quickstart.md`](docs/quickstart.md) — 5-minute getting-started
-- [`docs/langchain_integration.md`](docs/langchain_integration.md) — LangChain-specific patterns
+- [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md) — full algorithm, threat model, and architectural comparison to embedding-based systems
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md) — receipt schema specification
+- [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md) — 5-minute getting-started
+- [`docs/langchain_integration.md`](https://github.com/provenex/provenex-core/blob/main/docs/langchain_integration.md) — LangChain-specific patterns
 
 **Project:**
 

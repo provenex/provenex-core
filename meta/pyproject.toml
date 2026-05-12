@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "provenex"
+version = "0.1.0"
+description = "Meta-package for Provenex — installs provenex-core."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Provenex" }]
+keywords = ["rag", "provenance", "ai", "compliance", "fingerprinting"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+# Pins to the same version line as provenex-core. Bump in lockstep on each
+# main-package release so `pip install provenex` always gets the matching
+# core. The lower bound (>=, not ==) keeps us flexible if patch versions
+# of provenex-core ship in between meta-package releases.
+dependencies = ["provenex-core>=0.1.0"]
+
+[project.urls]
+Homepage = "https://provenex.ai"
+Repository = "https://github.com/provenex/provenex-core"
+Documentation = "https://provenex.ai/docs"
+
+# Build the trivial stub module. The PyPI package is named `provenex`, but
+# the on-disk Python module installed by this wheel is `provenex_meta` —
+# that avoids any directory clash with the real `provenex/` directory
+# installed by provenex-core.
+[tool.setuptools.packages.find]
+include = ["provenex_meta*"]
