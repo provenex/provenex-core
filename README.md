@@ -4,7 +4,7 @@ Cryptographic provenance verification for RAG pipelines. When an enterprise AI s
 
 This repository contains the open source core: fingerprinting, local SQLite index, receipt generation, LangChain integration. The algorithm is open so it can be audited. Hosted infrastructure, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise provenance graphs are available separately at [provenex.ai](https://provenex.ai).
 
-> **Note on terminology.** "Provenance" means several different things in the AI stack right now — training-data lineage, vector DB governance (Pinecone Nexus, Weaviate), retrieval verification, output faithfulness, generated-media credentials (C2PA). Provenex is the **retrieval verification** layer: cryptographic proof of which chunks reached the LLM, verifiable offline by anyone with the signing key, across any retriever. We've written up the full map in [Five Things People Mean by "AI Provenance"](https://provenex.ai/blog/five-things-ai-provenance).
+> **Note on terminology.** "Provenance" means several different things in the AI stack right now: training-data lineage, vector DB governance (Pinecone Nexus, Weaviate), retrieval verification, output faithfulness, generated-media credentials (C2PA). Provenex is the **retrieval verification** layer. It produces cryptographic proof of which chunks reached the LLM, verifiable offline by anyone with the signing key, across any retriever. We've written up the full map in [Five Things People Mean by "AI Provenance"](https://provenex.ai/blog/five-things-ai-provenance).
 
 ## Five-line integration
 
@@ -22,7 +22,7 @@ result = retriever.get_relevant_documents_with_receipt(query)
 print(result.receipt.to_json())
 ```
 
-Your existing vector store is untouched. Provenex runs alongside as a parallel signed index. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself** — Provenex doesn't know and doesn't care. The integration surface is the retriever (LangChain today; LlamaIndex coming), not the database. `your_existing_retriever` keeps doing semantic similarity; Provenex adds cryptographic identity.
+Your existing vector store is untouched. Provenex runs alongside as a parallel signed index. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care. The integration surface is the retriever (LangChain today; LlamaIndex coming), not the database. `your_existing_retriever` keeps doing semantic similarity; Provenex adds cryptographic identity.
 
 ## What a provenance receipt looks like
 
@@ -74,7 +74,7 @@ The receipt is signed (HMAC-SHA256 by default; pluggable). Anyone with the recei
 
 Three components:
 
-**1. Ingestion.** Documents are normalized (Unicode NFC, whitespace collapse, optional case folding, zero-width stripping) and run through a sliding window. Each window gets a Rabin-Karp rolling hash (base `1_000_003`, modulo Mersenne prime `2^61 - 1`) for cheap O(1) updates, strengthened with SHA-256 for collision-resistant identity. The fingerprints — not the document content — are written to the provenance index along with `document_id`, `document_version`, timestamp, and authorization state. The index never stores document text.
+**1. Ingestion.** Documents are normalized (Unicode NFC, whitespace collapse, optional case folding, zero-width stripping) and run through a sliding window. Each window gets a Rabin-Karp rolling hash (base `1_000_003`, modulo Mersenne prime `2^61 - 1`) for cheap O(1) updates, strengthened with SHA-256 for collision-resistant identity. The fingerprints (not the document content) are written to the provenance index along with `document_id`, `document_version`, timestamp, and authorization state. The index never stores document text.
 
 **2. Retrieval verification.** When your retriever returns chunks, Provenex re-fingerprints each one using the same normalization and hash pipeline, checks the fingerprint against the index, and assigns one of the five outcomes above. Configurable policy decides which outcomes block the chunk before it reaches the LLM.
 
@@ -84,28 +84,28 @@ See [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main
 
 ## How this fits alongside Pinecone Nexus, Weaviate, and other vector DBs
 
-Vector databases store **semantic similarity** — dense embeddings that let you find content similar to a query. Provenex stores **cryptographic identity** — SHA-256 fingerprints that prove bit-exact match against a signed reference. These solve different problems and compose cleanly.
+Vector databases store **semantic similarity**: dense embeddings that let you find content similar to a query. Provenex stores **cryptographic identity**: SHA-256 fingerprints that prove bit-exact match against a signed reference. These solve different problems and compose cleanly.
 
 | | Vector DBs (Pinecone Nexus, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, ...) | Provenex |
 | --- | --- | --- |
 | Primary storage | Dense embeddings (semantic similarity) | SHA-256 fingerprints (cryptographic identity) |
 | Retrieval | Approximate nearest neighbor over vectors | Bit-exact match against signed index |
-| Tampering | Not detectable — embeddings are lossy by design | Detectable — any modification produces a different SHA-256 |
+| Tampering | Not detectable. Embeddings are lossy by design | Detectable. Any modification produces a different SHA-256 |
 | Audit artifact | Vendor dashboard, internal logs | Signed JSON receipt, verifiable offline |
 | Trust root | Vendor's SOC 2 attestation | HMAC signature, verifiable by anyone with the key |
-| Vendor lock-in | Yes (per database) | None — works alongside any retriever |
+| Vendor lock-in | Yes (per database) | None. Works alongside any retriever |
 
 The expected enterprise deployment is **both**: vector DB for retrieval performance and vendor governance, Provenex for cryptographic audit trails compliance teams can hand to a regulator. See [the blog post](https://provenex.ai/blog/five-things-ai-provenance) for the longer argument.
 
 ### Why vendor-agnostic matters
 
-Pinecone Nexus is governance inside Pinecone. Weaviate has its own governance stack. Milvus, Qdrant, Chroma, and the rest each have their own — or none. If you run Pinecone for one workload and Weaviate for another, you have two separate audit stories with two separate vendor trust roots, and no way to produce a single cryptographic record that says "this chunk, wherever it came from, is bit-exact identical to the one we authorized."
+Pinecone Nexus is governance inside Pinecone. Weaviate has its own governance stack. Milvus, Qdrant, Chroma, and the rest each have their own, or none. If you run Pinecone for one workload and Weaviate for another, you have two separate audit stories with two separate vendor trust roots, and no way to produce a single cryptographic record that says "this chunk, wherever it came from, is bit-exact identical to the one we authorized."
 
-Provenex works the same way against all of them, because it never talks to the vector DB. It re-fingerprints the chunks the retriever returns, regardless of where they were stored. One signed index, one receipt schema, one verifiable artifact — across every retrieval path in the enterprise.
+Provenex works the same way against all of them, because it never talks to the vector DB. It re-fingerprints the chunks the retriever returns, regardless of where they were stored. One signed index, one receipt schema, one verifiable artifact across every retrieval path in the enterprise.
 
 This also means **migration risk between vector DBs goes to zero.** If you decide to move from Pinecone to Weaviate, or from a managed service to something self-hosted, your provenance audit trail doesn't change. You re-ingest into the new vector DB; the Provenex index stays the same. Vector DB swaps are decoupled from compliance infrastructure.
 
-The technical reason this works: Provenex's integration surface is the retriever (LangChain, LlamaIndex, custom Python), not the vector DB itself. As long as the retriever returns the chunk text the vector DB stored, Provenex can fingerprint it. We've smoke-tested against Chroma and FAISS in the examples; Pinecone, Weaviate, Milvus, Qdrant, and the rest are integration-trivial — a few lines of adapter code if you're not on a framework that already wraps them.
+The technical reason this works: Provenex's integration surface is the retriever (LangChain, LlamaIndex, custom Python), not the vector DB itself. As long as the retriever returns the chunk text the vector DB stored, Provenex can fingerprint it. We've smoke-tested against Chroma and FAISS in the examples. Pinecone, Weaviate, Milvus, Qdrant, and the rest are integration-trivial: a few lines of adapter code if you're not on a framework that already wraps them.
 
 ## Install
 
@@ -115,7 +115,7 @@ pip install "provenex-core[langchain]"     # + LangChain integration
 pip install "provenex-core[llamaindex]"    # + LlamaIndex integration (coming)
 ```
 
-`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies — it's pure stdlib. LangChain and LlamaIndex are optional extras.
+`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. LangChain and LlamaIndex are optional extras.
 
 ### Try it in 30 seconds
 
@@ -126,9 +126,9 @@ export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.toke
 python provenex-core/examples/standalone_demo.py
 ```
 
-`examples/standalone_demo.py` runs the full story end-to-end — ingest a document, get a signed receipt with a cryptographic inclusion proof, watch the HMAC catch a tampered row, then re-verify the proof **with the database deleted** using only the receipt fields and the published tree root. It's the demo we'd show a sceptical compliance team.
+`examples/standalone_demo.py` runs the full story end-to-end. It ingests a document, issues a signed receipt with a cryptographic inclusion proof, watches the HMAC catch a tampered row, then re-verifies the proof **with the database deleted** using only the receipt fields and the published tree root. It's the demo we'd show a skeptical compliance team.
 
-For the integration-pattern story — how Provenex sits alongside any vector database without replacing it — run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store (bypassing Provenex ingest) get caught at the retrieval boundary and blocked from reaching the LLM.
+For the integration-pattern story (how Provenex sits alongside any vector database without replacing it), run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store, bypassing Provenex ingest, get caught at the retrieval boundary and blocked from reaching the LLM.
 
 ## CLI
 
@@ -142,7 +142,7 @@ Set `PROVENEX_SIGNING_SECRET` in your environment. The `verify` command exits no
 
 ## Why open source?
 
-Compliance teams won't trust a black box. If a regulator asks how your provenance system works, "it's proprietary" is not an answer. The algorithm — normalization, rolling hash, sliding window, SHA-256 strengthening, receipt schema, signature payload — needs to be auditable end to end. So it is. The commercial value is in the hosted infrastructure that runs this algorithm at scale across an enterprise, not in keeping the algorithm secret.
+Compliance teams won't trust a black box. If a regulator asks how your provenance system works, "it's proprietary" is not an answer. The whole algorithm needs to be auditable end to end: normalization, rolling hash, sliding window, SHA-256 strengthening, receipt schema, signature payload. So it is. The commercial value is in the hosted infrastructure that runs this algorithm at scale across an enterprise, not in keeping the algorithm secret.
 
 What's in this repo:
 
@@ -166,7 +166,7 @@ The interface (`ProvenanceIndex`) is the same. Moving from open source to commer
 
 ## Privacy and data sovereignty
 
-The index stores fingerprints — one-way SHA-256 hashes — and metadata. **No document content, no PII, no chunk text is ever written.** Anyone with the index can verify retrieval, but no one can recover document content from it.
+The index stores fingerprints (one-way SHA-256 hashes) and metadata. **No document content, no PII, no chunk text is ever written.** Anyone with the index can verify retrieval, but no one can recover document content from it.
 
 ## License
 
@@ -176,11 +176,11 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 
 **Reading:**
 
-- [Five Things People Mean by "AI Provenance" (And Which One Is For You)](https://provenex.ai/blog/five-things-ai-provenance) — the category map, and where Provenex sits
-- [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md) — full algorithm, threat model, and architectural comparison to embedding-based systems
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md) — receipt schema specification
-- [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md) — 5-minute getting-started
-- [`docs/langchain_integration.md`](https://github.com/provenex/provenex-core/blob/main/docs/langchain_integration.md) — LangChain-specific patterns
+- [Five Things People Mean by "AI Provenance" (And Which One Is For You)](https://provenex.ai/blog/five-things-ai-provenance): the category map, and where Provenex sits
+- [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): full algorithm, threat model, and architectural comparison to embedding-based systems
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema specification
+- [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started
+- [`docs/langchain_integration.md`](https://github.com/provenex/provenex-core/blob/main/docs/langchain_integration.md): LangChain-specific patterns
 
 **Project:**
 

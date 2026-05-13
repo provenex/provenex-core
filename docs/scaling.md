@@ -5,7 +5,7 @@ discussion of how each workload should move on server-class hardware.
 
 > **Headline.** One million chunks ingested in **12.2 minutes** on a 6-core
 > 2018 mobile laptop. Verification settles at **p50 371 µs / p99 599 µs**.
-> Inclusion proofs are **20 hashes** (≈ log₂(1M)) — generated in **403 µs**
+> Inclusion proofs are **20 hashes** (≈ log₂(1M)), generated in **403 µs**
 > at p50 and verified offline against the tree head in **47 µs**.
 
 The bench is single-threaded by design. The numbers below describe what
@@ -22,7 +22,7 @@ below for what those numbers should look like on production hardware.
 | **Ingest** | SHA-256 fingerprint → SQLite write → Merkle tree update, sequentially per chunk |
 | **Verify** | Single-fingerprint lookup against the index; produces one of the five outcomes (`VERIFIED`, `UNVERIFIED`, `MISMATCHED`, `STALE`, `REVOKED`) |
 | **Proof generation** | Pull the inclusion proof (~log₂ N hashes) for a known fingerprint out of the Merkle index |
-| **Proof verification (offline)** | Verify the proof against the tree head with no index access — what an external auditor does |
+| **Proof verification (offline)** | Verify the proof against the tree head with no index access (what an external auditor does) |
 
 The same `Fingerprinter` and `MerkleSQLiteProvenanceIndex` an application
 would use are exercised directly. No monkey-patching, no private
@@ -46,7 +46,7 @@ Two things to keep in mind when interpreting these numbers:
    acceleration (introduced in Goldmont and Ice Lake). All SHA-256 work
    is software. Server CPUs from ~2019 onward (Ice Lake-SP, Cascade
    Lake, EPYC Rome+, Graviton2+, Apple M1+) all have hardware SHA-256.
-2. **Mobile thermal envelope.** Sustained turbo isn't guaranteed — the
+2. **Mobile thermal envelope.** Sustained turbo isn't guaranteed. The
    chip's TDP is 45 W and ingest is a 12-minute hot loop. Desktop or
    server parts hold their boost clocks indefinitely.
 
@@ -65,7 +65,7 @@ Two things to keep in mind when interpreting these numbers:
 | Fingerprint latency | p50 **70 µs**, p95 132 µs, p99 181 µs |
 | Index-add latency | p50 **184 µs**, p95 325 µs, p99 1.06 ms |
 
-The index-add p99 (1 ms) and p999 (40 ms) are SQLite page-flush spikes —
+The index-add p99 (1 ms) and p999 (40 ms) are SQLite page-flush spikes,
 expected on consumer SSDs running WAL with `synchronous=NORMAL`.
 
 ### Verify
@@ -89,18 +89,18 @@ paths.
 | Offline-verification p50 / p95 / p99 | **47 µs / 48 µs / 51 µs** |
 | Sustained throughput | 2,400 proofs/sec generated + verified |
 
-**This is the load-bearing number for the product.** An auditor with
-the receipt and the published tree head — no index, no database, no
-network — can re-verify any chunk in 47 microseconds. The proof is
-20 hashes (640 bytes) regardless of corpus size up through 1M; doubling
-the corpus to 2M adds one hash, four billion chunks would still fit in
-32 hashes.
+**This is the headline number for the product.** An auditor with
+the receipt and the published tree head can re-verify any chunk in
+47 microseconds. No index, no database, no network needed. The proof
+is 20 hashes (640 bytes) regardless of corpus size up through 1M;
+doubling the corpus to 2M adds one hash, four billion chunks would
+still fit in 32 hashes.
 
 ---
 
 ## Real-data validation (Wikipedia 100K)
 
-The 1M numbers above use a synthetic corpus — random ASCII with a
+The 1M numbers above use a synthetic corpus: random ASCII with a
 log-normal chunk-length distribution. A reasonable skeptic asks: do
 those numbers hold up on real text? To answer it, we ran the same bench
 at 100K against a snapshot of 5,600 Wikipedia articles, chunked at 800
@@ -121,10 +121,10 @@ minutes of each other, same warm state, same Python process startup.
 | Verify p99 | 54 µs | 83 µs | wiki +50% (still well below 100 µs) |
 | Proof gen p50 | 30.6 µs | 32.0 µs | within noise |
 | Proof verify (offline) p50 | 26.9 µs | 27.6 µs | within noise |
-| Fingerprint p50 | 67 µs | 93 µs | **wiki +39%** — see below |
+| Fingerprint p50 | 67 µs | 93 µs | **wiki +39%** (see below) |
 
-**The load-bearing metrics — verify, proof generation, offline proof
-verification, index footprint — are statistically indistinguishable on
+**The metrics that matter (verify, proof generation, offline proof
+verification, index footprint) are statistically indistinguishable on
 real vs synthetic data.** The system doesn't care what the text says;
 it cares about chunk count and chunk length, and those are matched.
 
@@ -133,19 +133,18 @@ are ~40% slower per chunk. The cause is the chunk-length distribution,
 not the content. Real Wikipedia text chunks land tightly around the
 target 800-char window (the chunker takes what the article gives it,
 in fixed-ish windows), while the synthetic corpus draws chunk lengths
-from a log-normal distribution with σ=0.4 — so the synthetic mean
+from a log-normal distribution with σ=0.4. So the synthetic mean
 chunk is shorter, which means fewer sliding-window SHA-256 calls per
 chunk. This is a chunk-shape effect; it isn't "Wikipedia is harder."
 Any real RAG pipeline using a standard fixed-window splitter
 (`RecursiveCharacterTextSplitter`, `TokenTextSplitter`) will see the
-Wikipedia number, not the synthetic one. Worth noting that the
-synthetic-side ingest throughput is still on the same side of the
-order-of-magnitude line.
+Wikipedia number, not the synthetic one. Both are still on the same
+side of the order-of-magnitude line for ingest throughput.
 
 **Implication for the 1M synthetic numbers.** Treat verify, proof gen,
 proof verify, and the index footprint at 1M as transferring directly to
 real RAG workloads. Treat the ingest-throughput number (1.4k/s) as a
-slight overestimate on real text — expect closer to 1.3k/s on real
+slight overestimate on real text. Expect closer to 1.3k/s on real
 chunks of the same target size, dominated by the same Python-overhead
 bottleneck. None of this changes the headline claim.
 
@@ -226,7 +225,7 @@ process** likely lands in the **3,000–5,000 chunks/sec** range.
 | **Enterprise NVMe with battery-backed write cache** | Index add (SQLite WAL flushes) | 2–5× on the p999 tail of index_add |
 | **More RAM (so the index page-caches fully)** | Verify and proof gen | Pulls p99 closer to p50 |
 
-### Parallelism — the big lever, not yet enabled
+### Parallelism: the big lever, not yet enabled
 
 The bench is single-threaded. Real production deployments will want to
 parallelize ingest. The two natural cut points:
@@ -241,7 +240,7 @@ parallelize ingest. The two natural cut points:
    linearly in cores and disks.
 
 The Merkle root must still be computed serially over the leaves the
-sharded workers produced — that's a low-microsecond step once you have
+sharded workers produced. That's a low-microsecond step once you have
 all the leaf hashes.
 
 **We have not run these experiments yet.** The numbers in this section
@@ -262,7 +261,7 @@ For an enterprise sizing the system, a defensible projection is:
 | 1M-chunk ingest wall time | 12.2 min | 3–6 min | **~1–2 min** |
 
 Verify, proof gen, and offline verify don't benefit from server-side
-parallelism because each is already a single request — they benefit
+parallelism because each is already a single request. They benefit
 from clock and SHA-NI.
 
 ---
@@ -287,12 +286,12 @@ should hold.
 
 Each run writes `bench_<scale>_<corpus>_<timestamp>.{json,md}` into
 `bench_reports/`. The JSON file has the full histograms (`p50`, `p95`,
-`p99`, `p999`, `max`, mean) and is the source of truth — the markdown
+`p99`, `p999`, `max`, mean) and is the source of truth. The markdown
 is a human summary.
 
 ---
 
-## Phase 2 design — end-to-end RAG overhead bench
+## Phase 2 design: end-to-end RAG overhead bench
 
 The numbers above answer "how fast is Provenex on its own?" They do not
 answer the question a buyer will ask, which is:
@@ -337,12 +336,12 @@ The deltas are what we publish.
 | Embedder | `sentence-transformers/all-MiniLM-L6-v2` (22 MB, ~10 ms/chunk on CPU) | Smallest credible model; well-known; CPU-only so the bench stays portable |
 | Vector store | FAISS CPU (`IndexFlatIP` or `IndexHNSWFlat`) | The standard OSS baseline; no service to stand up |
 | Corpus | The same Wikipedia snapshot the [validation bench](#real-data-validation-wikipedia-100k) uses | One snapshot, one set of results to reason about |
-| Query set | 1,000 article-derived queries (first paragraph of held-out articles) | Deterministic and self-contained — no BEIR dependency |
+| Query set | 1,000 article-derived queries (first paragraph of held-out articles) | Deterministic and self-contained, no BEIR dependency |
 
 ### What we'd expect
 
 - **Ingest overhead:** `provenex.add` at 184 µs vs an embedder at ~10 ms is **~2% extra latency**. The marketing-true sentence is "Provenex is a rounding error on your ingest pipeline."
-- **Query overhead:** verify at 371 µs × top-k (say k=10) = **~3.7 ms** added to a query that already costs ~10 ms (embed) + 1–5 ms (ANN). Roughly **30–50% additive on query latency**, which is honest — verification isn't free, but it's bounded and predictable.
+- **Query overhead:** verify at 371 µs × top-k (say k=10) = **~3.7 ms** added to a query that already costs ~10 ms (embed) + 1–5 ms (ANN). Roughly **30–50% additive on query latency**, which is honest. Verification isn't free, but it's bounded and predictable.
 
 Those numbers are the prediction; the phase-2 bench is what turns them
 into measurements.
@@ -351,22 +350,22 @@ into measurements.
 
 Adding sentence-transformers + faiss-cpu as dependencies takes the
 bench out of "stdlib-only-friendly" territory. Building this is a
-separate, deliberate step — not something to bolt on to the existing
+separate, deliberate step, not something to bolt on to the existing
 scale bench.
 
 ---
 
 ## What this doc does not yet cover
 
-- **Multi-process ingest scaling** — see the parallelism caveat above.
+- **Multi-process ingest scaling.** See the parallelism caveat above.
   Coming once the workload supports it natively.
-- **Hot-cache vs cold-cache verify** — current verify numbers are
+- **Hot-cache vs cold-cache verify.** Current verify numbers are
   steady-state with the index hot in the OS page cache. A cold-start
   verify (first lookup after boot) would be slower; bench doesn't
   isolate that yet.
-- **Concurrent reader-writer** — what verify p99 looks like while
+- **Concurrent reader-writer.** What verify p99 looks like while
   ingest is running into the same index. Not currently measured.
-- **Network-attached storage** — all measurements are on a local SSD.
+- **Network-attached storage.** All measurements are on a local SSD.
   EBS, GP3, and managed-disk performance will differ.
 
 Each of these is the right question to ask before shipping a production

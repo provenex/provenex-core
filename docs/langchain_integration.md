@@ -53,7 +53,7 @@ All chunks in one call are treated as a single logical document under `doc_id`. 
 
 1. Joins all chunks with newlines and computes the `document_version` hash over the normalized join. This makes the version stable across re-chunking.
 2. Fingerprints each chunk individually (one whole-chunk fingerprint per input element).
-3. Also fingerprints the sliding windows over each chunk's text. These let verification succeed when the retriever returns text trimmed or further re-chunked downstream — as long as a `window_size`-codepoint window matches.
+3. Also fingerprints the sliding windows over each chunk's text. These let verification succeed when the retriever returns text trimmed or further re-chunked downstream, as long as a `window_size`-codepoint window matches.
 
 ### Re-ingestion
 
@@ -104,8 +104,8 @@ result = retriever.get_relevant_documents_with_receipt(
 
 The middleware supports both:
 
-- **LangChain 0.1+ runnable interface** — `base_retriever.invoke(query)`.
-- **Classic interface** — `base_retriever.get_relevant_documents(query)`.
+- **LangChain 0.1+ runnable interface**: `base_retriever.invoke(query)`.
+- **Classic interface**: `base_retriever.get_relevant_documents(query)`.
 
 It tries `invoke` first and falls back to the classic method. If your retriever exposes neither, you'll get a `TypeError` with a clear message.
 
@@ -117,7 +117,7 @@ For maximum drop-in compatibility:
 docs = retriever.get_relevant_documents("query")  # returns only kept docs
 ```
 
-This works as a direct replacement for `your_existing_retriever.get_relevant_documents(query)`, except chunks blocked by policy are removed. The receipt is computed but not returned. For real production use, call `get_relevant_documents_with_receipt` and capture the receipt — that's the whole point.
+This works as a direct replacement for `your_existing_retriever.get_relevant_documents(query)`, except chunks blocked by policy are removed. The receipt is computed but not returned. For real production use, call `get_relevant_documents_with_receipt` and capture the receipt. That's the whole point.
 
 ## Configuration parity
 
@@ -160,7 +160,7 @@ If your pipeline structure makes this awkward, build the receipt directly with `
 
 **SQLite is per-process.** The open source `SQLiteProvenanceIndex` is fine for a single process. For multi-worker deployments, use a single process per database file, or move to the hosted Provenex commercial index. The interface is identical.
 
-**Authorization is per `document_id`, not per fingerprint.** Toggling `set_authorization("policy_v4", False)` affects every chunk of that document. This is intentional — you want one knob per document, not per chunk.
+**Authorization is per `document_id`, not per fingerprint.** Toggling `set_authorization("policy_v4", False)` affects every chunk of that document. This is intentional. You want one knob per document, not per chunk.
 
 ## Full example
 
@@ -168,4 +168,4 @@ See [`examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py) for 
 
 ## LlamaIndex
 
-A LlamaIndex integration is on the roadmap. Its design will mirror this one: a wrapper around the base retriever, identical receipt format, same policy engine. Until then, the standalone path in [`quickstart.md`](quickstart.md#path-b--standalone-no-langchain) works for any framework — call the SDK directly.
+A LlamaIndex integration is on the roadmap. Its design will mirror this one: a wrapper around the base retriever, identical receipt format, same policy engine. Until then, the standalone path in [`quickstart.md`](quickstart.md#path-b-standalone-no-langchain) works for any framework. Just call the SDK directly.

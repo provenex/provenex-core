@@ -20,7 +20,7 @@ export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.toke
 
 Anything calling Provenex in this shell will pick it up automatically. You can also pass `signing_secret=b"..."` explicitly to `SQLiteProvenanceIndex` and `HmacSha256Signer`.
 
-## Path A — drop into an existing LangChain pipeline
+## Path A: drop into an existing LangChain pipeline
 
 ```python
 from provenex.index.sqlite_index import SQLiteProvenanceIndex
@@ -58,7 +58,7 @@ for doc in result.blocked:         # the chunks policy removed
 
 That's it. Your vector store is untouched. The receipt is signed, JSON-serializable, and self-describing.
 
-## Path B — standalone, no LangChain
+## Path B: standalone, no LangChain
 
 The core SDK works without any framework integration:
 
@@ -95,9 +95,9 @@ receipt = builder.finalize(output_text=llm_output, signer=HmacSha256Signer())
 print(receipt.to_json())
 ```
 
-## Path C — with transparency log (offline verification)
+## Path C: with transparency log (offline verification)
 
-The `SQLiteProvenanceIndex` above protects each row with an HMAC. For an additional layer — receipts that an auditor can verify with no access to the index, no signing key, and no network — swap in `MerkleSQLiteProvenanceIndex`. Same `ProvenanceIndex` interface, plus a tree root and inclusion proofs.
+The `SQLiteProvenanceIndex` above protects each row with an HMAC. For an additional layer that lets an auditor verify a receipt with no access to the index, no signing key, and no network, swap in `MerkleSQLiteProvenanceIndex`. Same `ProvenanceIndex` interface, plus a tree root and inclusion proofs.
 
 ```python
 from provenex.core.fingerprinter import Fingerprinter
@@ -106,7 +106,7 @@ from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
 
-# Producer side — ingest as before, then publish the tree root.
+# Producer side: ingest as before, then publish the tree root.
 index = MerkleSQLiteProvenanceIndex("provenance.db")
 fp = Fingerprinter()
 result = fp.fingerprint(document_text)
@@ -121,7 +121,7 @@ for f in result.fingerprints:
     )
 published_tree_root = index.tree_root()  # share this; sign it; gossip it
 
-# Per-retrieval — pull the inclusion proof out alongside the verify outcome.
+# Per-retrieval: pull the inclusion proof out alongside the verify outcome.
 chunk_fp = fp.fingerprint_chunk(retrieved_chunk)
 leaf_bytes, leaf_index, proof = index.inclusion_proof(chunk_fp)
 
@@ -143,7 +143,7 @@ receipt = builder.finalize(
 An auditor with the receipt JSON and the previously-published tree root can verify offline, no database needed:
 
 ```python
-# Auditor side — receipt.sources[i] carries leaf_index + inclusion_proof,
+# Auditor side: receipt.sources[i] carries leaf_index + inclusion_proof,
 # receipt.transparency_log carries tree_size + tree_root. That's everything.
 ok = verify_inclusion_proof(
     leaf=leaf_bytes,                                # canonical row bytes
@@ -167,18 +167,18 @@ from provenex.core.receipt import HmacSha256Signer, verify_receipt_signature
 
 receipt = json.loads(receipt_json)
 ok = verify_receipt_signature(receipt, HmacSha256Signer(secret=b"..."))
-assert ok, "receipt signature invalid — receipt has been tampered with"
+assert ok, "receipt signature invalid; receipt has been tampered with"
 ```
 
 For asymmetric verification (so an auditor can verify without holding the signing key), implement the `ReceiptSigner` interface with Ed25519 or similar and swap it in. The receipt structure does not change.
 
 ## Next steps
 
-- [`how_it_works.md`](how_it_works.md) — the algorithm, end to end
-- [`receipt_format.md`](receipt_format.md) — schema reference for the receipt JSON
-- [`langchain_integration.md`](langchain_integration.md) — deeper LangChain integration notes
-- [`../examples/standalone_demo.py`](../examples/standalone_demo.py) — end-to-end Merkle demo: ingest, verify, tamper-detection, offline proof verification. Pure stdlib, no LangChain.
-- [`../examples/rag_with_provenance.py`](../examples/rag_with_provenance.py) — RAG integration pattern: ingest into both vector store and Provenex, verify at retrieval, watch the policy block a chunk that bypassed Provenex ingest.
-- [`../examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py) — full runnable end-to-end demo against a LangChain retriever
-- [`../examples/policy_configuration.py`](../examples/policy_configuration.py) — dev / prod / high-assurance policy presets
-- [`scaling.md`](scaling.md) — 1M-chunk benchmark numbers (verify p50 371 µs, offline proof verify 47 µs) and honest discussion of how they move on enterprise hardware
+- [`how_it_works.md`](how_it_works.md): the algorithm, end to end
+- [`receipt_format.md`](receipt_format.md): schema reference for the receipt JSON
+- [`langchain_integration.md`](langchain_integration.md): deeper LangChain integration notes
+- [`../examples/standalone_demo.py`](../examples/standalone_demo.py): end-to-end Merkle demo. Ingest, verify, tamper-detection, offline proof verification. Pure stdlib, no LangChain.
+- [`../examples/rag_with_provenance.py`](../examples/rag_with_provenance.py): RAG integration pattern. Ingest into both vector store and Provenex, verify at retrieval, watch the policy block a chunk that bypassed Provenex ingest.
+- [`../examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py): full runnable end-to-end demo against a LangChain retriever
+- [`../examples/policy_configuration.py`](../examples/policy_configuration.py): dev / prod / high-assurance policy presets
+- [`scaling.md`](scaling.md): 1M-chunk benchmark numbers (verify p50 371 µs, offline proof verify 47 µs) and honest discussion of how they move on enterprise hardware

@@ -1,4 +1,4 @@
-"""End-to-end Provenex demo — pure stdlib, no LangChain.
+"""End-to-end Provenex demo. Pure stdlib, no LangChain.
 
 Run with::
 
@@ -11,7 +11,7 @@ What it shows, in order:
        Print the resulting tree root (the public audit anchor).
 
     2. Verify a known chunk → VERIFIED. Pull its inclusion proof out
-       of the index — a ~log2(N) audit path.
+       of the index. A ~log2(N) audit path.
 
     3. Tamper with one row of the underlying SQLite database. Re-run
        verify; the HMAC layer catches it (outcome: TAMPERED).
@@ -43,7 +43,7 @@ from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
 
-# ANSI colors — works in any terminal asciinema would record from. Disabled
+# ANSI colors. Disabled
 # automatically when stdout is not a TTY (e.g., piped to a file).
 _TTY = sys.stdout.isatty()
 BOLD = "\033[1m" if _TTY else ""
@@ -158,7 +158,7 @@ def main() -> int:
     print(f"  {DIM}↑ inclusion proof is ~log2(tree size). Constant-ish.{RESET}")
     pause(1.0, skip=args.fast)
 
-    # Bundle into a signed receipt — this is what the application keeps.
+    # Bundle into a signed receipt. This is what the application keeps.
     builder = ReceiptBuilder(policy=VerificationPolicy())
     builder.add_source(
         fingerprint=chunk_fp,
@@ -180,7 +180,7 @@ def main() -> int:
           f"(schema {receipt.schema_version})")
     pause(1.0, skip=args.fast)
 
-    # Stash these values — act 4 will use them with no database access.
+    # Stash these values. Act 4 will use them with no database access.
     saved_tree_root = index.tree_root()
     saved_tree_size = index.tree_size()
     saved_leaf_bytes = leaf_bytes
@@ -188,7 +188,7 @@ def main() -> int:
     saved_proof_hex = list(proof)
 
     # ----------------------------------------------------------------- act 3
-    banner("3. Tamper with the index — HMAC catches it")
+    banner("3. Tamper with the index: HMAC catches it")
 
     index.close()  # release the write lock so we can edit directly
 
@@ -196,7 +196,7 @@ def main() -> int:
     # malicious operator with database access (but no signing key) would
     # try. The HMAC over the row payload should refuse to verify.
     # We change chunk_offset rather than document_id so the FK to the
-    # documents table stays valid — the failure we want to see is HMAC
+    # documents table stays valid. The failure we want to see is HMAC
     # failure, not a foreign-key constraint error.
     raw = sqlite3.connect(db_path)
     raw.execute(
@@ -223,10 +223,10 @@ def main() -> int:
     pause(1.5, skip=args.fast)
 
     # ----------------------------------------------------------------- act 4
-    banner("4. Offline audit — verify with no database access")
+    banner("4. Offline audit: verify with no database access")
 
     # Throw the database away. An auditor opening the receipt five years
-    # from now has none of this on hand — only the receipt JSON and the
+    # from now has none of this on hand. Only the receipt JSON and the
     # tree root that was published at the time.
     db_path.unlink()
     print(f"  {DIM}× deleted the SQLite database{RESET}")

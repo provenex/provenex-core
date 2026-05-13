@@ -1,4 +1,4 @@
-"""RAG pipeline + Provenex — the integration architecture, in code.
+"""RAG pipeline + Provenex: the integration architecture, in code.
 
 Run with::
 
@@ -16,7 +16,7 @@ What it shows, in order:
     1. Ingest. The corpus is written to TWO stores in parallel:
        the vector store (for similarity retrieval) and the Provenex
        index (for cryptographic verification). The two writes are
-       independent — Provenex never talks to the vector store.
+       independent. Provenex never talks to the vector store.
 
     2. Clean query. A query comes in, the vector store returns its
        top-k matches, Provenex re-fingerprints each one at the
@@ -27,7 +27,7 @@ What it shows, in order:
        vector store, bypassing the Provenex ingest pipeline (this is
        the threat model: data poisoning, prompt-injected scraping,
        a colleague who didn't follow the runbook, etc). The poisoned
-       chunk is returned by similarity search. Provenex catches it —
+       chunk is returned by similarity search. Provenex catches it:
        outcome UNVERIFIED. Policy blocks it. The LLM never sees it.
 
     4. Architecture coda. The same five lines of Provenex code work
@@ -36,7 +36,7 @@ What it shows, in order:
        yourself. The vector store is fungible. Provenex is the
        invariant audit layer.
 
-The MockVectorStore here is INTENTIONALLY FAKE — keyword overlap, not
+The MockVectorStore here is INTENTIONALLY FAKE. It uses keyword overlap, not
 embeddings. The point is not to show how a vector DB works (use a
 real one for that). The point is to show that Provenex doesn't depend
 on what the vector store does internally, only on the chunks it
@@ -64,7 +64,7 @@ from provenex.index.base import VerificationOutcome
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
 
-# ANSI colors — disabled automatically when stdout isn't a TTY.
+# ANSI colors. Disabled automatically when stdout isn't a TTY.
 _TTY = sys.stdout.isatty()
 BOLD = "\033[1m" if _TTY else ""
 DIM = "\033[2m" if _TTY else ""
@@ -107,7 +107,7 @@ class MockVectorStore:
     Real vector DBs do approximate nearest-neighbor over learned
     dense embeddings. This one does keyword overlap because we don't
     want to pull `sentence-transformers` into a stdlib demo. The
-    quality of retrieval is irrelevant — the point of this file is
+    quality of retrieval is irrelevant. The point of this file is
     what Provenex does at the boundary, regardless of what the vector
     store returned.
 
@@ -136,7 +136,7 @@ class MockVectorStore:
 
 
 # --------------------------------------------------------------------- #
-# A tiny in-memory "LLM" for the demo — concatenates the chunks. The   #
+# A tiny in-memory "LLM" for the demo. Concatenates the chunks. The    #
 # actual LLM is irrelevant; we just need an output to hash.            #
 # --------------------------------------------------------------------- #
 
@@ -191,7 +191,7 @@ def main() -> int:
     document_version = sha256_fingerprint(full_doc)
 
     # --------------------------------------------------------------- act 1
-    banner("1. Ingest — write to vector store AND Provenex in parallel")
+    banner("1. Ingest: write to vector store AND Provenex in parallel")
 
     vector_store = MockVectorStore()
     provenex_index = MerkleSQLiteProvenanceIndex(str(db_path))
@@ -225,7 +225,7 @@ def main() -> int:
     pause(1.2, skip=args.fast)
 
     # --------------------------------------------------------------- act 2
-    banner("2. Clean query — vector store returns chunks, Provenex verifies")
+    banner("2. Clean query: vector store returns chunks, Provenex verifies")
 
     query = "What is the encryption key rotation policy?"
     print(f"  {DIM}query:{RESET} {query!r}")
@@ -275,7 +275,7 @@ def main() -> int:
     pause(1.5, skip=args.fast)
 
     # --------------------------------------------------------------- act 3
-    banner("3. Poisoned retrieval — Provenex catches an un-ingested chunk")
+    banner("3. Poisoned retrieval: Provenex catches an un-ingested chunk")
 
     # The threat: someone adds a chunk DIRECTLY to the vector store,
     # bypassing the Provenex ingest pipeline. Could be data poisoning,
@@ -296,7 +296,7 @@ def main() -> int:
     print()
     print(f"  {DIM}query:{RESET} {bad_query!r}")
     retrieved = vector_store.search(bad_query, k=2)
-    print(f"  {DIM}vector store returned {len(retrieved)} chunk(s) — "
+    print(f"  {DIM}vector store returned {len(retrieved)} chunk(s); "
           f"keyword overlap picked up the poisoned one:{RESET}")
     pause(0.6, skip=args.fast)
 
@@ -339,7 +339,7 @@ def main() -> int:
     pause(1.5, skip=args.fast)
 
     # --------------------------------------------------------------- coda
-    banner("Architecture — what just happened, and why it generalizes")
+    banner("Architecture: what just happened, and why it generalizes")
     print(f"  {DIM}ingest:{RESET}    chunk → vector_store.add() │ provenex.add()")
     print(f"  {DIM}query:{RESET}     vector_store.search() → "
           f"[provenex.verify(c) for c in chunks] → policy filter → LLM")
@@ -348,7 +348,7 @@ def main() -> int:
     print(f"  whatever chunks came out and checks them against its own")
     print(f"  signed index. Swap MockVectorStore for Pinecone, Weaviate,")
     print(f"  Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas")
-    print(f"  Vector, or your own Postgres table — the rest of the code")
+    print(f"  Vector, or your own Postgres table. The rest of the code")
     print(f"  is byte-identical.")
     print()
     print(f"  {DIM}For the cryptographic story (HMAC tamper-detection, offline{RESET}")
@@ -363,7 +363,7 @@ def main() -> int:
 def _blocked_by_policy(
     outcome: VerificationOutcome, policy: VerificationPolicy
 ) -> bool:
-    """Mirror of what ProvenexRetriever does internally — block per policy."""
+    """Mirror of what ProvenexRetriever does internally: block per policy."""
     return (
         (outcome == VerificationOutcome.UNVERIFIED and policy.block_unverified)
         or (outcome == VerificationOutcome.TAMPERED and policy.block_tampered)
