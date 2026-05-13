@@ -132,19 +132,9 @@ Nothing the index or the receipt stores can be reversed to document content. Fin
 
 ## Threat model
 
-The system is designed against three threats.
+The short version: every row is HMAC-signed (catches tampering by anyone without the key), the optional Merkle transparency log catches insertion/removal even by a key-holder, the receipt is signed end-to-end, and any chunk not in the index produces `UNVERIFIED` at retrieval. Compromised signing keys, compromised LLMs, and coordinated insider attack are explicitly out of scope; rotate keys and audit operationally.
 
-**Tampering with the index.** Mitigated: every row is HMAC-signed; a modification anywhere in `fingerprint, document_id, document_version, ingested_at, chunk_offset, chunk_length` invalidates the signature, and the verification outcome is `TAMPERED`. An attacker would need the signing key to forge a row that verifies. When the optional transparency log is in use (`MerkleSQLiteProvenanceIndex`), an attacker who *does* hold the signing key still cannot insert or remove rows without changing the publicly-observable tree head. Any verifier who has previously seen the tree head can detect the change.
-
-**Injection of unindexed content.** Mitigated: a chunk that wasn't ingested through Provenex has no matching fingerprint, returns `UNVERIFIED`, and is surfaced on the receipt. A strict policy (`block_unverified=True`) refuses to pass it to the LLM at all.
-
-**Tampering with the receipt.** Mitigated: the receipt is signed end-to-end. Any change to the receipt body invalidates the signature. An auditor running `verify_receipt_signature` detects the change.
-
-What this system explicitly does not protect against:
-
-- **Compromised signing keys.** If the signing key is exfiltrated, an attacker can forge receipts. Standard key-rotation hygiene applies. The hosted Provenex commercial product uses an HSM-backed asymmetric key.
-- **Compromise of the LLM itself.** Provenex records what the LLM saw, not what it did with it. Hallucinations on top of authorized sources are out of scope here.
-- **Coordinated insider tampering at both index-write and verify time.** No purely software solution covers this.
+For the full attacker model, defended and undefended threats, and the security FAQ compliance teams have asked us, see [`threat_model.md`](threat_model.md).
 
 ## Source map
 
