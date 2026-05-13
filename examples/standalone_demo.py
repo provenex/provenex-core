@@ -175,7 +175,14 @@ def main() -> int:
             "tree_root": index.tree_root(),
         },
     )
+    # Save the receipt to a known path so users can chain `provenex audit`
+    # afterwards. The whole point of the next acts is that the receipt is
+    # self-contained, so keeping it on disk past the DB deletion is the
+    # honest demonstration.
+    receipt_path = Path.cwd() / "provenex_demo_receipt.json"
+    receipt_path.write_text(receipt.to_json())
     kv("receipt id", receipt.receipt_id, color=CYAN)
+    kv("saved to", str(receipt_path))
     print(f"  {GREEN}✓ signed receipt issued{RESET} "
           f"(schema {receipt.schema_version})")
     pause(1.0, skip=args.fast)
@@ -262,6 +269,9 @@ def main() -> int:
     print(f"  {DIM}size:{RESET}    20-hash inclusion proofs (≈ log₂(1M))")
     print()
     print(f"  {BOLD}Reproduce:{RESET} python -m bench.scale --scale 1m")
+    print()
+    print(f"  {BOLD}Re-verify the receipt offline:{RESET}")
+    print(f"    provenex audit {receipt_path.name}")
     print()
     return 0
 

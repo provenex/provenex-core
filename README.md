@@ -210,9 +210,12 @@ For the integration-pattern story (how Provenex sits alongside any vector databa
 provenex ingest  --index prov.db --doc-id policy_v4 policy.txt
 provenex verify  --index prov.db retrieved_chunk.txt
 provenex receipt --index prov.db --output llm_output.txt chunk1.txt chunk2.txt
+provenex audit   receipt.json
 ```
 
 Set `PROVENEX_SIGNING_SECRET` in your environment. The `verify` command exits non-zero when the outcome is not `VERIFIED`, so it composes in shell pipelines.
+
+`provenex audit` is the auditor's tool. Given a receipt JSON, it verifies the signature and every inclusion proof against the transparency-log tree root carried on the receipt. No database access required. Exit 0 on PASS, 1 on FAIL, 2 on a parse error. Use `--json` for machine-readable output or `--quiet` for a single-line `PASS`/`FAIL`.
 
 ## Why open source?
 
