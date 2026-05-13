@@ -20,7 +20,7 @@ The schema is intentionally:
   "receipt_id": "prx_<32 hex chars>",
   "schema_version": "1.1.0",
   "issued_at": "2026-05-08T14:32:07.441Z",
-  "issuer": "provenex-core/0.1.0",
+  "issuer": "provenex-core/0.2.0",
   "output": { ... },
   "sources": [ ... ],
   "policy": { ... },
@@ -35,7 +35,7 @@ The schema is intentionally:
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
 | `schema_version` | string | Semver. `1.1.0` for this revision. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/0.1.0`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/0.2.0`. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
 | `policy` | object | The verification policy in effect. See below. |
@@ -215,8 +215,8 @@ Optional. Present iff the receipt was signed.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `signature.algorithm` | string | Identifier of the signing algorithm. `hmac-sha256` for the default signer. Pluggable. |
-| `signature.value` | string | The signature itself, hex for HMAC. Other algorithms may use base64. |
+| `signature.algorithm` | string | Identifier of the signing algorithm. Shipped values: `hmac-sha256` (default; symmetric) and `ed25519` (asymmetric; requires the `[ed25519]` extra). Pluggable. |
+| `signature.value` | string | The signature itself, hex-encoded. 64 hex chars for HMAC-SHA256; 128 hex chars for Ed25519. |
 
 ### What is signed
 
@@ -249,7 +249,16 @@ ok = verify_receipt_signature(receipt, signer)
 assert ok, "receipt signature invalid"
 ```
 
-For asymmetric verification, implement `ReceiptSigner` with Ed25519 (or your preferred scheme) and pass that signer instead. The receipt structure does not change; only the signer changes.
+For asymmetric verification, use `Ed25519Signer` from the optional `[ed25519]` extra. The auditor only needs the public key:
+
+```python
+from provenex.core.ed25519 import Ed25519Signer
+
+verifier = Ed25519Signer.from_public_key_pem(open("audit.pub", "rb").read())
+ok = verify_receipt_signature(receipt, verifier)
+```
+
+The receipt structure does not change; only the signer changes. The CLI exposes this directly: `provenex audit receipt.json --public-key audit.pub`.
 
 ## Versioning
 

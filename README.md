@@ -110,9 +110,9 @@ Every retrieval produces a JSON receipt that records exactly what went into the 
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "issued_at": "2026-05-08T14:32:07.441Z",
-  "issuer": "provenex-core/0.1.0",
+  "issuer": "provenex-core/0.2.0",
   "output": {
     "hash": "sha256:6e9052525c80e43fb3612dce5edd025d350c8f0a1318097988ab4b0750c2f388",
     "hash_algorithm": "sha256"
@@ -237,9 +237,11 @@ What's in this repo:
 
 - Fingerprinting engine (normalizer + Rabin-Karp + SHA-256)
 - Local SQLite provenance index with HMAC-signed rows
-- Receipt generation and signature verification
+- RFC 6962 Merkle transparency log (optional, on top of the SQLite index)
+- Receipt generation, HMAC + Ed25519 signing, offline inclusion-proof verification
 - LangChain integration (retriever middleware + ingestor)
-- CLI: `provenex ingest / verify / receipt`
+- LlamaIndex integration (retriever middleware + ingestor)
+- CLI: `provenex ingest / verify / receipt / audit`
 - Python SDK: `pip install provenex-core`
 
 What's not in this repo (commercial features at provenex.ai):

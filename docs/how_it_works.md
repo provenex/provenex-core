@@ -110,7 +110,7 @@ A configurable `VerificationPolicy` decides which outcomes block the chunk befor
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `1.0.0`) and `issuer` (`provenex-core/0.1.0`)
+- `schema_version` (currently `1.1.0`) and `issuer` (`provenex-core/0.2.0`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
 - The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied)
@@ -120,7 +120,7 @@ After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 The signature is computed over the canonical JSON serialization of the receipt: keys sorted, no whitespace, the signature block itself omitted from the payload. Anyone with the receipt and the signing key can recompute the payload, recompute the signature, and confirm a match.
 
-The default signer is HMAC-SHA256 (`HmacSha256Signer`). For asymmetric verification (so auditors can verify without holding the signing key), implement the `ReceiptSigner` interface with Ed25519 and pass it in. The receipt structure does not change. Source: [`provenex/core/receipt.py`](../provenex/core/receipt.py).
+The default signer is HMAC-SHA256 (`HmacSha256Signer`). For asymmetric verification (so auditors can verify without holding the signing key), use `Ed25519Signer` from the optional `[ed25519]` extra. Both implement the same `ReceiptSigner` interface; the receipt structure is identical. Source: [`provenex/core/receipt.py`](../provenex/core/receipt.py) and [`provenex/core/ed25519.py`](../provenex/core/ed25519.py).
 
 ## Determinism
 
