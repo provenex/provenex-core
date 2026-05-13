@@ -21,7 +21,7 @@ from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
 from .index.sqlite_index import SQLiteProvenanceIndex
 from .policy.policy import VerificationPolicy, overall_status
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     # Core

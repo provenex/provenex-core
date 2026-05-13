@@ -41,7 +41,7 @@ from ..policy.policy import VerificationPolicy, overall_status
 
 
 SCHEMA_VERSION = "1.1.0"
-ISSUER = "provenex-core/0.1.0"
+ISSUER = "provenex-core/0.2.0"
 
 
 # --------------------------------------------------------------------------- #
