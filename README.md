@@ -1,5 +1,10 @@
 # provenex-core
 
+[![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg)](https://pypi.org/project/provenex-core/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
+
 Cryptographic provenance verification for RAG pipelines. When an enterprise AI system answers a question, this is what proves which documents the answer came from, whether they were current and authorized, and that they weren't tampered with along the way.
 
 This repository contains the open source core: fingerprinting, local SQLite index, receipt generation, LangChain integration. The algorithm is open so it can be audited. Hosted infrastructure, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise provenance graphs are available separately at [provenex.ai](https://provenex.ai).
