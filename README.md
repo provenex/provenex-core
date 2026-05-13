@@ -6,6 +6,80 @@ This repository contains the open source core: fingerprinting, local SQLite inde
 
 > **Note on terminology.** "Provenance" means several different things in the AI stack right now: training-data lineage, vector DB governance (Pinecone Nexus, Weaviate), retrieval verification, output faithfulness, generated-media credentials (C2PA). Provenex is the **retrieval verification** layer. It produces cryptographic proof of which chunks reached the LLM, verifiable offline by anyone with the signing key, across any retriever. We've written up the full map in [Five Things People Mean by "AI Provenance"](https://provenex.ai/blog/five-things-ai-provenance).
 
+## Where Provenex fits in your stack
+
+If you haven't been steeped in RAG vocabulary, here's the picture in plain English before we get to code.
+
+### The pieces of a typical RAG pipeline
+
+| Piece | What it does | Common examples |
+| --- | --- | --- |
+| **Chunker** | Splits long documents into small passages an embedder can encode | LangChain `RecursiveCharacterTextSplitter`, LlamaIndex `SentenceSplitter` |
+| **Embedder** | Turns each chunk (and each user query) into a numeric vector capturing meaning | OpenAI `text-embedding-3`, Cohere Embed, `sentence-transformers` |
+| **Vector database** | Stores those vectors. At query time, returns chunks whose vectors are *similar* to the query's vector | Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector |
+| **Retriever** | The piece of glue code that takes a user query, asks the vector DB for similar chunks, and hands them to the LLM | LangChain `Retriever`, LlamaIndex `Retriever`, or hand-rolled Python |
+| **LLM** | Generates an answer conditioned on the retrieved chunks | GPT-4, Claude, Gemini, Llama-3, etc. |
+
+What's missing from that list: anything that says "these chunks are bit-exact identical to documents we authorized, and we can prove it to an auditor five years from now." That's what Provenex adds.
+
+### Where Provenex slots in
+
+Provenex introduces two pieces of its own:
+
+| Piece | What it does |
+| --- | --- |
+| **Provenex index** | A separate database (SQLite locally, hosted in production) that stores **cryptographic fingerprints** of every chunk you ingested, plus metadata: document ID, document version, ingestion timestamp, authorization state. Not the embeddings. Not the chunk text. SHA-256 hashes and metadata only. |
+| **Ingester** | At document-write time, alongside the code that writes embeddings to your vector DB, this code writes fingerprints to the Provenex index. Two writes, both committed before "ingest" is done. |
+| **Retrieval-time verifier** | At query time, after your retriever pulls chunks from the vector DB, the verifier re-fingerprints each chunk and checks the Provenex index. Each chunk gets one of five outcomes (`VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`). A configurable policy decides which outcomes are allowed to reach the LLM. |
+| **Receipt** | The signed JSON record of the whole transaction. Records the chunks, their outcomes, the policy, a hash of the LLM output, and a signature over the whole thing. The artifact your compliance team keeps. |
+
+### Standard RAG vs RAG with Provenex
+
+```
+Standard RAG:
+
+  documents ─▶ chunker ─▶ embedder ─▶ vector DB ────────┐
+                                                         │
+  user query ─▶ embedder ─▶ vector DB.search() ───▶ retriever ─▶ LLM ─▶ answer
+                                                         │
+                                                  (top-k chunks)
+
+
+Same pipeline with Provenex:
+
+  documents ─┬─▶ chunker ─▶ embedder ─▶ vector DB ──────┐
+             │                                           │
+             └─▶ provenex.add()  (parallel write,        │
+                                  signed fingerprints)   │
+                                                         │
+  user query ─▶ embedder ─▶ vector DB.search() ─▶ retriever ─┐
+                                                              │
+                                                              ▼
+                                              ┌─────────────────────┐
+                                              │ provenex.verify(chunk)│
+                                              │   per retrieved chunk│
+                                              └──────────┬───────────┘
+                                                         │
+                                          policy filter applied
+                                                         │
+                                                         ▼
+                                                 verified chunks ─▶ LLM ─▶ answer
+                                                         │
+                                                         ▼
+                                                 signed receipt ─▶ audit / compliance
+```
+
+### Where does your code change?
+
+**Not in your vector DB.** Provenex doesn't talk to Pinecone, Weaviate, Milvus, or any vector store directly. There's no plugin to install, no schema migration, no managed-vendor permission to wire up. Your vector DB stays exactly as it is.
+
+The integration lives in your **application code**, the same RAG glue layer that already calls your vector DB. Two spots:
+
+1. **In your ingest pipeline.** Wherever your code currently writes chunks into the vector DB (`pinecone_index.upsert(chunks)`, `weaviate.batch.add(...)`, `chroma_collection.add(...)`, etc.), add a parallel call to `provenex.add(...)` for each chunk. Both writes happen at the same place, in the same code path.
+2. **In your retrieval path.** Wherever you get chunks back from the vector DB and hand them to the LLM, run them through `provenex.verify(chunk)` first. Either inline in your own code, or via the drop-in `ProvenexRetriever` wrapper if you're on LangChain.
+
+Conceptually it's a few lines in two files. You keep your vector DB. You keep your embedder. You keep your LLM. You're adding a parallel signed index that gives every retrieval an auditable, offline-verifiable receipt.
+
 ## Five-line integration
 
 ```python
