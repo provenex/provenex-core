@@ -128,6 +128,8 @@ python provenex-core/examples/standalone_demo.py
 
 `examples/standalone_demo.py` runs the full story end-to-end — ingest a document, get a signed receipt with a cryptographic inclusion proof, watch the HMAC catch a tampered row, then re-verify the proof **with the database deleted** using only the receipt fields and the published tree root. It's the demo we'd show a sceptical compliance team.
 
+For the integration-pattern story — how Provenex sits alongside any vector database without replacing it — run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store (bypassing Provenex ingest) get caught at the retrieval boundary and blocked from reaching the LLM.
+
 ## CLI
 
 ```bash

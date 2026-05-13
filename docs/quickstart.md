@@ -178,6 +178,7 @@ For asymmetric verification (so an auditor can verify without holding the signin
 - [`receipt_format.md`](receipt_format.md) — schema reference for the receipt JSON
 - [`langchain_integration.md`](langchain_integration.md) — deeper LangChain integration notes
 - [`../examples/standalone_demo.py`](../examples/standalone_demo.py) — end-to-end Merkle demo: ingest, verify, tamper-detection, offline proof verification. Pure stdlib, no LangChain.
+- [`../examples/rag_with_provenance.py`](../examples/rag_with_provenance.py) — RAG integration pattern: ingest into both vector store and Provenex, verify at retrieval, watch the policy block a chunk that bypassed Provenex ingest.
 - [`../examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py) — full runnable end-to-end demo against a LangChain retriever
 - [`../examples/policy_configuration.py`](../examples/policy_configuration.py) — dev / prod / high-assurance policy presets
 - [`scaling.md`](scaling.md) — 1M-chunk benchmark numbers (verify p50 371 µs, offline proof verify 47 µs) and honest discussion of how they move on enterprise hardware
