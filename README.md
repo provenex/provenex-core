@@ -9,7 +9,7 @@ Cryptographic provenance verification for RAG pipelines. When an enterprise AI s
 
 This repository contains the open source core: fingerprinting, local SQLite index, receipt generation, LangChain integration. The algorithm is open so it can be audited. Hosted infrastructure, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise provenance graphs are available separately at [provenex.ai](https://provenex.ai).
 
-> **Note on terminology.** "Provenance" means several different things in the AI stack right now: training-data lineage, vector DB governance (Pinecone Nexus, Weaviate), retrieval verification, output faithfulness, generated-media credentials (C2PA). Provenex is the **retrieval verification** layer. It produces cryptographic proof of which chunks reached the LLM, verifiable offline by anyone with the signing key, across any retriever. We've written up the full map in [Five Things People Mean by "AI Provenance"](https://provenex.ai/blog/five-things-ai-provenance).
+> **Note on terminology.** "Provenance" means several different things in the AI stack right now: training-data lineage, vector DB governance, retrieval verification, output faithfulness, generated-media credentials (C2PA). Provenex is the **retrieval verification** layer. It produces cryptographic proof of which chunks reached the LLM, verifiable offline by anyone with the signing key, across any retriever. We've written up the full map in [Five Things People Mean by "AI Provenance"](https://provenex.ai/blog/five-things-ai-provenance).
 
 ## Where Provenex fits in your stack
 
@@ -161,11 +161,11 @@ Three components:
 
 See [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md) for the full algorithm, including the architectural distinction between fingerprint-based identity and embedding-based similarity. See [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md) for the schema spec.
 
-## How this fits alongside Pinecone Nexus, Weaviate, and other vector DBs
+## How this fits alongside vector databases
 
 Vector databases store **semantic similarity**: dense embeddings that let you find content similar to a query. Provenex stores **cryptographic identity**: SHA-256 fingerprints that prove bit-exact match against a signed reference. These solve different problems and compose cleanly.
 
-| | Vector DBs (Pinecone Nexus, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, ...) | Provenex |
+| | Vector DBs (Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, ...) | Provenex |
 | --- | --- | --- |
 | Primary storage | Dense embeddings (semantic similarity) | SHA-256 fingerprints (cryptographic identity) |
 | Retrieval | Approximate nearest neighbor over vectors | Bit-exact match against signed index |
@@ -178,7 +178,7 @@ The expected enterprise deployment is **both**: vector DB for retrieval performa
 
 ### Why vendor-agnostic matters
 
-Pinecone Nexus is governance inside Pinecone. Weaviate has its own governance stack. Milvus, Qdrant, Chroma, and the rest each have their own, or none. If you run Pinecone for one workload and Weaviate for another, you have two separate audit stories with two separate vendor trust roots, and no way to produce a single cryptographic record that says "this chunk, wherever it came from, is bit-exact identical to the one we authorized."
+Each vector DB has its own governance and audit story, with its own trust root. If you run more than one vector DB across the enterprise — common for cost or latency reasons — you have separate audit stories with separate vendor trust roots, and no way to produce a single cryptographic record that says "this chunk, wherever it came from, is bit-exact identical to the one we authorized."
 
 Provenex works the same way against all of them, because it never talks to the vector DB. It re-fingerprints the chunks the retriever returns, regardless of where they were stored. One signed index, one receipt schema, one verifiable artifact across every retrieval path in the enterprise.
 
