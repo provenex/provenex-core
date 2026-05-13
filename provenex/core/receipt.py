@@ -53,8 +53,8 @@ class ReceiptSigner(ABC):
     """Abstract signer interface.
 
     Implement this to plug in alternative signing algorithms. The receipt
-    layer doesn't care whether the signature is symmetric or asymmetric — it
-    only cares that ``algorithm`` and ``sign`` are consistent.
+    layer doesn't care whether the signature is symmetric or asymmetric. It
+    only cares that ``algorithm``, ``sign``, and ``verify`` are consistent.
     """
 
     @property
@@ -65,6 +65,23 @@ class ReceiptSigner(ABC):
     @abstractmethod
     def sign(self, payload: bytes) -> str:
         """Sign ``payload`` and return the signature as a hex/base64 string."""
+
+    def verify(self, payload: bytes, signature: str) -> bool:
+        """Verify that ``signature`` was produced over ``payload`` by this signer.
+
+        Default implementation: re-sign and compare in constant time. This
+        works correctly for any symmetric signer (HMAC, AES-CMAC, etc.).
+
+        Asymmetric signers MUST override this. For Ed25519 etc. the verify
+        path uses the public key, while ``sign`` requires the private key,
+        so the default sign-and-compare strategy would either fail (no
+        private key on hand for the auditor) or be wrong.
+        """
+        try:
+            actual = self.sign(payload)
+        except Exception:
+            return False
+        return hmac.compare_digest(actual, signature)
 
 
 class HmacSha256Signer(ReceiptSigner):
@@ -410,5 +427,4 @@ def verify_receipt_signature(
     payload = json.dumps(payload_dict, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )
-    actual = signer.sign(payload)
-    return hmac.compare_digest(actual, expected_value or "")
+    return signer.verify(payload, expected_value or "")

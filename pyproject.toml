@@ -28,12 +28,16 @@ dependencies = []
 [project.optional-dependencies]
 langchain = ["langchain-core>=0.3,<0.4"]
 llamaindex = ["llama-index-core>=0.10,<0.13"]
+# Adds Ed25519 asymmetric signing so auditors can verify receipts without
+# holding the signing key. The core remains pure-stdlib without this extra.
+ed25519 = ["cryptography>=42.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
     "black>=24.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    "cryptography>=42.0",
 ]
 
 [project.scripts]

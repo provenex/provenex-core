@@ -157,6 +157,49 @@ assert ok
 
 See [`../examples/standalone_demo.py`](../examples/standalone_demo.py) for a runnable end-to-end version that also demonstrates the HMAC layer catching a tampered row.
 
+## Path D: Ed25519 asymmetric signing (external auditors)
+
+HMAC-SHA256 receipts are fine when the verifier and the signer are inside the same organisation: anyone with the secret can verify *and* forge, so the secret has to stay private. If you want an auditor who can verify but cannot forge (regulator, external compliance, cross-org provenance), swap in Ed25519.
+
+```bash
+pip install "provenex-core[ed25519]"
+```
+
+```python
+from provenex.core.ed25519 import Ed25519Signer
+from provenex.core.fingerprinter import Fingerprinter
+from provenex.core.receipt import ReceiptBuilder, verify_receipt_signature
+from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
+from provenex.policy.policy import VerificationPolicy
+
+# One-time setup: generate a keypair. Keep the private PEM in your
+# secrets manager. Distribute the public PEM to auditors.
+signer = Ed25519Signer.generate()
+private_pem = signer.private_key_pem(password=b"...")   # encrypt at rest
+public_pem  = signer.public_key_pem()                   # public artifact
+
+# Producer side: sign receipts with the private key.
+index = MerkleSQLiteProvenanceIndex("provenance.db")
+fp = Fingerprinter()
+# ... ingest as usual ...
+builder = ReceiptBuilder(policy=VerificationPolicy())
+# ... add sources ...
+receipt = builder.finalize(output_text=llm_output, signer=signer)
+
+# Auditor side (different machine, different team, no private key):
+verifier = Ed25519Signer.from_public_key_pem(public_pem)
+ok = verify_receipt_signature(json.loads(receipt.to_json()), verifier)
+assert ok
+```
+
+The auditor cannot sign. `verifier.sign(...)` raises a `RuntimeError`. That's the whole point: receipts are now end-to-end provably authentic against your public key alone.
+
+From the command line:
+
+```bash
+provenex audit receipt.json --public-key audit.pub
+```
+
 ## Verify a receipt independently
 
 Anyone with the receipt JSON and the signing secret can confirm the receipt hasn't been altered:

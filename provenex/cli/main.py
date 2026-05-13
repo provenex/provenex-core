@@ -32,7 +32,8 @@ import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..core.fingerprinter import Fingerprinter
 from ..core.merkle import verify_inclusion_proof
@@ -215,20 +216,56 @@ def _hex_of(prefixed: str) -> bytes:
 
 
 def _audit_signature(
-    receipt: Dict[str, Any], quiet: bool
+    receipt: Dict[str, Any], public_key_path: Optional[str]
 ) -> Tuple[bool, str]:
-    """Check the receipt signature if a signing secret is available."""
+    """Check the receipt signature with whichever key material is available.
+
+    Routing:
+        * ``--public-key <pem>`` provided → use Ed25519 with that public key.
+        * Else if PROVENEX_SIGNING_SECRET env var is set → use HMAC-SHA256.
+        * Else → skip signature check (still returns True so overall result
+          depends on inclusion proofs alone).
+
+    The receipt's own ``signature.algorithm`` field must match whichever
+    signer we end up using; if it doesn't, we report it as a failure rather
+    than silently skipping.
+    """
     sig = receipt.get("signature")
     if not sig:
         return True, "no signature on receipt (unsigned)"
+    alg = sig.get("algorithm")
+
+    if public_key_path:
+        try:
+            from ..core.ed25519 import Ed25519Signer
+        except ImportError:
+            return False, (
+                "--public-key requires the [ed25519] extra: "
+                "pip install provenex-core[ed25519]"
+            )
+        if alg != "ed25519":
+            return False, (
+                f"receipt was signed with {alg!r}, not ed25519; pass the "
+                f"matching key material for that algorithm instead"
+            )
+        try:
+            pem = Path(public_key_path).read_bytes()
+            verifier = Ed25519Signer.from_public_key_pem(pem)
+        except Exception as exc:
+            return False, f"could not load public key from {public_key_path}: {exc}"
+        ok = verify_receipt_signature(receipt, verifier)
+        return ok, f"ed25519: {'valid' if ok else 'INVALID'}"
+
     secret = os.environ.get("PROVENEX_SIGNING_SECRET")
     if not secret:
-        return True, "skipped (PROVENEX_SIGNING_SECRET not set)"
-    alg = sig.get("algorithm")
+        return True, "skipped (PROVENEX_SIGNING_SECRET not set, no --public-key)"
     if alg != "hmac-sha256":
-        return False, f"unknown signature algorithm: {alg}"
+        return False, (
+            f"receipt was signed with {alg!r}; pass --public-key for "
+            f"asymmetric algorithms"
+        )
     ok = verify_receipt_signature(receipt, HmacSha256Signer())
-    return ok, f"{alg}: {'valid' if ok else 'INVALID'}"
+    return ok, f"hmac-sha256: {'valid' if ok else 'INVALID'}"
 
 
 def _audit_inclusion_proofs(
@@ -287,7 +324,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         print(f"error: receipt is not valid JSON: {exc}", file=sys.stderr)
         return 2
 
-    sig_ok, sig_msg = _audit_signature(receipt, quiet=args.quiet)
+    sig_ok, sig_msg = _audit_signature(receipt, public_key_path=args.public_key)
     proof_results = _audit_inclusion_proofs(receipt)
     all_ok = sig_ok and all(ok for _, ok, _ in proof_results)
 
@@ -407,6 +444,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_audit.add_argument(
         "receipt_file",
         help="Receipt JSON file to audit (or - for stdin)",
+    )
+    p_audit.add_argument(
+        "--public-key",
+        default=None,
+        help=(
+            "Path to a PEM-encoded Ed25519 public key. Required when the "
+            "receipt was signed with Ed25519. Without this flag, HMAC-SHA256 "
+            "is assumed and PROVENEX_SIGNING_SECRET is read from the env."
+        ),
     )
     p_audit.add_argument(
         "--json",

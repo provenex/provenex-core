@@ -192,9 +192,10 @@ The technical reason this works: Provenex's integration surface is the retriever
 pip install provenex-core                  # core only (pure stdlib)
 pip install "provenex-core[langchain]"     # + LangChain integration
 pip install "provenex-core[llamaindex]"    # + LlamaIndex integration
+pip install "provenex-core[ed25519]"       # + Ed25519 asymmetric signing
 ```
 
-`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. LangChain and LlamaIndex are optional extras.
+`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. LangChain, LlamaIndex, and the Ed25519 signer are optional extras.
 
 ### Try it in 30 seconds
 
@@ -221,6 +222,12 @@ provenex audit   receipt.json
 Set `PROVENEX_SIGNING_SECRET` in your environment. The `verify` command exits non-zero when the outcome is not `VERIFIED`, so it composes in shell pipelines.
 
 `provenex audit` is the auditor's tool. Given a receipt JSON, it verifies the signature and every inclusion proof against the transparency-log tree root carried on the receipt. No database access required. Exit 0 on PASS, 1 on FAIL, 2 on a parse error. Use `--json` for machine-readable output or `--quiet` for a single-line `PASS`/`FAIL`.
+
+For receipts signed with **Ed25519** (asymmetric), pass `--public-key audit.pub` instead of relying on `PROVENEX_SIGNING_SECRET`. An auditor with only the public key can verify but cannot forge: the strongest version of the "verifiable by anyone" guarantee, suitable for handing receipts to external regulators. Requires `pip install "provenex-core[ed25519]"`.
+
+```bash
+provenex audit receipt.json --public-key audit.pub
+```
 
 ## Why open source?
 
