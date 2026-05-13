@@ -168,4 +168,27 @@ See [`examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py) for 
 
 ## LlamaIndex
 
-A LlamaIndex integration is on the roadmap. Its design will mirror this one: a wrapper around the base retriever, identical receipt format, same policy engine. Until then, the standalone path in [`quickstart.md`](quickstart.md#path-b-standalone-no-langchain) works for any framework. Just call the SDK directly.
+A drop-in LlamaIndex wrapper ships in `provenex.integrations.llamaindex` and mirrors the surface of this one: same `ProvenexIngestor` and `ProvenexRetriever` class names, same `RetrievalResult` shape, same `VerificationPolicy`, same receipt format. The only differences are method names (`retrieve` / `retrieve_with_receipt` instead of `get_relevant_documents` / `get_relevant_documents_with_receipt`) and the input shape (LlamaIndex `Document`/`TextNode` instead of LangChain `Document`).
+
+```bash
+pip install "provenex-core[llamaindex]"
+```
+
+```python
+from provenex.integrations.llamaindex import ProvenexIngestor, ProvenexRetriever
+from provenex.index.sqlite_index import SQLiteProvenanceIndex
+from provenex.core.receipt import HmacSha256Signer
+
+index = SQLiteProvenanceIndex("provenance.db")
+ProvenexIngestor(index=index).ingest(documents, doc_id="policy_v4", authorized=True)
+
+retriever = ProvenexRetriever(
+    base_retriever=vector_index.as_retriever(similarity_top_k=3),
+    index=index,
+    signer=HmacSha256Signer(),
+)
+result = retriever.retrieve_with_receipt("encryption policy?")
+for node in result.nodes:    # NodeWithScore objects, blocked ones removed
+    ...
+print(result.receipt.to_json())
+```

@@ -101,7 +101,7 @@ result = retriever.get_relevant_documents_with_receipt(query)
 print(result.receipt.to_json())
 ```
 
-Your existing vector store is untouched. Provenex runs alongside as a parallel signed index. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care. The integration surface is the retriever (LangChain today; LlamaIndex coming), not the database. `your_existing_retriever` keeps doing semantic similarity; Provenex adds cryptographic identity.
+Your existing vector store is untouched. Provenex runs alongside as a parallel signed index. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care. The integration surface is the retriever (drop-in wrappers ship for both LangChain and LlamaIndex), not the database. `your_existing_retriever` keeps doing semantic similarity; Provenex adds cryptographic identity.
 
 ## What a provenance receipt looks like
 
@@ -191,7 +191,7 @@ The technical reason this works: Provenex's integration surface is the retriever
 ```bash
 pip install provenex-core                  # core only (pure stdlib)
 pip install "provenex-core[langchain]"     # + LangChain integration
-pip install "provenex-core[llamaindex]"    # + LlamaIndex integration (coming)
+pip install "provenex-core[llamaindex]"    # + LlamaIndex integration
 ```
 
 `pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. LangChain and LlamaIndex are optional extras.
