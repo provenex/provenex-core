@@ -263,6 +263,7 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 - [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema specification
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started
 - [`docs/langchain_integration.md`](https://github.com/provenex/provenex-core/blob/main/docs/langchain_integration.md): LangChain-specific patterns
+- [`docs/pinecone_integration.md`](https://github.com/provenex/provenex-core/blob/main/docs/pinecone_integration.md): code walkthrough for adding Provenex to a Pinecone-backed RAG pipeline
 
 **Project:**
 
