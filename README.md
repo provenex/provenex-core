@@ -117,6 +117,23 @@ Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve,
 
 Every retrieval step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. One audit pass, the whole run.
 
+```
+Same pipeline, agentic / multi-step:
+
+  user query ─▶ agent ─▶ retrieve / tool / memory ─▶ provenex.verify ─▶ receipt
+                  ▲                                                       │
+                  │  (agent reasons; may retrieve again, call a tool,     │
+                  │   hand off to another agent — each step gets its      │
+                  │   own receipt linked back to its parent step)         │
+                  └────────────────────── repeat ─────────────────────────┘
+                                                                          │
+                                                                          ▼
+                                                          trajectory DAG of receipts
+                                                                          │
+                                                                          ▼
+                                                  provenex audit --trajectory ─▶ PASS / FAIL
+```
+
 Receipts also carry two optional per-chunk fields useful in agent flows:
 
 - **`claims[]`** — self-attribution claims from the agent ("I used this chunk", "this supports the answer", "this is relevant"). Cryptographically bound to the receipt so the agent cannot deny what it asserted. Provenex does not verify the claim itself — that is the agent operator's compliance burden, made auditable by the signature.
@@ -180,6 +197,8 @@ Three components:
 
 **3. Receipt.** After verification, a JSON receipt is issued that records the chunks, their outcomes, the policy in effect, a SHA-256 of the LLM output, and a signature over the whole thing. The receipt is the artifact you keep.
 
+For iterative agentic flows, each retrieval step emits its own receipt with a `trajectory` block linking it to its parents — see [Agentic and multi-step flows](#agentic-and-multi-step-flows). The five outcomes are unchanged; the trajectory metadata sits alongside them.
+
 See [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md) for the full algorithm, including the architectural distinction between fingerprint-based identity and embedding-based similarity. See [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md) for the schema spec.
 
 ## How this fits alongside vector databases
@@ -240,11 +259,12 @@ provenex ingest  --index prov.db --doc-id policy_v4 policy.txt
 provenex verify  --index prov.db retrieved_chunk.txt
 provenex receipt --index prov.db --output llm_output.txt chunk1.txt chunk2.txt
 provenex audit   receipt.json
+provenex audit   --trajectory ./receipts/   # validate a whole agentic trajectory at once
 ```
 
 Set `PROVENEX_SIGNING_SECRET` in your environment. The `verify` command exits non-zero when the outcome is not `VERIFIED`, so it composes in shell pipelines.
 
-`provenex audit` is the auditor's tool. Given a receipt JSON, it verifies the signature and every inclusion proof against the transparency-log tree root carried on the receipt. No database access required. Exit 0 on PASS, 1 on FAIL, 2 on a parse error. Use `--json` for machine-readable output or `--quiet` for a single-line `PASS`/`FAIL`.
+`provenex audit` is the auditor's tool. Given a receipt JSON, it verifies the signature and every inclusion proof against the transparency-log tree root carried on the receipt. No database access required. Exit 0 on PASS, 1 on FAIL, 2 on a parse error. Use `--json` for machine-readable output or `--quiet` for a single-line `PASS`/`FAIL`. Pass `--trajectory <dir_or_glob>` to validate a whole set of receipts as a single agentic trajectory — same per-receipt checks plus DAG-level invariants (shared `trajectory_id`, acyclic, no dangling parents, at least one root step).
 
 For receipts signed with **Ed25519** (asymmetric), pass `--public-key audit.pub` instead of relying on `PROVENEX_SIGNING_SECRET`. An auditor with only the public key can verify but cannot forge: the strongest version of the "verifiable by anyone" guarantee, suitable for handing receipts to external regulators. Requires `pip install "provenex-core[ed25519]"`.
 
