@@ -1,19 +1,19 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.4.0)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.4.0)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.0)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
 
 Platform engineering champions Provenex (a runtime guardrail they don't have to build). Security signs off (cryptographic enforcement, not promises). Compliance consumes the output (a queryable, exportable, regulator-ready record). 
 
-Provenex is the policy enforcement layer for AI data access. You declare your security policy once — in our native YAML config (or OPA/Rego, commercial) — and Provenex enforces it on every retrieval, then emits a cryptographically signed receipt that proves which chunks were allowed, which were blocked, and under what policy.
+Provenex is the policy enforcement layer for AI data access. You declare your security policy once — in our native YAML config (or OPA/Rego, commercial) — and Provenex enforces it on every retrieval **and on every agentic tool call**, then emits a cryptographically signed receipt that proves which chunks reached the LLM, which tool calls were admitted, and under what policy.
 
-> **Scope of this repo.** `provenex-core` is the retrieval primitive — Phase 1 of the broader vision: enforce policy on what an AI system *reads*. Agentic tool-call enforcement (the "can this agent access Jira / Salesforce / this connector" question, anchored on the MCP ecosystem) is Phase 2 and lives in a separate Provenex repository on the same policy-and-proof spine. Provenex is always **decision and proof, not execution** — an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
+> **Scope of this repo.** `provenex-core` covers both enforcement fronts on one policy-and-proof spine: **Phase 1 — retrieval enforcement** (what the AI *reads*) and **Phase 2 — agentic tool-call admission** (what the AI is allowed to *do*, including MCP-shaped tool calls and the "can this agent access Jira / Salesforce / this connector" question). Provenex is always **decision and proof, not execution** — an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
 
-This repository contains the open source core: fingerprinting, a Postgres-backed production index (SQLite for development), the native YAML policy DSL, receipt generation, and integrations for LangChain / LangGraph / LlamaIndex / CrewAI. The algorithm is open so it can be audited. Hosted infrastructure, the Rego adapter, the OPA service adapter, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise policy interoperability are available separately at [provenex.ai](https://provenex.ai).
+This repository contains the open source core: fingerprinting, a Postgres-backed production index (SQLite for development), the native YAML policy DSL, receipt generation, the tool-call admission primitive, and integrations for LangChain / LangGraph / LlamaIndex / CrewAI / MCP. The algorithm is open so it can be audited. Hosted infrastructure, the Rego adapter, the OPA service adapter, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise policy interoperability are available separately at [provenex.ai](https://provenex.ai).
 
 ## What you declare. What you get back.
 
@@ -58,19 +58,53 @@ access_control:
 
   defaults:
     unknown_metadata: deny
+
+# Tool-call admission rules (Phase 2, schema 2.2.0)
+tool_call_control:
+  rules:
+    - name: web_search_provider_allowlist
+      when: { tool.name: web_search }
+      require:
+        tool.target_system:
+          in: [google_custom_search, bing_v7]
+      on_violation: deny
+
+    - name: no_secrets_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+      on_violation: deny
+
+    - name: jira_writes_require_role
+      when:
+        tool.name: jira
+        tool.operation: { in: [create_issue, update_issue, delete_issue] }
+      require:
+        request.caller.role:
+          in: [engineer, manager, admin]
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
 ```
 
-A signed receipt per retrieval — verifiable offline by anyone with the public key:
+A signed receipt per retrieval **or per tool-call** — verifiable offline by anyone with the public key. Retrieval receipts carry `sources[]` and `policy.access_control`; tool-call receipts carry `actions[]` and `policy.tool_call_control`; mixed agentic flows link both into one trajectory.
 
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "2.1.0",
-  "issuer": "provenex-core/0.4.0",
+  "schema_version": "2.2.0",
+  "issuer": "provenex-core/0.6.0",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
     { "chunk_index": 0, "fingerprint": "sha256:1ebcde39...",
       "verification_outcome": "VERIFIED", "...": "..." }
+  ],
+  "actions": [
+    { "action_index": 0, "name": "web_search", "operation": "query",
+      "parameters_hash": "sha256:7a2bf015...", "target_system": "google_custom_search",
+      "parameters": { "q": "..." } }
   ],
   "policy": {
     "verification": { "block_unauthorized": true, "block_tampered": true, "...": "..." },
@@ -88,9 +122,22 @@ A signed receipt per retrieval — verifiable offline by anyone with the public 
           "inputs": { "chunk_metadata": { "...": "..." }, "request_context": { "...": "..." } }
         }
       ]
+    },
+    "tool_call_control": {
+      "evaluator": "native_yaml",
+      "policy_id": "hr-corpus-retrieval-v3",
+      "policy_version_hash": "sha256:d9fdce46...",
+      "policy_in_transparency_log": false,
+      "decisions": [
+        { "action_index": 0, "decision": "allow",
+          "rules_fired": ["web_search_provider_allowlist", "no_secrets_in_query"],
+          "inputs_hash": "sha256:b8e441f7...", "inputs": null }
+      ]
     }
   },
-  "summary": { "total_chunks": 3, "verified": 2, "unverified": 1, "overall_status": "PARTIAL" },
+  "summary": { "total_chunks": 3, "verified": 2, "unverified": 1,
+               "total_actions": 1, "actions_allowed": 1, "actions_denied": 0,
+               "overall_status": "PARTIAL" },
   "signature": { "algorithm": "hmac-sha256", "value": "fc5d40895ca2..." }
 }
 ```
@@ -224,19 +271,48 @@ Stdlib-only, no service to stand up. Same interface, same canonical signing payl
 
 Your existing vector store is untouched. Provenex runs alongside as a parallel signed index plus a policy gate. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care.
 
+### Tool-call admission (Phase 2, schema 2.2.0)
+
+```python
+from provenex import (
+    HmacSha256Signer, Policy, RequestContext,
+    ToolCallContext, admission_check,
+)
+
+policy = Policy.from_yaml("agent_policy.yaml")   # both halves live in one file
+request = RequestContext(
+    caller={"id": "u_42", "role": "engineer"}, jurisdiction="US",
+    purpose="incident_response", timestamp="2026-05-14T11:30:00Z",
+)
+result = admission_check(
+    tool=ToolCallContext(
+        name="jira", operation="create_issue",
+        parameters={"project": "INC", "summary": "..."},
+        target_system="acme.atlassian.net",
+    ),
+    request=request, policy=policy, signer=HmacSha256Signer(),
+)
+if result.allowed:
+    jira_client.create_issue(...)        # YOUR code, YOUR credentials
+save_receipt(result.receipt)             # signed, verifiable offline — denies too
+```
+
+**Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call against the target system using its own credentials. Provenex never holds OAuth tokens, never proxies traffic, and never sits on the response-data path. Use [`ProvenexToolWrapper`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/langchain.py) to wrap any LangChain tool; use [`provenex_mcp_admission`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/mcp.py) to decorate any MCP `tools/call` handler.
+
 ## Agentic and multi-step flows
 
 Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve, reflect, retrieve again. Multiple agents collaborate. Tools fetch live data. Provenex is built for these flows alongside the simple one-shot case:
 
-| Framework | Integration |
-| --- | --- |
-| **LangChain** | `ProvenexRetriever` wraps any retriever. Accepts an optional `trajectory=` for multi-step chains. |
-| **LangGraph** | `provenex_retrieval_node(...)` factory + state helpers. Drops into any state-graph DAG; the trajectory threads through the shared state. |
-| **CrewAI** | `ProvenexCrewSession` owns a per-crew trajectory; `session.wrap_tool(tool)` wraps any retrieval / tool / memory callable. |
-| **LlamaIndex** | `ProvenexRetriever` middleware (same pattern as LangChain). |
-| **Anything else** | `provenex.verify_chunks(chunks, index=..., policy=..., request_context=..., trajectory=...)` — framework-agnostic one-liner. |
+| Framework | Retrieval | Tool calls (Phase 2) |
+| --- | --- | --- |
+| **LangChain** | `ProvenexRetriever` wraps any retriever. Accepts an optional `trajectory=`. | `ProvenexToolWrapper` wraps any LangChain tool; same receipt shape as MCP. |
+| **LangGraph** | `provenex_retrieval_node(...)` factory + state helpers. Drops into any state-graph DAG; the trajectory threads through the shared state. | Call `admission_check(...)` from a graph node; pass `trajectory=` to thread admissions into the same DAG. |
+| **CrewAI** | `ProvenexCrewSession` owns a per-crew trajectory; `session.wrap_tool(tool)` wraps any retrieval / tool / memory callable. | Call `admission_check(...)` from your crew's tool callable; pass `trajectory=` to thread it through the session DAG. A dedicated `wrap_tool_admission` helper is on the v0.7 roadmap. |
+| **LlamaIndex** | `ProvenexRetriever` middleware (same pattern as LangChain). | Use the framework-agnostic `admission_check(...)` directly. |
+| **MCP** | n/a (retrieval is upstream of MCP) | `provenex_mcp_admission(...)` decorator wraps a `tools/call` handler. Standard JSON-RPC error code on deny. |
+| **Anything else** | `provenex.verify_chunks(chunks, index=..., policy=..., request_context=..., trajectory=...)` | `provenex.admission_check(tool=..., request=..., policy=..., signer=..., trajectory=...)` |
 
-Every retrieval step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. One audit pass, the whole run.
+Every retrieval **and tool-call admission** step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. **Mixed step kinds (retrieval + tool_call) are first-class** — one CLI invocation covers the whole agent run.
 
 Receipts also carry two optional per-chunk fields useful in agent flows:
 
@@ -313,6 +389,8 @@ python provenex-core/examples/standalone_demo.py
 
 For the integration-pattern story, run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store, bypassing Provenex ingest, get caught at the retrieval boundary and blocked from reaching the LLM.
 
+For the **Phase 2** headline demo — a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation — run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
+
 ## CLI
 
 ```bash
@@ -320,10 +398,10 @@ provenex ingest  --index prov.db --doc-id policy_v4 policy.txt
 provenex verify  --index prov.db retrieved_chunk.txt
 provenex receipt --index prov.db --output llm_output.txt chunk1.txt chunk2.txt
 provenex audit   receipt.json
-provenex audit   receipt.json --show-policy          # render the unified policy block
-provenex audit   --trajectory ./receipts/            # validate a whole agentic trajectory at once
-provenex policy  validate hr_policy.yaml             # parse + validate a policy file
-provenex policy  hash     hr_policy.yaml             # print canonical policy_version_hash
+provenex audit   receipt.json --show-policy          # render the unified policy block (both halves + tool calls)
+provenex audit   --trajectory ./receipts/            # validate a whole agentic trajectory at once (mixed step kinds)
+provenex policy  validate hr_policy.yaml             # parse + validate a policy file (chunk + tool-call rules)
+provenex policy  hash     hr_policy.yaml             # print canonical policy_version_hash(es)
 ```
 
 `provenex policy validate` is the CI-time check for policy files: a typo or a reserved-but-unimplemented feature fails the build instead of silently allowing at runtime. `provenex policy hash` prints the canonical `policy_version_hash` that will appear on every receipt produced under that policy.
@@ -341,15 +419,16 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **SQLite** provenance index for single-node development (HMAC-signed rows, stdlib-only)
 - RFC 6962 Merkle transparency log (optional, on top of either index)
 - Receipt generation, HMAC + Ed25519 signing, offline inclusion-proof verification
-- **Unified policy** (schema 2.1.0): single top-level `policy` block with `verification` and `access_control` halves
-- **Native YAML data-access policy DSL**: pluggable `PolicyEvaluator` protocol with the YAML evaluator as the reference backend
+- **Unified policy** (schema 2.2.0): single top-level `policy` block with `verification`, `access_control`, and `tool_call_control` halves
+- **Native YAML policy DSL** for both chunk decisions and tool-call admission: pluggable `PolicyEvaluator` and `ToolCallPolicyEvaluator` protocols with the YAML evaluators as the reference backends; operators include `in` / `not_in` / `not_older_than` / `matches_pattern` / `not_matches_pattern` / `length_at_most`
 - **`metadata_binding`** per decision: each `chunk_metadata` block on the receipt declares whether it was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Lets an auditor see the trust class of every input at a glance.
 - **Bloom-filter interface** (`BloomFilterIndex` ABC + `NoopBloomFilter` + `BloomAcceleratedIndex` wrapper). The interface is OSS so commercial deployments are drop-in; the actual high-throughput Bloom implementation ships commercially.
-- Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows
+- **Tool-call admission primitive** (Phase 2, schema 2.2.0): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
+- Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval and tool-call steps
 - Self-attribution claims (schema 1.4.0+): signed but unverified records of what the agent said it used
 - Content-source classifier (schema 1.4.0+): distinguish indexed-corpus chunks from live-tool / memory-store chunks
-- LangChain / LangGraph / LlamaIndex / CrewAI integrations
-- Framework-agnostic `provenex.verify_chunks(...)` for everything else
+- LangChain / LangGraph / LlamaIndex / CrewAI / MCP integrations
+- Framework-agnostic `provenex.verify_chunks(...)` and `provenex.admission_check(...)` for everything else
 - CLI: `provenex ingest / verify / receipt / audit / policy`
 - Python SDK: `pip install provenex-core`
 
