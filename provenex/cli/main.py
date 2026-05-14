@@ -568,17 +568,86 @@ def _cmd_policy_validate(args: argparse.Namespace) -> int:
 def _cmd_policy_hash(args: argparse.Namespace) -> int:
     """Print the canonical ``policy_version_hash`` for a policy file.
 
-    This is what would appear on every receipt produced under this policy,
-    and (in Phase 2) what gets entered into the transparency log. Useful
-    for confirming a policy update has actually changed the bytes that
-    matter to an auditor, vs. whitespace-only or key-reordering edits.
+    This is what would appear on every receipt produced under this policy
+    and (with the commercial transparency-log integration) what gets
+    entered into the transparency log.
+
+    Unified files in schema 2.2.0 may carry two independently-versioned
+    halves: ``access_control`` (chunk policy) and ``tool_call_control``
+    (tool-call policy). Each has its own hash. By default we print
+    every hash present in the file, one per line, prefixed with the
+    section name; pass ``--section access_control`` or ``--section
+    tool_call_control`` to filter.
     """
+    from ..policy.unified import Policy
+
     try:
-        evaluator = NativeYamlEvaluator.from_path(args.file)
+        with open(args.file, "r", encoding="utf-8") as f:
+            text = f.read()
+        try:
+            policy = Policy.from_text(text, source=args.file)
+            ac_hash = (
+                policy.access_control.policy_version_hash
+                if policy.access_control is not None
+                else None
+            )
+            tcc_hash = (
+                policy.tool_call_control.policy_version_hash
+                if policy.tool_call_control is not None
+                else None
+            )
+        except Exception:
+            # Legacy access-control-only file with rules at top level.
+            ev = NativeYamlEvaluator.from_path(args.file)
+            ac_hash = ev.policy_version_hash
+            tcc_hash = None
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(evaluator.policy_version_hash)
+
+    section = getattr(args, "section", None)
+    if section == "access_control":
+        if ac_hash is None:
+            print(
+                f"error: {args.file} has no access_control section",
+                file=sys.stderr,
+            )
+            return 1
+        print(ac_hash)
+        return 0
+    if section == "tool_call_control":
+        if tcc_hash is None:
+            print(
+                f"error: {args.file} has no tool_call_control section",
+                file=sys.stderr,
+            )
+            return 1
+        print(tcc_hash)
+        return 0
+
+    # No filter:
+    # - Single-section file: print the hash bare (preserves the
+    #   Phase 1 CLI contract — pipeline scripts that grep
+    #   ``sha256:...`` from this output continue working).
+    # - Multi-section file: prefix each line with the section name so
+    #   the auditor can distinguish them.
+    present = [(s, h) for s, h in (
+        ("access_control", ac_hash),
+        ("tool_call_control", tcc_hash),
+    ) if h is not None]
+    if not present:
+        print(
+            f"error: {args.file} has no rule sections to hash",
+            file=sys.stderr,
+        )
+        return 1
+    if len(present) == 1:
+        print(present[0][1])
+    else:
+        # Pad section names to the longest so the columns line up.
+        width = max(len(s) for s, _ in present)
+        for section_name, h in present:
+            print(f"{section_name:<{width}}  {h}")
     return 0
 
 
@@ -586,8 +655,10 @@ def _print_policy_block(receipt: Dict[str, Any]) -> None:
     """Render the unified ``policy`` block for ``provenex audit --show-policy``.
 
     Schema 2.0.0: ``policy.verification`` is always present; the optional
-    ``policy.access_control`` carries the evaluator metadata and per-chunk
-    decisions. We render both so an auditor can see both gates at a glance.
+    ``policy.access_control`` carries chunk-decision records. Schema
+    2.2.0 (Phase 2): adds an optional ``policy.tool_call_control``
+    carrying tool-call admission records. We render every half present
+    so an auditor sees all gates at a glance.
     """
     policy_block = receipt.get("policy") or {}
     print()
@@ -603,24 +674,59 @@ def _print_policy_block(receipt: Dict[str, Any]) -> None:
 
     # Access-control half — optional.
     ac = policy_block.get("access_control")
-    if not ac:
+    if ac:
+        print(f"    {_dim('access control:')}")
+        print(f"      {_dim('evaluator:           ')} {ac.get('evaluator', '?')}")
+        print(f"      {_dim('policy_id:           ')} {ac.get('policy_id', '?')}")
+        print(f"      {_dim('policy_version_hash: ')} {ac.get('policy_version_hash', '?')}")
+        in_log = ac.get("policy_in_transparency_log")
+        print(f"      {_dim('in transparency log: ')} {in_log!s}")
+        decisions = ac.get("decisions") or []
+        print(f"      {_dim('decisions:           ')} {len(decisions)}")
+        for i, d in enumerate(decisions):
+            verdict = d.get("decision", "?")
+            mark = _green("ALLOW") if verdict == "allow" else _red(verdict.upper())
+            rules = d.get("rules_fired") or []
+            rules_str = ", ".join(rules) if rules else _dim("(no rules fired)")
+            fp = (d.get("chunk_fingerprint") or "?")[:40]
+            print(f"      [{mark}] chunk #{i}  {_dim(fp + '...')}  rules: {rules_str}")
+    else:
         print(f"    {_dim('access control:        none (no evaluator configured)')}")
-        return
-    print(f"    {_dim('access control:')}")
-    print(f"      {_dim('evaluator:           ')} {ac.get('evaluator', '?')}")
-    print(f"      {_dim('policy_id:           ')} {ac.get('policy_id', '?')}")
-    print(f"      {_dim('policy_version_hash: ')} {ac.get('policy_version_hash', '?')}")
-    in_log = ac.get("policy_in_transparency_log")
-    print(f"      {_dim('in transparency log: ')} {in_log!s}")
-    decisions = ac.get("decisions") or []
-    print(f"      {_dim('decisions:           ')} {len(decisions)}")
-    for i, d in enumerate(decisions):
-        verdict = d.get("decision", "?")
-        mark = _green("ALLOW") if verdict == "allow" else _red(verdict.upper())
-        rules = d.get("rules_fired") or []
-        rules_str = ", ".join(rules) if rules else _dim("(no rules fired)")
-        fp = (d.get("chunk_fingerprint") or "?")[:40]
-        print(f"      [{mark}] chunk #{i}  {_dim(fp + '...')}  rules: {rules_str}")
+
+    # Tool-call control half — optional (schema 2.2.0+).
+    tcc = policy_block.get("tool_call_control")
+    actions = receipt.get("actions") or []
+    if tcc:
+        print(f"    {_dim('tool call control:')}")
+        print(f"      {_dim('evaluator:           ')} {tcc.get('evaluator', '?')}")
+        print(f"      {_dim('policy_id:           ')} {tcc.get('policy_id', '?')}")
+        print(f"      {_dim('policy_version_hash: ')} {tcc.get('policy_version_hash', '?')}")
+        in_log = tcc.get("policy_in_transparency_log")
+        print(f"      {_dim('in transparency log: ')} {in_log!s}")
+        decisions = tcc.get("decisions") or []
+        print(f"      {_dim('decisions:           ')} {len(decisions)}")
+        # Render each decision next to its action record for the auditor.
+        by_action_idx = {a.get("action_index"): a for a in actions}
+        for d in decisions:
+            verdict = d.get("decision", "?")
+            mark = _green("ALLOW") if verdict == "allow" else _red(verdict.upper())
+            rules = d.get("rules_fired") or []
+            rules_str = ", ".join(rules) if rules else _dim("(no rules fired)")
+            aidx = d.get("action_index")
+            action = by_action_idx.get(aidx) or {}
+            tool_label = (
+                f"{action.get('name', '?')}.{action.get('operation', '?')}"
+            )
+            target = action.get("target_system")
+            target_str = f" → {target}" if target else ""
+            print(
+                f"      [{mark}] action #{aidx}  {_dim(tool_label + target_str)}"
+                f"  rules: {rules_str}"
+            )
+    elif actions:
+        print(
+            f"    {_dim('tool call control:     none (admission allowed by default — actions present but no policy configured)')}"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -752,6 +858,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the canonical policy_version_hash for a policy file",
     )
     p_policy_hash.add_argument("file", help="Path to a policy YAML file")
+    p_policy_hash.add_argument(
+        "--section",
+        choices=("access_control", "tool_call_control"),
+        default=None,
+        help=(
+            "Print the hash of only one section. Without this flag, every "
+            "hashable section in the file is printed, one per line, "
+            "prefixed with the section name."
+        ),
+    )
     p_policy_hash.set_defaults(func=_cmd_policy_hash)
 
     return parser

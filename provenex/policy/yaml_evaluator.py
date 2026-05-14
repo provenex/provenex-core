@@ -28,8 +28,9 @@ Operators who use the YAML DSL install the extra:
 
 from __future__ import annotations
 
+import fnmatch
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from .evaluator import (
     DECISION_ALLOW,
@@ -49,7 +50,31 @@ from .evaluator import (
 # Operator names recognised inside ``require`` clauses. Anything else in
 # an operator-style mapping (a dict value under a require key) is rejected
 # at parse time so a typo cannot silently allow.
-_KNOWN_REQUIRE_OPERATORS = frozenset({"in", "not_in", "not_older_than"})
+#
+# Phase 2 (schema 2.2.0) adds ``matches_pattern`` / ``not_matches_pattern``
+# (POSIX ``fnmatch`` globs; deliberately not regex — globs are auditable,
+# regexes are a footgun) and ``length_at_most`` (integer cap on string-
+# valued paths; cheapest mitigation against parameter-size injection).
+# These work on any string-valued path and are domain-agnostic.
+_KNOWN_REQUIRE_OPERATORS = frozenset(
+    {
+        "in",
+        "not_in",
+        "not_older_than",
+        "matches_pattern",
+        "not_matches_pattern",
+        "length_at_most",
+    }
+)
+
+# Path roots a rule is allowed to reference, by domain. Phase 1
+# ``access_control`` rules see chunks and the request context; Phase 2
+# ``tool_call_control`` rules see tool calls and the request context.
+# Cross-domain references fail at parse time so an operator cannot
+# accidentally write a chunk rule that references ``tool.parameters``
+# (or vice versa) and have it silently evaluate as missing.
+_CHUNK_DOMAIN_ROOTS: FrozenSet[str] = frozenset({"chunk", "request"})
+_TOOL_CALL_DOMAIN_ROOTS: FrozenSet[str] = frozenset({"tool", "request"})
 
 # Reserved-but-unimplemented top-level keys and rule-level keys. Listing
 # them explicitly lets us raise a precise UnsupportedPolicyFeature rather
@@ -146,12 +171,51 @@ def _check_no_reserved_keys(
             )
 
 
-def _validate_rule(rule: Any, *, idx: int, source: str) -> Dict[str, Any]:
+def _validate_path_root(
+    path: str,
+    *,
+    allowed_roots: FrozenSet[str],
+    where: str,
+) -> None:
+    """Reject a path whose root is not in this rule's domain.
+
+    Phase 2 introduced two parallel rule domains (``access_control`` for
+    chunks, ``tool_call_control`` for tool calls). Each domain allows a
+    distinct set of path roots. Cross-domain references fail here at
+    parse time rather than evaluating as missing at runtime — silent
+    evaluate-as-missing would be a "policy file typo opens a gate"
+    failure mode, exactly what the strict-load discipline exists to
+    prevent.
+    """
+    if not isinstance(path, str) or "." not in path:
+        # Will fail elsewhere on shape; nothing to validate here.
+        return
+    root = path.split(".", 1)[0]
+    if root not in allowed_roots:
+        raise PolicyParseError(
+            f"{where}: path {path!r} uses root {root!r} which is not "
+            f"allowed in this rule's domain. Allowed roots: "
+            f"{sorted(allowed_roots)}"
+        )
+
+
+def _validate_rule(
+    rule: Any,
+    *,
+    idx: int,
+    source: str,
+    allowed_roots: FrozenSet[str] = _CHUNK_DOMAIN_ROOTS,
+) -> Dict[str, Any]:
     """Validate one rule dict and return it normalized.
 
     Catches the worst case (silent allow) by being strict about unknown
     keys and unknown operators. A typo is a parse error, not a permissive
     default.
+
+    ``allowed_roots`` controls which path roots the rule may reference.
+    Defaults to the Phase 1 chunk domain (``{"chunk", "request"}``) so
+    existing call sites behave identically. Phase 2 callers pass the
+    tool-call domain.
     """
     if not isinstance(rule, dict):
         raise PolicyParseError(
@@ -178,6 +242,29 @@ def _validate_rule(rule: Any, *, idx: int, source: str) -> Dict[str, Any]:
             f"{source}: rule '{name}': 'when' must be a mapping"
         )
     _check_no_reserved_keys(when, where=f"{source}: rule '{name}' when")
+    for path, expected in when.items():
+        _validate_path_root(
+            path,
+            allowed_roots=allowed_roots,
+            where=f"{source}: rule '{name}' when",
+        )
+        # ``when`` accepts direct equality (scalar RHS) or ``{in: [...]}``
+        # membership. Anything else — including the rich operators
+        # allowed in ``require`` — is rejected at parse time so a typo
+        # cannot silently turn a strict gate into an open one.
+        if isinstance(expected, dict):
+            unknown = set(expected) - {"in"}
+            if unknown:
+                raise PolicyParseError(
+                    f"{source}: rule '{name}' when['{path}'] uses operator(s) "
+                    f"{sorted(unknown)} not supported in 'when'. Only direct "
+                    f"equality and 'in' are allowed here; move richer logic "
+                    f"into 'require'."
+                )
+            if "in" in expected and not isinstance(expected["in"], list):
+                raise PolicyParseError(
+                    f"{source}: rule '{name}' when['{path}'].in must be a list"
+                )
 
     require = rule.get("require") or {}
     if not isinstance(require, dict):
@@ -189,6 +276,11 @@ def _validate_rule(rule: Any, *, idx: int, source: str) -> Dict[str, Any]:
     # bad duration strings, and wrong shapes (in/not_in not a list) should
     # all fail at load time, not silently allow at evaluation time.
     for path, constraint in require.items():
+        _validate_path_root(
+            path,
+            allowed_roots=allowed_roots,
+            where=f"{source}: rule '{name}' require",
+        )
         if isinstance(constraint, dict):
             unknown_ops = set(constraint) - _KNOWN_REQUIRE_OPERATORS
             if unknown_ops:
@@ -214,6 +306,20 @@ def _validate_rule(rule: Any, *, idx: int, source: str) -> Dict[str, Any]:
                         f"require['{path}'].not_older_than"
                     ),
                 )
+            for op in ("matches_pattern", "not_matches_pattern"):
+                if op in constraint and not isinstance(constraint[op], str):
+                    raise PolicyParseError(
+                        f"{source}: rule '{name}' require['{path}'].{op} "
+                        f"must be a glob pattern string (e.g. '*.example.com')"
+                    )
+            if "length_at_most" in constraint:
+                v = constraint["length_at_most"]
+                if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                    raise PolicyParseError(
+                        f"{source}: rule '{name}' "
+                        f"require['{path}'].length_at_most must be a "
+                        f"non-negative integer (got {v!r})"
+                    )
 
     on_violation = rule.get("on_violation", "deny")
     if on_violation == "allow_with_conditions":
@@ -274,18 +380,31 @@ _MISSING = object()
 def _resolve_path(
     path: str,
     *,
-    chunk: ChunkContext,
+    chunk: Optional[ChunkContext] = None,
     request: RequestContext,
+    tool: Optional[Any] = None,
 ) -> Any:
-    """Walk a dotted path against the (chunk, request) context.
+    """Walk a dotted path against the (chunk | tool, request) context.
 
     Path roots recognised:
 
         * ``chunk.*`` — attributes of :class:`ChunkContext`. Within
           ``chunk.metadata`` further dotted segments index into the
-          metadata dict.
+          metadata dict. Phase 1.
         * ``request.*`` — attributes of :class:`RequestContext`. Within
           ``request.caller`` further segments index into the caller dict.
+          Shared.
+        * ``tool.*`` — attributes of
+          :class:`provenex.tool_call.ToolCallContext`. Within
+          ``tool.parameters`` further dotted segments index into the
+          parameter dict. Phase 2.
+
+    Exactly one of ``chunk`` or ``tool`` is supplied per evaluation
+    (Phase 1 callers pass ``chunk``, Phase 2 callers pass ``tool``). A
+    rule that references a path root absent from the supplied contexts
+    resolves to :data:`_MISSING` — but parse-time validation
+    (:func:`_validate_path_root`) ensures that cannot happen for a
+    well-formed bundle.
 
     Returns :data:`_MISSING` if any segment doesn't exist. Note that an
     explicit ``None`` in the source is returned as ``None``, not
@@ -296,6 +415,8 @@ def _resolve_path(
         return _MISSING
     root = parts[0]
     if root == "chunk":
+        if chunk is None:
+            return _MISSING
         current: Any = chunk
         for seg in parts[1:]:
             if isinstance(current, dict):
@@ -305,6 +426,20 @@ def _resolve_path(
             else:
                 # Dataclass field — getattr returns _MISSING sentinel for
                 # absent fields.
+                current = getattr(current, seg, _MISSING)
+                if current is _MISSING:
+                    return _MISSING
+        return current
+    if root == "tool":
+        if tool is None:
+            return _MISSING
+        current = tool
+        for seg in parts[1:]:
+            if isinstance(current, dict):
+                if seg not in current:
+                    return _MISSING
+                current = current[seg]
+            else:
                 current = getattr(current, seg, _MISSING)
                 if current is _MISSING:
                     return _MISSING
@@ -322,25 +457,52 @@ def _resolve_path(
                     return _MISSING
         return current
     raise PolicyParseError(
-        f"unknown path root {root!r} in {path!r}; expected 'chunk' or 'request'"
+        f"unknown path root {root!r} in {path!r}; "
+        f"expected 'chunk', 'tool', or 'request'"
     )
 
 
 def _when_matches(
     when: Dict[str, Any],
     *,
-    chunk: ChunkContext,
+    chunk: Optional[ChunkContext] = None,
     request: RequestContext,
+    tool: Optional[Any] = None,
 ) -> bool:
-    """Return True iff every key in ``when`` matches by direct equality.
+    """Return True iff every key in ``when`` matches its expected value.
+
+    Each ``when`` entry is one of:
+
+        * **Direct equality** (scalar RHS) — the path resolves to a value
+          equal to the RHS. The original Phase 1 form.
+        * **`in:` membership** (``{in: [a, b, c]}`` RHS) — the path
+          resolves to a value in the list. Added in schema 2.2.0 to keep
+          CRUD-style tool-call rules from needing three near-identical
+          duplicates ("if the operation is one of create_issue /
+          update_issue / delete_issue, require ...").
+
+    No other operators are supported in ``when``. ``when`` is meant to be
+    a quick "does this rule apply" filter; richer logic belongs in
+    ``require``.
 
     A missing path means "no match" — rule scope doesn't apply. This is
     deliberately distinct from a ``require`` clause referencing a missing
     path, which is governed by ``defaults.unknown_metadata``.
     """
     for path, expected in when.items():
-        actual = _resolve_path(path, chunk=chunk, request=request)
+        actual = _resolve_path(path, chunk=chunk, request=request, tool=tool)
         if actual is _MISSING:
+            return False
+        if isinstance(expected, dict):
+            # The only supported operator in a `when` clause is `in:`.
+            # Validated at parse time; anything else is an error.
+            if "in" in expected:
+                if actual not in expected["in"]:
+                    return False
+                continue
+            # Should be unreachable thanks to parse-time validation, but
+            # defensive against future extensions adding operators that
+            # forget to update parse-side checks.
             return False
         if actual != expected:
             return False
@@ -406,6 +568,34 @@ def _check_constraint(
             return False, f"{path}: invalid timestamp"
         age_s = now_epoch - actual_epoch
         return (age_s <= max_age_s), f"{path}: age={age_s}s <= {max_age_s}s"
+    if "matches_pattern" in constraint:
+        pattern = constraint["matches_pattern"]
+        if not isinstance(actual, str):
+            return False, (
+                f"{path}: 'matches_pattern' requires a string value, "
+                f"got {type(actual).__name__}"
+            )
+        return fnmatch.fnmatchcase(actual, pattern), (
+            f"{path}: matches_pattern {pattern!r}"
+        )
+    if "not_matches_pattern" in constraint:
+        pattern = constraint["not_matches_pattern"]
+        if not isinstance(actual, str):
+            return False, (
+                f"{path}: 'not_matches_pattern' requires a string value, "
+                f"got {type(actual).__name__}"
+            )
+        return (not fnmatch.fnmatchcase(actual, pattern)), (
+            f"{path}: not_matches_pattern {pattern!r}"
+        )
+    if "length_at_most" in constraint:
+        cap = constraint["length_at_most"]
+        if not isinstance(actual, str):
+            return False, (
+                f"{path}: 'length_at_most' requires a string value, "
+                f"got {type(actual).__name__}"
+            )
+        return (len(actual) <= cap), f"{path}: len={len(actual)} <= {cap}"
     return False, f"{path}: unrecognised constraint shape"
 
 
@@ -623,11 +813,46 @@ def validate_policy_file(path: str) -> Tuple[bool, Optional[str]]:
     Used by the ``provenex policy validate`` subcommand. Returning a tuple
     rather than raising lets the CLI format the error without unwrapping
     an exception.
+
+    Accepts:
+
+        * Unified-layout files (schema 2.0.0+): top-level
+          ``verification:`` / ``access_control:`` / ``tool_call_control:``
+          subsections in any combination. Validated via
+          :meth:`provenex.Policy.from_text`.
+        * Legacy access-control-only files: top-level ``rules:`` /
+          ``defaults:``. Validated via :meth:`NativeYamlEvaluator.from_path`
+          as a fallback so existing CI pipelines don't break.
+
+    The unified layout is tried first; if it errors with a layout-level
+    complaint (unknown top-level keys), we try the legacy path. If both
+    fail, the unified error wins — it's the more informative one.
     """
     try:
-        NativeYamlEvaluator.from_path(path)
-    except (PolicyParseError, UnsupportedPolicyFeature) as exc:
-        return False, str(exc)
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
     except FileNotFoundError as exc:
         return False, f"file not found: {exc.filename}"
-    return True, None
+
+    # Try the unified layout first. This handles everything new (Phase 2
+    # tool_call_control, verification-only files, etc.) and the common
+    # Phase 1 case where the file has ``access_control:`` at the top.
+    unified_err: Optional[str] = None
+    try:
+        # Local import to avoid the Policy ↔ yaml_evaluator load-time
+        # cycle Python would otherwise complain about.
+        from .unified import Policy
+
+        Policy.from_text(text, source=path)
+        return True, None
+    except (PolicyParseError, UnsupportedPolicyFeature) as exc:
+        unified_err = str(exc)
+
+    # Legacy fallback: a file with ``rules:`` at the top level (no
+    # unified subsection) is still acceptable for Phase 1 callers.
+    try:
+        NativeYamlEvaluator.from_text(text, source=path)
+        return True, None
+    except (PolicyParseError, UnsupportedPolicyFeature):
+        # Surface the unified error — it's usually more actionable.
+        return False, unified_err

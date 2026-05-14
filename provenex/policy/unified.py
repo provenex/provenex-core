@@ -1,58 +1,86 @@
 """Unified :class:`Policy` wrapper.
 
 Schema 2.0.0 unified the verification gate and the data-access gate under
-a single top-level ``policy`` block on the receipt. The Python API
-mirrors that shape: callers construct one :class:`Policy` carrying both
-halves, and pass it to :func:`provenex.verify_chunks`.
+a single top-level ``policy`` block on the receipt. Schema 2.2.0 (Phase
+2) adds a third half — ``tool_call_control`` — for admission decisions
+on agentic tool calls. The Python API mirrors that shape: callers
+construct one :class:`Policy` carrying all three halves, and pass it to
+:func:`provenex.verify_chunks` and/or
+:func:`provenex.tool_call.admission_check`.
 
-Two halves:
+Three halves:
 
 * ``verification`` — :class:`VerificationPolicy` controlling which of the
   five outcomes (VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED)
-  block a chunk before it reaches the next stage.
+  block a chunk before it reaches the next stage. Applies to retrieved
+  content only.
 * ``access_control`` — an optional :class:`PolicyEvaluator` that runs
-  declarative rules over chunk metadata and the request context. The
-  native YAML evaluator is the reference backend. The Rego adapter and
-  the OPA service adapter are commercial.
+  declarative rules over chunk metadata and the request context.
+  Applies to retrieved content only.
+* ``tool_call_control`` — an optional
+  :class:`provenex.tool_call.ToolCallPolicyEvaluator` that runs
+  declarative rules over tool-call parameters and the request context.
+  Applies to agentic tool calls only.
 
-A chunk reaches the LLM only if BOTH halves allow it. The verification
-half is always present (with sensible defaults if the caller doesn't
-override). The access-control half is optional — for early-stage
-deployments that want the verification gate alone.
+A chunk reaches the LLM only if both retrieval-side halves allow it. A
+tool call is admitted only if the tool-call half allows it. The
+verification half is always present (with sensible defaults if the
+caller doesn't override). The access-control and tool-call-control
+halves are independent — early-stage deployments can ship verification
+only.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from .evaluator import PolicyEvaluator
 from .policy import VerificationPolicy
+
+if TYPE_CHECKING:  # pragma: no cover — type hints only
+    from ..tool_call.evaluator import ToolCallPolicyEvaluator
 
 # Reserved top-level YAML keys for the unified config file. Anything else
 # at the top level raises a parse error — the convention is "load loud,
 # fail loud" so typos can't silently allow.
 _UNIFIED_YAML_TOP_KEYS = frozenset(
-    {"version", "policy_id", "description", "verification", "access_control"}
+    {
+        "version",
+        "policy_id",
+        "description",
+        "verification",
+        "access_control",
+        # Schema 2.2.0 (Phase 2) addition: rules for tool-call admission.
+        "tool_call_control",
+    }
 )
 
 
 @dataclass(frozen=True)
 class Policy:
-    """The single policy object the caller passes to ``verify_chunks``.
+    """The single policy object the caller passes to retrieval and admission.
 
     Attributes:
         verification: The five-outcome verification gate config. Defaults
             to :class:`VerificationPolicy` defaults (block UNAUTHORIZED
             and TAMPERED; flag everything else).
         access_control: Optional :class:`PolicyEvaluator` running
-            declarative access-control rules. ``None`` means no access
-            policy is in effect — only the verification gate applies, and
-            the receipt's ``policy.access_control`` block is omitted.
+            declarative access-control rules over chunks. ``None`` means
+            no chunk-access policy is in effect — only the verification
+            gate applies, and the receipt's ``policy.access_control``
+            block is omitted.
+        tool_call_control: Optional
+            :class:`provenex.tool_call.ToolCallPolicyEvaluator` running
+            declarative admission rules over tool calls. ``None`` means
+            no tool-call policy is in effect — admission allows by
+            default, and the receipt's ``policy.tool_call_control``
+            block is omitted. Schema 2.2.0+.
     """
 
     verification: VerificationPolicy = field(default_factory=VerificationPolicy)
     access_control: Optional[PolicyEvaluator] = None
+    tool_call_control: Optional["ToolCallPolicyEvaluator"] = None
 
     @classmethod
     def from_yaml(cls, path: str) -> "Policy":
@@ -106,6 +134,12 @@ class Policy:
     def _from_bundle(cls, bundle: Any, *, source: str) -> "Policy":
         from .evaluator import PolicyParseError
         from .yaml_evaluator import NativeYamlEvaluator
+        # Local import to avoid the Phase 1 ↔ Phase 2 cycle at module
+        # load time. The Phase 2 evaluator subpackage imports from
+        # provenex.policy.evaluator; this module being imported eagerly
+        # from there would close the loop.
+        from ..tool_call.evaluator import ToolCallPolicyEvaluator
+        from ..tool_call.yaml_evaluator import NativeYamlToolCallEvaluator
 
         if not isinstance(bundle, dict):
             raise PolicyParseError(
@@ -132,7 +166,19 @@ class Policy:
             access_control = NativeYamlEvaluator.from_unified_bundle(
                 bundle, source=source
             )
-        return cls(verification=verification, access_control=access_control)
+
+        tool_call_control_block = bundle.get("tool_call_control")
+        tool_call_control: Optional[ToolCallPolicyEvaluator] = None
+        if tool_call_control_block is not None:
+            tool_call_control = NativeYamlToolCallEvaluator.from_unified_bundle(
+                bundle, source=source
+            )
+
+        return cls(
+            verification=verification,
+            access_control=access_control,
+            tool_call_control=tool_call_control,
+        )
 
 
 def _parse_verification(

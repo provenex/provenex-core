@@ -1,28 +1,39 @@
 # Policy reference
 
-Provenex enforces policy at retrieval time and emits a cryptographically signed record of every decision. Schema 2.0.0 (Provenex v0.4) unified the verification gate and the data-access gate under a single `Policy` object. This document is the reference.
+Provenex enforces policy at retrieval time and at tool-call admission time, and emits a cryptographically signed record of every decision. Schema 2.0.0 (Provenex v0.4) unified the verification gate and the data-access gate under a single `Policy` object; schema 2.2.0 (Provenex v0.6, Phase 2) adds a third half for agentic tool-call admission. This document is the reference for all three.
 
 Before reading this, you may want the architectural framing in [`how_it_works.md`](how_it_works.md) and the receipt schema in [`receipt_format.md`](receipt_format.md).
 
 ## The unified `Policy`
 
-A Provenex `Policy` has two halves:
+A Provenex `Policy` has three halves:
 
-- **`verification`** — the five-outcome gate. Decides which of `VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED` block a chunk before the next stage.
-- **`access_control`** — the data-access policy. A pluggable `PolicyEvaluator` that runs declarative rules over chunk metadata and the request context.
+- **`verification`** — the five-outcome gate. Decides which of `VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED` block a chunk before the next stage. Applies to retrieved content only.
+- **`access_control`** — the data-access policy. A pluggable `PolicyEvaluator` that runs declarative rules over chunk metadata and the request context. Applies to retrieved content only.
+- **`tool_call_control`** *(schema 2.2.0+)* — the tool-call admission policy. A pluggable `ToolCallPolicyEvaluator` that runs declarative rules over tool-call parameters and the request context. Applies to agentic tool calls only.
 
-A chunk reaches the LLM only if **both** halves allow it. The verification half is always present (with sensible defaults if the caller doesn't override). The access-control half is optional — early-stage deployments can ship with verification only.
+A chunk reaches the LLM only if **both** retrieval-side halves allow it. A tool call is admitted only if the tool-call half allows it. The verification half is always present (with sensible defaults if the caller doesn't override). The access-control and tool-call-control halves are independent — early-stage deployments can ship with verification only.
 
 ```python
-from provenex import Policy, VerificationPolicy, NativeYamlEvaluator
+from provenex import (
+    NativeYamlEvaluator, NativeYamlToolCallEvaluator,
+    Policy, VerificationPolicy,
+)
 
-# Explicit construction
+# Explicit construction — Phase 1 only (no tool calls)
 policy = Policy(
     verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
     access_control=NativeYamlEvaluator.from_path("hr_policy.yaml"),
 )
 
-# Or from a unified YAML config (single file holds both halves)
+# Explicit construction — all three halves (Phase 1 + Phase 2)
+policy = Policy(
+    verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
+    access_control=NativeYamlEvaluator.from_path("agent_policy.yaml"),
+    tool_call_control=NativeYamlToolCallEvaluator.from_path("agent_policy.yaml"),
+)
+
+# Or from a unified YAML config (single file holds every half present)
 policy = Policy.from_yaml("provenex_policy.yaml")
 ```
 
@@ -107,6 +118,40 @@ access_control:
   defaults:
     unknown_metadata: deny
     policy_version_mismatch: deny
+
+# ---- TOOL-CALL ADMISSION (Phase 2, schema 2.2.0+) ----
+# Pluggable evaluator. The native YAML DSL is shipped in the open-source
+# core. Rego and OPA-service evaluators for tool calls are commercial.
+tool_call_control:
+  rules:
+    - name: web_search_domain_allowlist
+      when:
+        tool.name: web_search
+      require:
+        tool.target_system:
+          in: [google_custom_search, bing_v7]
+      on_violation: deny
+
+    - name: no_pii_in_query
+      when:
+        tool.name: web_search
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*api*"
+      on_violation: deny
+
+    - name: jira_writes_require_role
+      when:
+        tool.name: jira
+        tool.operation:
+          in: [create_issue, update_issue, delete_issue]
+      require:
+        request.caller.role:
+          in: [engineer, manager, admin]
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
 ```
 
 ### Top-level fields
@@ -114,10 +159,11 @@ access_control:
 | Field | Required | Notes |
 | --- | --- | --- |
 | `version` | yes (or omit, defaults to 1) | Must be `1`. Bumps when the unified schema grammar changes. |
-| `policy_id` | yes if `access_control` is present | Non-empty string. Appears on every receipt produced under this policy. |
+| `policy_id` | yes if any rule section is present | Non-empty string. Appears on every receipt produced under this policy. |
 | `description` | no | Free-form text. |
 | `verification` | no | Verification gate config. Omitting it uses dataclass defaults. |
-| `access_control` | no | Access-control rules. Omitting it means no evaluator is configured — only the verification gate applies. |
+| `access_control` | no | Chunk-level access-control rules. Omitting it means no chunk evaluator is configured — only the verification gate applies to retrieval. |
+| `tool_call_control` *(schema 2.2.0+)* | no | Tool-call admission rules. Omitting it means no tool-call policy is configured — admission defaults to allow. |
 
 Unknown top-level keys raise a parse error. A typo is a load-time failure, not a silent allow.
 
@@ -151,6 +197,10 @@ The native DSL is intentionally small. Each rule:
 
 #### Path roots
 
+Two domains use distinct roots; cross-domain references fail at parse time.
+
+**`access_control` rules** see chunk and request data:
+
 | Path root | Resolves to |
 | --- | --- |
 | `chunk.fingerprint` | The chunk's SHA-256 fingerprint string. |
@@ -159,12 +209,38 @@ The native DSL is intentionally small. Each rule:
 | `chunk.ingested_at` | The chunk's ingestion timestamp from the index. |
 | `chunk.metadata.<key>` | Customer-defined tag under the chunk's metadata dict. |
 | `chunk.content_source` | One of `indexed_corpus`, `live_tool_output`, `memory_store`, `compiled_artifact`. |
+
+**`tool_call_control` rules** *(schema 2.2.0+)* see tool-call and request data:
+
+| Path root | Resolves to |
+| --- | --- |
+| `tool.name` | Tool identifier (e.g. `"web_search"`, `"jira"`, `"jira/issues"` for MCP). |
+| `tool.operation` | The specific operation on the tool (e.g. `"create_issue"`, `"query"`). |
+| `tool.parameters.<key>` | The caller-supplied parameter value at `<key>`. |
+| `tool.target_system` | Logical target system the call would reach (e.g. `"google_custom_search"`, `"acme.atlassian.net"`). |
+| `tool.invocation_id` | Caller-chosen correlation ID (not load-bearing for the decision). |
+
+**Both domains** see the shared request context:
+
+| Path root | Resolves to |
+| --- | --- |
 | `request.caller.<key>` | Field on the caller dict supplied with the request. |
 | `request.jurisdiction` | Free-form region code (`EU`, `US`, etc.). |
 | `request.purpose` | Free-form purpose string. |
 | `request.timestamp` | ISO-8601 UTC timestamp of the request. Also the "now" used for freshness comparisons. |
 
 A missing path in a `when` clause means the rule's scope does not apply — the rule does not fire. A missing path in a `require` clause is governed by `defaults.unknown_metadata` (defaults to `deny`).
+
+#### When operators *(schema 2.2.0+ for `in`)*
+
+`when` clauses are quick "does this rule apply" filters. Two shapes:
+
+| Shape | Meaning |
+| --- | --- |
+| `<path>: <value>` | Direct equality. The path resolves to a value equal to the RHS. |
+| `<path>: { in: [a, b, c] }` | Path resolves to a value in the list. Added in schema 2.2.0 so CRUD-style rules don't need three near-identical duplicates. |
+
+No richer operators in `when` — move complex logic into `require`.
 
 #### Require operators
 
@@ -174,6 +250,9 @@ A missing path in a `when` clause means the rule's scope does not apply — the 
 | `in` | `<path>: { in: [a, b, c] }` | The path resolves to a value in the list. |
 | `not_in` | `<path>: { not_in: [a, b, c] }` | The path resolves to a value NOT in the list. |
 | `not_older_than` | `<path>: { not_older_than: 90d }` | The path resolves to an ISO-8601 timestamp whose age (relative to `request.timestamp`) is at most the duration. Supported units: `s`, `m`, `h`, `d`. |
+| `matches_pattern` *(2.2.0+)* | `<path>: { matches_pattern: "*.example.com/*" }` | The path resolves to a string matching a POSIX `fnmatch` **glob**. Globs are auditable; regexes are not — by design. |
+| `not_matches_pattern` *(2.2.0+)* | `<path>: { not_matches_pattern: "*api*key*" }` | The path resolves to a string NOT matching the glob. |
+| `length_at_most` *(2.2.0+)* | `<path>: { length_at_most: 500 }` | The path resolves to a string of at most this length. Cheapest defense against "agent gets prompt-injected into a 50KB query." |
 
 Unknown operators raise at load time.
 
@@ -197,6 +276,10 @@ The following raise `UnsupportedPolicyFeature` at load time:
 The Rego adapter and OPA service adapter are commercial.
 
 ## Evaluator interface
+
+Two parallel Protocols — one for chunks, one for tool calls. Same shape; the discriminator is the type of the context argument. A single `NativeYamlEvaluator` instance satisfies the chunk Protocol; a single `NativeYamlToolCallEvaluator` instance satisfies the tool-call Protocol. A unified bundle that declares both sections produces both evaluator instances under one `Policy`.
+
+### `PolicyEvaluator` — chunk decisions
 
 Backends implement the `PolicyEvaluator` protocol from `provenex.policy.evaluator`:
 
@@ -225,6 +308,31 @@ Contracts every backend must hold:
 - **Stable `policy_version_hash`.** Two bundles that parse to equal Python structures produce the same hash. Whitespace and key reordering do not change the hash.
 
 The native YAML backend (`provenex.NativeYamlEvaluator`) is the reference implementation. Rego and OPA-service implementations of the same protocol ship commercially and emit the same receipt shape — the `evaluator` field on the receipt distinguishes them.
+
+### `ToolCallPolicyEvaluator` — tool-call decisions *(schema 2.2.0+)*
+
+```python
+from typing import Protocol
+from provenex import RequestContext, ToolCallContext
+from provenex.policy.evaluator import PolicyDecision
+
+class ToolCallPolicyEvaluator(Protocol):
+    @property
+    def evaluator_name(self) -> str: ...
+    @property
+    def policy_id(self) -> str: ...
+    @property
+    def policy_version_hash(self) -> str: ...
+    def evaluate(
+        self,
+        tool: ToolCallContext,
+        request: RequestContext,
+    ) -> PolicyDecision: ...
+```
+
+Same contracts as `PolicyEvaluator` (deterministic, side-effect-free, stable hash). The native YAML backend (`provenex.NativeYamlToolCallEvaluator`) is the reference implementation. The Rego and OPA-service adapters for tool-call rules are commercial.
+
+`policy_version_hash` covers only the tool-call subset — the two halves of a unified file version independently, the same way `access_control` does. An auditor reading a chunk receipt and a tool-call receipt produced under the same unified file will see two different hashes; modifying one half does not invalidate prior receipts that referenced the other half.
 
 ## Receipt block reference
 
@@ -308,7 +416,69 @@ access_control:
 
 The `secret_blocked_entirely` rule shows a pattern for "absolute denylist" with the v0.4 operator set: the `require` clause is intentionally unsatisfiable so the rule always denies for chunks where the `when` clause matches.
 
-### Example 3 — Verification-only, no access control
+### Example 3 — Tool-call admission for an agentic flow *(schema 2.2.0+)*
+
+A policy authored for an agent that uses `web_search` and `jira`. Note how the same unified file expresses chunk policy *and* tool-call policy under one `policy_id` and one canonical document.
+
+```yaml
+version: 1
+policy_id: incident-response-agent-v2
+
+verification:
+  block_unauthorized: true
+  block_tampered: true
+
+access_control:
+  rules:
+    - name: classification_gate
+      when:
+        chunk.metadata.classification: confidential
+      require:
+        request.caller.role: { in: [engineer, manager, admin] }
+      on_violation: deny
+
+tool_call_control:
+  rules:
+    # Domain allowlist for the search tool. Anyone trying to call
+    # web_search against an unapproved provider is denied.
+    - name: web_search_provider_allowlist
+      when: { tool.name: web_search }
+      require:
+        tool.target_system: { in: [google_custom_search, bing_v7] }
+      on_violation: deny
+
+    # PII / secrets pattern check on the query string.
+    - name: no_secrets_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+      on_violation: deny
+
+    # Length cap. Cheapest defense against prompt-injection-via-long-query.
+    - name: query_length_cap
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          length_at_most: 500
+      on_violation: deny
+
+    # Role gate on Jira writes. CRUD-style multi-operation rule uses
+    # `in:` in the when clause (added in schema 2.2.0).
+    - name: jira_writes_require_role
+      when:
+        tool.name: jira
+        tool.operation:
+          in: [create_issue, update_issue, delete_issue]
+      require:
+        request.caller.role: { in: [engineer, manager, admin] }
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
+```
+
+### Example 4 — Verification-only, no access control
 
 For early-stage deployments. The access_control section is omitted entirely; only the verification gate applies. This is `verify_chunks` behaviour from v0.1 through v0.3.
 
@@ -325,7 +495,9 @@ verification:
 
 ## Wiring
 
-A complete v0.4 retrieval call with policy enforcement:
+### Retrieval — `verify_chunks`
+
+A complete retrieval call with policy enforcement:
 
 ```python
 from provenex import (
@@ -361,15 +533,79 @@ The verification gate and the access-control gate are independent. A chunk reach
 
 For v0.4, `RequestContext` is constructed explicitly by the caller. Identity-provider integration (so the caller dict comes from your IdP rather than your code) is commercial.
 
+### Tool-call admission — `admission_check` *(schema 2.2.0+)*
+
+The Phase 2 sibling of `verify_chunks`. Same policy object, same request context, same trajectory cursor. Same receipt format — the receipt carries an `actions[]` block instead of (or alongside) `sources[]`.
+
+```python
+from provenex import (
+    HmacSha256Signer, Policy, RequestContext,
+    ToolCallContext, admission_check,
+)
+
+policy = Policy.from_yaml("agent_policy.yaml")
+request = RequestContext(
+    caller={"id": "u_42", "role": "engineer"},
+    jurisdiction="US",
+    purpose="incident_response",
+    timestamp="2026-05-14T11:30:00Z",
+)
+
+result = admission_check(
+    tool=ToolCallContext(
+        name="jira",
+        operation="create_issue",
+        parameters={"project": "INC", "summary": "..."},
+        target_system="acme.atlassian.net",
+    ),
+    request=request,
+    policy=policy,
+    signer=HmacSha256Signer(),
+)
+if result.allowed:
+    jira_client.create_issue(...)        # caller's own credentials
+save_receipt(result.receipt)             # signed, verifiable offline
+```
+
+The receipt records the action AND the decision — denials are auditable too. The actual tool call is the caller's responsibility; Provenex returns a decision, not an execution. This is the load-bearing "decision and proof, not execution" line: the moment Provenex starts holding tokens or proxying calls it has become a different product.
+
+**Convenience.** For callers that want "raise on deny, return on allow," use `provenex.enforce_admission(...)` — same signature, raises `ToolCallDenied` (which carries the receipt) instead of returning a deny result.
+
+### Multi-step flows — trajectory composition
+
+A mixed retrieve → tool-call → retrieve trajectory produces three signed receipts that link into one DAG:
+
+```python
+from provenex import start_trajectory
+
+trj = start_trajectory(agent_id="incident_agent")
+
+# Step 0: retrieval
+r0 = verify_chunks(..., trajectory=trj)
+
+# Step 1: tool call (advances cursor via r0.next_trajectory)
+r1 = admission_check(..., trajectory=r0.next_trajectory)
+if r1.allowed:
+    jira_client.create_issue(...)
+
+# Step 2: another retrieval
+r2 = verify_chunks(..., trajectory=r1.next_trajectory)
+```
+
+`provenex audit --trajectory <dir>` validates the full DAG in one pass — shared `trajectory_id`, no dangling parents, every signature verifies, mixed `step_kind` values (retrieval / tool_call) accepted natively. See [`receipt_format.md`](receipt_format.md) for the trajectory block schema.
+
 ## CLI
 
 ```bash
 provenex policy validate hr_policy.yaml   # parse + validate, non-zero on error
-provenex policy hash     hr_policy.yaml   # print canonical policy_version_hash
+provenex policy hash     hr_policy.yaml   # print canonical policy_version_hash(es)
 provenex audit receipt.json --show-policy # render the unified policy block in audit output
+provenex audit --trajectory ./receipts/   # validate a whole agentic trajectory at once
 ```
 
 Use `provenex policy validate` in CI to catch typos before a broken policy is deployed.
+
+`provenex policy hash` on a single-section file prints one bare `sha256:...` hash (the Phase 1 contract — pipeline scripts that grep for that prefix continue working). On a unified file with both `access_control` and `tool_call_control`, it prints two lines, one per section, so the auditor can see at a glance which half changed. The `--section` flag filters to one half if needed.
 
 ## Commercial evaluators (Rego, OPA service)
 

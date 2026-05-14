@@ -2,7 +2,7 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`2.1.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification` and (optional) `access_control` subsections.
+This document specifies the schema. The current schema version is **`2.2.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`.
 
 Schema history:
 
@@ -16,6 +16,7 @@ Schema history:
 | `1.5.0` | (Skipped.) Interim shape that put `access_policy` as a separate top-level block. Never released. |
 | `2.0.0` | **Breaking.** Unified `policy` block with `verification` and optional `access_control` subsections. The 1.x top-level `policy` (which held only the verification config) is replaced by `policy.verification`. |
 | `2.1.0` | Per-decision `metadata_binding` field on `policy.access_control.decisions[]` recording whether `chunk_metadata` was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Additive: receipts without the field are valid 2.0.0 subsets. |
+| `2.2.0` | **Phase 2.** Optional top-level `actions[]` array (tool-call records, parallel to `sources[]`); optional `policy.tool_call_control` subsection (admission decision record, parallel to `policy.access_control`); `summary` gains `total_actions` / `actions_allowed` / `actions_denied` when actions are present. Additive: a 2.1.0 receipt with no actions is a valid 2.2.0 receipt; a 2.1.0 verifier that ignores unknown fields validates a 2.2.0 receipt with actions. |
 
 Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
 
@@ -47,14 +48,16 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "2.1.0",
+  "schema_version": "2.2.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
-  "issuer": "provenex-core/0.4.0",
+  "issuer": "provenex-core/0.6.0",
   "output": { ... },
   "sources": [ ... ],
+  "actions": [ ... ],            // optional (schema 2.2.0+)
   "policy": {
     "verification": { ... },
-    "access_control": { ... }   // optional
+    "access_control": { ... },    // optional
+    "tool_call_control": { ... }  // optional (schema 2.2.0+)
   },
   "summary": { ... },
   "transparency_log": { ... },
@@ -66,23 +69,25 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. Always `2.1.0` for receipts produced by this SDK. |
+| `schema_version` | string | Semver. Always `2.2.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/0.4.0`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/0.6.0`. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
-| `policy` | object | The unified policy in effect. Always present. `policy.verification` is always there; `policy.access_control` appears iff an evaluator was configured. See below. |
+| `actions` | array | Optional (2.2.0+). One entry per tool-call attempt. Present only when the receipt covers tool-call admissions; absent for pure-retrieval receipts. See below. |
+| `policy` | object | The unified policy in effect. Always present. `policy.verification` is always there; `policy.access_control` appears iff a chunk evaluator was configured; `policy.tool_call_control` appears iff a tool-call evaluator was configured (2.2.0+). See below. |
 | `summary` | object | Aggregate counts and overall status. See below. |
 | `transparency_log` | object | Optional. Present iff the receipt was produced against a Merkle transparency log (1.1.0+). See below. |
 | `trajectory` | object | Optional. Present iff the receipt is part of a multi-step agent trajectory (1.3.0+). See below. |
 | `signature` | object | Optional. Present iff the receipt was signed. |
 
-The unified `policy` block carries **both gates**:
+The unified `policy` block carries **every gate present**:
 
-- `policy.verification` (always present): the per-outcome blocking and flagging configuration for the five verification outcomes (`VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`).
+- `policy.verification` (always present): the per-outcome blocking and flagging configuration for the five verification outcomes (`VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`). Applies to retrieval only.
 - `policy.access_control` (optional): the data-access policy decision record — which evaluator was used, the canonical policy version hash, and the per-chunk allow / deny verdict with the rules that fired.
+- `policy.tool_call_control` *(schema 2.2.0+, optional)*: the tool-call admission decision record — same shape as `access_control`, but the decisions reference `actions[i].action_index` rather than `sources[i].fingerprint`. Present iff a tool-call evaluator was configured at admission time.
 
-Both gates are evaluated independently. A chunk reaches the LLM only if it clears BOTH.
+All gates are evaluated independently. A chunk reaches the LLM only if it clears both retrieval-side gates. A tool call is admitted only if it clears the tool-call-control gate.
 
 ## `output`
 
@@ -200,6 +205,34 @@ Provenex-defined values (callers can use any string for forward compatibility):
 
 Combined with `verification_outcome`, this lets auditors distinguish "expected miss" from "alarm condition" without needing application-level context. The field is covered by the receipt signature so an attacker cannot retroactively change the origin classifier to dampen an alarm.
 
+## `actions[]` *(schema 2.2.0+)*
+
+One entry per tool-call attempt. Phase 2 parallel of `sources[]`. Present only when the receipt covers tool-call admissions; absent on pure-retrieval receipts so the 2.1.0 shape is preserved exactly for backward compatibility.
+
+```json
+{
+  "action_index": 0,
+  "name": "web_search",
+  "operation": "query",
+  "parameters_hash": "sha256:7a2bf015...",
+  "parameters": { "q": "weather today", "num": 10 },
+  "target_system": "google_custom_search",
+  "invocation_id": "inv_8e2c"
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `action_index` | integer | 0-based position in `actions[]`. Referenced from `policy.tool_call_control.decisions[i].action_index`. |
+| `name` | string | Tool identifier (e.g. `"web_search"`, `"jira"`). For MCP, the server-and-tool path. |
+| `operation` | string | The specific operation on the tool (e.g. `"create_issue"`, `"query"`). |
+| `parameters_hash` | string | SHA-256 over the canonicalised verbatim parameter dict. `sha256:` prefix. Always present, regardless of whether `parameters` itself is recorded. |
+| `parameters` | object \| null | Verbatim parameter dict, or `null` if the operator opted in to redaction via `admission_check(..., redact_parameters=True)`. `parameters_hash` remains verifiable against the original values either way. |
+| `target_system` | string | Optional. Logical target system the call would reach. Omitted (not emitted as `null`) when absent. |
+| `invocation_id` | string | Optional. Caller-chosen correlation ID. Omitted when absent. |
+
+The `parameters` field is the only redactable element of an action record. The hash anchors the audit; the verbatim values are stored at the operator's discretion. This mirrors the `inputs` / `inputs_hash` convention on policy decisions.
+
 ## `policy`
 
 The unified policy in effect when the receipt was issued. Always present; carries both gates in two subsections.
@@ -277,6 +310,58 @@ The data-access policy decision record. Optional — present iff a `PolicyEvalua
 
 The whole `policy` block is covered by the receipt signature using the canonical-JSON rule. Tampering with any field — including reordering decisions, rewriting `rules_fired`, or flipping a `metadata_binding` value — invalidates the signature.
 
+### `policy.tool_call_control` *(schema 2.2.0+)*
+
+The tool-call admission decision record. Optional — present iff a `ToolCallPolicyEvaluator` was configured at admission time.
+
+```json
+{
+  "policy": {
+    "tool_call_control": {
+      "evaluator": "native_yaml",
+      "policy_id": "agent-policy-v2",
+      "policy_version_hash": "sha256:e10b1df5...",
+      "policy_in_transparency_log": false,
+      "decisions": [
+        {
+          "action_index": 0,
+          "decision": "allow",
+          "rules_fired": ["web_search_provider_allowlist", "no_secrets_in_query"],
+          "inputs_hash": "sha256:b8e441f7...",
+          "inputs": {
+            "tool_parameters": {
+              "name": "web_search",
+              "operation": "query",
+              "parameters": {"q": "weather today", "num": 10},
+              "target_system": "google_custom_search"
+            },
+            "request_context": {"caller": {"role": "engineer"}, "jurisdiction": "US", "purpose": "incident_response", "timestamp": "2026-05-14T11:30:00Z"}
+          },
+          "metadata_binding": {
+            "tool_parameters": "at_evaluate",
+            "request_context": "at_evaluate"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `evaluator` | string | Backend identifier. Enum values overlap with `access_control.evaluator`: `native_yaml`, `rego` (commercial), `opa_service` (commercial), `custom`, `none`. |
+| `policy_id` | string | The `policy_id` from the tool-call rule subset of the policy bundle. |
+| `policy_version_hash` | string | SHA-256 over the canonicalised tool-call rule subset. Versioned independently of `access_control.policy_version_hash` — the two halves of a unified file change independently. |
+| `policy_in_transparency_log` | boolean | Always `false` in the open-source core; lit up by the commercial transparency-log integration. |
+| `decisions` | array | Per-action decisions in `actions[]` order. One entry per action in `actions[]`. |
+| `decisions[].action_index` | integer | References `actions[action_index]`. Parallel to `access_control.decisions[i].chunk_fingerprint`. |
+| `decisions[].decision` | string | Enum: `allow`, `deny`, `allow_with_conditions`. v0.6 emits `allow` and `deny`; `allow_with_conditions` is reserved for v1. |
+| `decisions[].rules_fired` | array of string | Names of the rules whose `when` clauses matched. |
+| `decisions[].inputs_hash` | string | SHA-256 over the canonical inputs object. Always present, even when `inputs` is redacted. |
+| `decisions[].inputs` | object \| null | The canonical inputs the evaluator looked at, or `null` if redacted. Shape: `{"tool_parameters": {...}, "request_context": {...}}`. |
+| `decisions[].metadata_binding` | object | Per-section trust class of the inputs. For tool calls, `tool_parameters` is always `"at_evaluate"` (parameters are caller-supplied per-request; there is no "at_ingest" analog for an ephemeral action). `request_context` is also always `"at_evaluate"`. |
+
 
 ## `summary`
 
@@ -289,6 +374,9 @@ The whole `policy` block is covered by the receipt signature using the canonical
     "unauthorized": 0,
     "unverified": 1,
     "tampered": 0,
+    "total_actions": 1,
+    "actions_allowed": 1,
+    "actions_denied": 0,
     "overall_status": "PARTIAL"
   }
 }
@@ -298,15 +386,18 @@ The whole `policy` block is covered by the receipt signature using the canonical
 | --- | --- | --- |
 | `total_chunks` | integer | Number of source records on this receipt. |
 | `verified` / `stale` / `unauthorized` / `unverified` / `tampered` | integer | Counts per outcome. Sum equals `total_chunks`. |
+| `total_actions` | integer | Schema 2.2.0+. Number of action records on this receipt. **Emitted only when `actions[]` is non-empty** — pure-retrieval receipts produce the exact 2.1.0 summary shape with no action keys. |
+| `actions_allowed` | integer | Schema 2.2.0+. Count of admitted tool calls. Emitted alongside `total_actions`. |
+| `actions_denied` | integer | Schema 2.2.0+. Count of denied tool calls. Emitted alongside `total_actions`. |
 | `overall_status` | string | One of `PASS`, `PARTIAL`, `FAIL`. See below. |
 
 ### `overall_status`
 
 | Value | Meaning |
 | --- | --- |
-| `PASS` | Every chunk is `VERIFIED`. |
-| `PARTIAL` | At least one non-`VERIFIED` outcome, but no chunks would be blocked under the policy in effect. |
-| `FAIL` | At least one chunk would be blocked under the policy in effect. |
+| `PASS` | Every chunk is `VERIFIED` AND every action is allowed. |
+| `PARTIAL` | At least one non-`VERIFIED` outcome on the retrieval side, but no chunks would be blocked AND no actions denied under the policy in effect. |
+| `FAIL` | At least one chunk would be blocked under verification policy, OR at least one tool-call action was denied by admission policy. Either failure suffices. |
 
 ## `transparency_log`
 

@@ -125,7 +125,7 @@ def test_audit_json_output_has_required_keys(monkeypatch):
     assert report["overall"] == "PASS"
     assert report["signature"]["ok"] is True
     assert report["receipt_id"].startswith("prx_")
-    assert report["schema_version"] == "2.1.0"
+    assert report["schema_version"] == "2.2.0"
     assert len(report["inclusion_proofs"]) == 1
     assert report["inclusion_proofs"][0]["ok"] is True
 

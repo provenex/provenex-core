@@ -59,11 +59,18 @@ from .trajectory import TrajectoryContext
 #           (signed by the index) or tag-at-evaluate (looked up at
 #           decision time). Additive: receipts without the field remain
 #           valid 2.0.0 subsets.
+#   2.2.0 — Phase 2: optional top-level ``actions[]`` array (tool-call
+#           records, parallel to ``sources[]``); optional
+#           ``policy.tool_call_control`` subsection (admission decision
+#           record, parallel to ``policy.access_control``); ``summary``
+#           gains ``total_actions`` / ``actions_allowed`` /
+#           ``actions_denied`` when actions are present. Additive: a
+#           2.1.0 receipt with no actions is a valid 2.2.0 receipt.
 # Minor-version bumps are additive: receipts at a lower revision remain
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
-SCHEMA_VERSION = "2.1.0"
-ISSUER = "provenex-core/0.4.0"
+SCHEMA_VERSION = "2.2.0"
+ISSUER = "provenex-core/0.6.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -260,6 +267,71 @@ class SourceRecord:
 
 
 @dataclass
+class ActionRecord:
+    """A single tool-call attempt's entry on the receipt (schema 2.2.0).
+
+    Phase 2 parallel of :class:`SourceRecord`: ``sources[]`` records what
+    was retrieved, ``actions[]`` records what tool calls were attempted.
+    A receipt may carry one or both arrays. The per-action policy
+    decision lives under ``policy.tool_call_control.decisions[]`` and
+    references each action by ``action_index``, the same way
+    ``policy.access_control.decisions[].chunk_fingerprint`` references a
+    source.
+
+    Attributes:
+        action_index: 0-based position in ``actions[]``. The
+            ``tool_call_control.decisions[i].action_index`` field
+            references this back.
+        name: Tool identifier. For MCP, the server-and-tool path
+            (``"jira/issues"``). Read from
+            :attr:`provenex.tool_call.ToolCallContext.name`.
+        operation: The specific operation (``"create_issue"``,
+            ``"query"``).
+        parameters_hash: SHA-256 over the canonicalised verbatim
+            parameter dict. Always present, regardless of whether
+            :attr:`parameters` itself is recorded — an auditor with the
+            original parameters can independently re-derive the hash.
+        parameters: The verbatim parameters the caller passed, or
+            ``None`` if the operator opted in to redaction at admission
+            time. Default: recorded. Operators with PII concerns set
+            ``redact_parameters=True`` on
+            :func:`provenex.tool_call.admission_check`.
+        target_system: Optional logical target system. Same convention
+            as the source-record optional fields — omitted from JSON
+            when ``None``.
+        invocation_id: Optional caller-chosen ID for correlation.
+    """
+
+    action_index: int
+    name: str
+    operation: str
+    parameters_hash: str
+    parameters: Optional[Dict[str, Any]] = None
+    target_system: Optional[str] = None
+    invocation_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize this action record to a plain dict (JSON-ready)."""
+        d: Dict[str, Any] = {
+            "action_index": self.action_index,
+            "name": self.name,
+            "operation": self.operation,
+            "parameters_hash": self.parameters_hash,
+        }
+        # parameters: emit verbatim dict, or null when redacted, so the
+        # caller's redaction choice is visible to the auditor reading
+        # the JSON. Absence would be ambiguous; null is explicit.
+        d["parameters"] = (
+            dict(self.parameters) if self.parameters is not None else None
+        )
+        if self.target_system is not None:
+            d["target_system"] = self.target_system
+        if self.invocation_id is not None:
+            d["invocation_id"] = self.invocation_id
+        return d
+
+
+@dataclass
 class ProvenanceReceipt:
     """A complete provenance receipt for one LLM inference event.
 
@@ -287,6 +359,12 @@ class ProvenanceReceipt:
     # the canonical policy version hash, and the per-chunk decision
     # records.
     access_control: Optional[Dict[str, Any]] = None
+    # Schema 2.2.0 (Phase 2): optional tool-call action records and the
+    # parallel ``policy.tool_call_control`` decision payload. Either or
+    # both of these are present on receipts produced by the tool-call
+    # admission pipeline. Pure-retrieval receipts leave both empty/None.
+    actions: List[ActionRecord] = field(default_factory=list)
+    tool_call_control: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -304,6 +382,8 @@ class ProvenanceReceipt:
         }
         if self.access_control is not None:
             policy_block["access_control"] = dict(self.access_control)
+        if self.tool_call_control is not None:
+            policy_block["tool_call_control"] = dict(self.tool_call_control)
         d: Dict[str, Any] = {
             "receipt_id": self.receipt_id,
             "schema_version": self.schema_version,
@@ -317,6 +397,13 @@ class ProvenanceReceipt:
             "policy": policy_block,
             "summary": dict(self.summary),
         }
+        # Schema 2.2.0: actions[] is emitted only when the receipt
+        # actually carries tool-call records. An empty actions[] on a
+        # pure-retrieval receipt would be a noisy addition to the JSON
+        # and would gratuitously change the canonical signing payload
+        # for receipts that were valid 2.1.0 receipts.
+        if self.actions:
+            d["actions"] = [a.to_dict() for a in self.actions]
         if self.transparency_log is not None:
             d["transparency_log"] = dict(self.transparency_log)
         if self.trajectory is not None:
@@ -391,6 +478,9 @@ class ReceiptBuilder:
     def __init__(self, policy: VerificationPolicy | None = None) -> None:
         self._policy = policy or VerificationPolicy()
         self._sources: List[SourceRecord] = []
+        # Schema 2.2.0: tool-call action records, parallel to sources[].
+        # Populated via :meth:`add_action`.
+        self._actions: List[ActionRecord] = []
 
     @property
     def policy(self) -> VerificationPolicy:
@@ -454,8 +544,79 @@ class ReceiptBuilder:
         )
         self._sources.append(record)
 
-    def _summary(self) -> Dict[str, Any]:
-        counts = {
+    def add_action(
+        self,
+        name: str,
+        operation: str,
+        parameters_hash: str,
+        parameters: Optional[Dict[str, Any]] = None,
+        target_system: Optional[str] = None,
+        invocation_id: Optional[str] = None,
+    ) -> int:
+        """Add one tool-call action to the receipt under construction (schema 2.2.0).
+
+        Args:
+            name: Tool identifier. From
+                :attr:`provenex.tool_call.ToolCallContext.name`.
+            operation: The specific operation on the tool.
+            parameters_hash: SHA-256 over the canonical verbatim
+                parameter dict. The caller must always pass this — it is
+                what an auditor uses to re-derive the binding even when
+                the parameters themselves are redacted.
+            parameters: Verbatim parameters dict, or ``None`` to redact
+                from the receipt. ``parameters_hash`` remains
+                independently verifiable either way.
+            target_system: Optional logical target.
+            invocation_id: Optional caller-chosen correlation ID.
+
+        Returns:
+            The 0-based ``action_index`` assigned to this record. The
+            tool-call decision later references the action by this
+            index in ``tool_call_control.decisions[i].action_index``.
+        """
+        idx = len(self._actions)
+        self._actions.append(
+            ActionRecord(
+                action_index=idx,
+                name=name,
+                operation=operation,
+                parameters_hash=parameters_hash,
+                parameters=dict(parameters) if parameters is not None else None,
+                target_system=target_system,
+                invocation_id=invocation_id,
+            )
+        )
+        return idx
+
+    def _summary(
+        self,
+        tool_call_control: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Compute the per-receipt summary.
+
+        Combines per-chunk verification outcomes (Phase 1) with per-action
+        admission decisions (Phase 2, schema 2.2.0). The fields emitted
+        depend on which halves the receipt carries:
+
+            * Sources only — the original Phase 1 summary keys
+              (``total_chunks`` + the five-outcome counts) plus
+              ``overall_status``.
+            * Sources + actions — Phase 1 keys, plus ``total_actions`` /
+              ``actions_allowed`` / ``actions_denied``;
+              ``overall_status`` considers both halves.
+            * Actions only — verification counts are zero;
+              ``total_actions`` and action counts present;
+              ``overall_status`` reflects the admission outcome.
+
+        ``overall_status``:
+
+            * ``PASS`` — every chunk VERIFIED AND every action allowed.
+            * ``FAIL`` — at least one chunk blocked by verification policy
+              OR at least one action denied by tool-call policy.
+            * ``PARTIAL`` — neither; at least one non-VERIFIED outcome
+              with nothing blocked.
+        """
+        counts: Dict[str, Any] = {
             "total_chunks": len(self._sources),
             "verified": 0,
             "stale": 0,
@@ -465,9 +626,46 @@ class ReceiptBuilder:
         }
         for s in self._sources:
             counts[s.verification_outcome.value.lower()] += 1
-        counts["overall_status"] = overall_status(
+
+        # Phase 2 action counts. Always emitted when the receipt carries
+        # actions; omitted entirely on pure-retrieval receipts to
+        # preserve the schema 2.1.0 summary shape exactly. Auditors
+        # consuming 2.1.0 receipts under the 2.2.0 verifier see no diff.
+        if self._actions:
+            counts["total_actions"] = len(self._actions)
+            counts["actions_allowed"] = 0
+            counts["actions_denied"] = 0
+            if tool_call_control is not None:
+                for d in tool_call_control.get("decisions", []):
+                    if d.get("decision") == "deny":
+                        counts["actions_denied"] += 1
+                    else:
+                        # ``allow`` and the reserved
+                        # ``allow_with_conditions`` both count as
+                        # admitted for summary purposes; we may want a
+                        # third bucket if conditions ever ship.
+                        counts["actions_allowed"] += 1
+            else:
+                # No tool-call policy was configured — actions default
+                # to allowed (the wiring layer never builds a
+                # tool_call_control block in that case).
+                counts["actions_allowed"] = len(self._actions)
+
+        chunk_status = overall_status(
             [s.verification_outcome for s in self._sources], self._policy
         )
+        action_status = "PASS"
+        if self._actions:
+            denied = counts.get("actions_denied", 0)
+            action_status = "FAIL" if denied > 0 else "PASS"
+
+        # Combine: FAIL beats PARTIAL beats PASS.
+        if chunk_status == "FAIL" or action_status == "FAIL":
+            counts["overall_status"] = "FAIL"
+        elif chunk_status == "PARTIAL":
+            counts["overall_status"] = "PARTIAL"
+        else:
+            counts["overall_status"] = "PASS"
         return counts
 
     def finalize(
@@ -477,6 +675,7 @@ class ReceiptBuilder:
         transparency_log: Optional[Dict[str, Any]] = None,
         trajectory: Optional[TrajectoryContext] = None,
         access_control: Optional[Dict[str, Any]] = None,
+        tool_call_control: Optional[Dict[str, Any]] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -504,6 +703,13 @@ class ReceiptBuilder:
                 Callers normally do not assemble this by hand: see
                 :func:`provenex.core.verify.verify_chunks`, which builds
                 it from a configured :class:`Policy`.
+            tool_call_control: Optional schema-2.2.0
+                ``policy.tool_call_control`` payload — same shape as
+                ``access_control`` but with decisions keyed by
+                ``action_index`` rather than ``chunk_fingerprint``.
+                Callers normally do not assemble this by hand: see
+                :func:`provenex.tool_call.admission_check`, which builds
+                it from a configured :class:`Policy`.
 
         Returns:
             The completed :class:`ProvenanceReceipt`.
@@ -514,10 +720,14 @@ class ReceiptBuilder:
             output_hash=_hash_output(output_text),
             sources=list(self._sources),
             policy=self._policy,
-            summary=self._summary(),
+            summary=self._summary(tool_call_control=tool_call_control),
             transparency_log=dict(transparency_log) if transparency_log else None,
             trajectory=trajectory.to_dict() if trajectory is not None else None,
             access_control=dict(access_control) if access_control else None,
+            actions=list(self._actions),
+            tool_call_control=(
+                dict(tool_call_control) if tool_call_control else None
+            ),
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

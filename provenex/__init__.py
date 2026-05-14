@@ -59,8 +59,18 @@ from .policy.evaluator import (
 from .policy.policy import VerificationPolicy, overall_status
 from .policy.unified import Policy
 from .policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
+from .tool_call import (
+    AdmissionResult,
+    NativeYamlToolCallEvaluator,
+    NullToolCallPolicyEvaluator,
+    ToolCallContext,
+    ToolCallDenied,
+    ToolCallPolicyEvaluator,
+    admission_check,
+    enforce_admission,
+)
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     # Core
@@ -126,5 +136,14 @@ __all__ = [
     # Framework-agnostic verification
     "VerifiedChunks",
     "verify_chunks",
+    # Tool-call admission (Phase 2, schema 2.2.0)
+    "ToolCallContext",
+    "ToolCallPolicyEvaluator",
+    "NullToolCallPolicyEvaluator",
+    "NativeYamlToolCallEvaluator",
+    "AdmissionResult",
+    "ToolCallDenied",
+    "admission_check",
+    "enforce_admission",
     "__version__",
 ]

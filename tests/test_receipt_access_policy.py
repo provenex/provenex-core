@@ -73,7 +73,7 @@ def _build_receipt_with_one_source(*, access_control=None):
 
 def test_schema_version_is_2_0_0():
     receipt, _ = _build_receipt_with_one_source(access_control=None)
-    assert receipt.schema_version == SCHEMA_VERSION == "2.1.0"
+    assert receipt.schema_version == SCHEMA_VERSION == "2.2.0"
 
 
 def test_verification_block_always_present():
@@ -107,7 +107,7 @@ def test_round_trip_with_access_control_signature_valid():
     block = _make_access_control_block(fingerprint="sha256:" + "a" * 64)
     receipt, _ = _build_receipt_with_one_source(access_control=block)
     serialized = json.loads(receipt.to_json())
-    assert serialized["schema_version"] == "2.1.0"
+    assert serialized["schema_version"] == "2.2.0"
     assert serialized["policy"]["access_control"]["policy_id"] == "hr-corpus-v3"
     assert verify_receipt_signature(serialized, _hmac_signer()) is True
 
@@ -115,7 +115,7 @@ def test_round_trip_with_access_control_signature_valid():
 def test_round_trip_without_access_control_signature_valid():
     receipt, _ = _build_receipt_with_one_source(access_control=None)
     serialized = json.loads(receipt.to_json())
-    assert serialized["schema_version"] == "2.1.0"
+    assert serialized["schema_version"] == "2.2.0"
     assert "access_control" not in serialized["policy"]
     assert verify_receipt_signature(serialized, _hmac_signer()) is True
 
