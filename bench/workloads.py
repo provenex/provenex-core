@@ -22,6 +22,7 @@ from provenex.core.fingerprinter import Fingerprinter
 from provenex.core.merkle import verify_inclusion_proof
 from provenex.index.base import VerificationOutcome
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
+from provenex.policy.evaluator import ChunkContext, RequestContext
 
 from .corpus import SyntheticCorpus
 from .metrics import LatencyHistogram, ThroughputMeter
@@ -231,5 +232,137 @@ def run_proof(
                 sum(proof_sizes) / len(proof_sizes) if proof_sizes else 0
             ),
             "max_proof_hashes": max(proof_sizes) if proof_sizes else 0,
+        },
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Policy evaluation                                                            #
+# --------------------------------------------------------------------------- #
+
+# A representative HR-corpus policy. Three rules across the dimensions the
+# deep dive calls out: jurisdiction / residency, PII gating by role, and a
+# freshness window. Big enough to exercise rule-fired traces; small enough
+# to fit in any reviewer's head.
+_POLICY_HR_CORPUS = """
+version: 1
+policy_id: bench-hr-corpus-v1
+
+access_control:
+  rules:
+    - name: jurisdiction_eu_only
+      when:
+        request.jurisdiction: EU
+      require:
+        chunk.metadata.residency:
+          in: [EU, EEA]
+      on_violation: deny
+
+    - name: pii_classification_gate
+      when:
+        chunk.metadata.contains_pii: true
+      require:
+        request.caller.role:
+          in: [hr_admin, payroll]
+      on_violation: deny
+
+    - name: freshness_for_policy_corpus
+      when:
+        chunk.metadata.corpus: policy_documents
+      require:
+        chunk.ingested_at:
+          not_older_than: 90d
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
+"""
+
+
+def run_policy_eval(
+    fingerprints: List[str],
+    sample_size: int,
+    seed: int,
+) -> WorkloadResult:
+    """Measure native-YAML policy-evaluator latency at retrieval rates.
+
+    Builds a representative HR-corpus policy and runs it across a synthetic
+    metadata distribution: 70% EU residency / 30% other, 20% PII-tagged,
+    50% under the freshness-windowed corpus. The mix is calibrated so the
+    decisions split roughly 70/30 allow/deny — enough variety to exercise
+    every rule path without skewing the histogram.
+
+    Reports per-evaluation latency plus an outcome breakdown so an auditor
+    can sanity-check the mix produced the expected decision distribution.
+    """
+    from provenex.policy.yaml_evaluator import NativeYamlEvaluator
+
+    rng = random.Random(seed)
+    evaluator = NativeYamlEvaluator.from_text(_POLICY_HR_CORPUS)
+    eval_lat = LatencyHistogram(name="policy_eval")
+    meter = ThroughputMeter(name="evaluations")
+    decisions: Dict[str, int] = {"allow": 0, "deny": 0}
+    rules_fired_counts: Dict[str, int] = {}
+
+    request = RequestContext(
+        caller={"role": "hr_admin"},
+        jurisdiction="EU",
+        purpose="customer_support",
+        timestamp="2026-05-13T14:32:07Z",
+    )
+    user_request = RequestContext(
+        caller={"role": "intern"},
+        jurisdiction="EU",
+        purpose="customer_support",
+        timestamp="2026-05-13T14:32:07Z",
+    )
+
+    sample_size = min(sample_size, len(fingerprints))
+    sampled = rng.sample(fingerprints, sample_size)
+
+    # Calibrate the metadata distribution so the three rules actually
+    # fire. Each chunk gets a randomised tag set.
+    meter.start()
+    for fp in sampled:
+        is_eu = rng.random() < 0.70
+        has_pii = rng.random() < 0.20
+        in_policy_corpus = rng.random() < 0.50
+        age_days = rng.randint(1, 180)
+        metadata = {
+            "residency": "EU" if is_eu else "US",
+            "contains_pii": has_pii,
+        }
+        if in_policy_corpus:
+            metadata["corpus"] = "policy_documents"
+
+        # Choose request: PII chunks alternate between admin (allow) and
+        # intern (deny) to keep both decision paths warm.
+        req = request if (not has_pii or rng.random() < 0.5) else user_request
+
+        chunk = ChunkContext(
+            fingerprint=fp,
+            document_id="d",
+            document_version="v",
+            ingested_at=f"2026-{((180 - age_days) // 30 + 1):02d}-15T00:00:00Z",
+            metadata=metadata,
+        )
+        with eval_lat.time():
+            decision = evaluator.evaluate(chunk, req)
+        decisions[decision.decision] = decisions.get(decision.decision, 0) + 1
+        for rname in decision.rules_fired:
+            rules_fired_counts[rname] = rules_fired_counts.get(rname, 0) + 1
+        meter.add(1)
+    meter.stop()
+
+    return WorkloadResult(
+        name="policy_eval",
+        throughput=meter,
+        histograms={"policy_eval": eval_lat},
+        extras={
+            "evaluator": evaluator.evaluator_name,
+            "policy_id": evaluator.policy_id,
+            "policy_version_hash": evaluator.policy_version_hash,
+            "decision_counts": decisions,
+            "rules_fired_counts": rules_fired_counts,
         },
     )

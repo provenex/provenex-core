@@ -90,6 +90,44 @@ Provenex is a verification layer, not a rate limiter or DDoS appliance. An attac
 
 We use `hmac.compare_digest` for constant-time HMAC comparison and the underlying `cryptography` library's primitives (libsodium / OpenSSL) for Ed25519, which are also constant-time. We do not claim Spectre/Meltdown-class resistance or robustness against power-analysis on dedicated hardware. Treat the signing host as you would treat any host that has access to a production secret.
 
+## Trust model for policy decisions
+
+Schema 2.0.0 (Provenex v0.4) adds a unified `Policy` to receipts: a `policy.verification` half and an optional `policy.access_control` half carrying the per-chunk decision record. This section spells out the trust boundaries that record can and cannot speak to.
+
+### The policy file is trust-rooted to the operator
+
+The native YAML evaluator loads a policy file the operator configured. The evaluator does not validate that the policy is "correct" in any business sense — it only validates that the YAML parses and that no reserved-but-unimplemented features are present. An operator who controls the signing key AND the policy file can author any policy they want and produce decisions that verify cleanly under that policy.
+
+The commercial transparency-log integration is the planned mitigation: `policy_version_hash` would be published to an append-only log, so an auditor handed a receipt can independently confirm the policy in effect at the time of the decision was the one the operator publicly committed to. In the open-source core, `policy_in_transparency_log` is always `false`. Until that field lights up, the policy file is trusted as configured by the operator, the same way the index signing key is trusted as configured by the operator.
+
+### A decision is only as trustworthy as the metadata feeding it
+
+Provenex's evaluator reads two kinds of input: chunk metadata (residency tags, classification, PII flags, freshness, content_source) and request context (caller, jurisdiction, purpose, timestamp). The trust property of each depends on **when** the value was bound:
+
+- **Tag-at-ingest.** When a residency or classification tag is written into the chunk's record at ingest time, the tag is covered by the index row's HMAC and (with the Merkle log) the tree head. An attacker cannot retroactively flip a tag without invalidating the row's signature. This is the strongest case.
+- **Tag-at-evaluate.** When a tag is looked up from an external system at decision time (a live IAM lookup, a feature-flag service, a sidecar with the user's current role), the decision is only as trustworthy as that external system. Provenex records the value it read in `policy.access_control.decisions[i].inputs`, but cannot vouch for whether it was the right value. If the external system is compromised or stale, the decision will be too.
+
+A defensible deployment binds as much policy-relevant metadata at ingest time as practical, and treats tag-at-evaluate as a separate audit concern.
+
+**Schema 2.1.0** makes this distinction explicit on the receipt. Every decision record carries a `metadata_binding` field declaring the trust class of each input:
+
+```json
+"metadata_binding": {
+  "chunk_metadata": "at_ingest",     // signed by the index row
+  "request_context": "at_evaluate"   // built fresh at retrieval
+}
+```
+
+An auditor reading the receipt now sees, per chunk, whether the decision rested on signed-at-ingest tags or external-system-at-evaluate tags. `request_context` is always `at_evaluate` (the caller dict is constructed per-request). `chunk_metadata` is operator-declared via `verify_chunks(..., chunk_metadata_binding=...)`. The field is non-load-bearing for the decision itself — it does not change whether the chunk reaches the LLM — but it is load-bearing for *audit trust*: an auditor handed a receipt with everything `at_evaluate` is reading a weaker guarantee than one handed a receipt with `chunk_metadata: at_ingest`.
+
+### Operator-with-everything can produce any decision
+
+An operator who controls the signing key AND the policy file AND the metadata pipeline can produce a fully internally-consistent receipt that says anything they want. This is the policy-decision analog of the existing "Coordinated tampering at both ingest and verify time" threat. The defence is the same: separation of duties, code review on the policy file, transparency-log gossip with witnesses (commercial), and independent audit by a party that does not share the operations team's access.
+
+### The receipt records what the policy decided, not whether the policy was right
+
+The signed receipt is non-repudiable evidence that, under policy `policy_id` with version hash `policy_version_hash`, the evaluator returned the recorded decision for the recorded `(chunk, request)` pair. That is the strongest claim the receipt makes. Whether the policy itself was the right policy to apply, or whether the decision was the right decision under that policy, are upstream questions for governance review. Provenex makes those questions answerable; it does not answer them.
+
 ## Security FAQ
 
 ### Can a regulator verify our receipts without our infrastructure?

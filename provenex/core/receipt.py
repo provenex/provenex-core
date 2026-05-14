@@ -47,10 +47,23 @@ from .trajectory import TrajectoryContext
 #   1.2.0 — RESERVED for RFC-0001 (coverage block; not yet shipped)
 #   1.3.0 — trajectory block (RFC-0003)
 #   1.4.0 — per-source claims[] (self-attribution) + content_source field
+#   1.5.0 — (skipped) interim shape that placed access_policy as a separate
+#           top-level block; was never released. See the v0.4 release notes
+#           for the migration story.
+#   2.0.0 — unified ``policy`` block with ``verification`` and
+#           ``access_control`` subsections. Breaking: the old top-level
+#           ``policy`` field (which previously held only the
+#           VerificationPolicy config) now wraps both halves.
+#   2.1.0 — per-decision ``metadata_binding`` field recording whether
+#           ``chunk_metadata`` and ``request_context`` were tag-at-ingest
+#           (signed by the index) or tag-at-evaluate (looked up at
+#           decision time). Additive: receipts without the field remain
+#           valid 2.0.0 subsets.
 # Minor-version bumps are additive: receipts at a lower revision remain
-# valid subsets of higher revisions. Verifiers ignore unknown fields.
-SCHEMA_VERSION = "1.4.0"
-ISSUER = "provenex-core/0.3.0"
+# valid subsets of higher revisions. Major bumps may break the top-level
+# shape — 2.0.0 did.
+SCHEMA_VERSION = "2.1.0"
+ISSUER = "provenex-core/0.4.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -268,9 +281,29 @@ class ProvenanceReceipt:
     issuer: str = ISSUER
     transparency_log: Optional[Dict[str, Any]] = None
     trajectory: Optional[Dict[str, Any]] = None
+    # Schema 2.0.0: optional ``access_control`` payload nested under the
+    # unified top-level ``policy`` block. Absent on receipts produced
+    # without a configured PolicyEvaluator. Carries evaluator identity,
+    # the canonical policy version hash, and the per-chunk decision
+    # records.
+    access_control: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
+        policy_block: Dict[str, Any] = {
+            "verification": {
+                "block_stale": self.policy.block_stale,
+                "block_unauthorized": self.policy.block_unauthorized,
+                "block_unverified": self.policy.block_unverified,
+                "block_tampered": self.policy.block_tampered,
+                "flag_stale": self.policy.flag_stale,
+                "flag_unauthorized": self.policy.flag_unauthorized,
+                "flag_unverified": self.policy.flag_unverified,
+                "flag_tampered": self.policy.flag_tampered,
+            }
+        }
+        if self.access_control is not None:
+            policy_block["access_control"] = dict(self.access_control)
         d: Dict[str, Any] = {
             "receipt_id": self.receipt_id,
             "schema_version": self.schema_version,
@@ -281,16 +314,7 @@ class ProvenanceReceipt:
                 "hash_algorithm": "sha256",
             },
             "sources": [s.to_dict() for s in self.sources],
-            "policy": {
-                "block_stale": self.policy.block_stale,
-                "block_unauthorized": self.policy.block_unauthorized,
-                "block_unverified": self.policy.block_unverified,
-                "block_tampered": self.policy.block_tampered,
-                "flag_stale": self.policy.flag_stale,
-                "flag_unauthorized": self.policy.flag_unauthorized,
-                "flag_unverified": self.policy.flag_unverified,
-                "flag_tampered": self.policy.flag_tampered,
-            },
+            "policy": policy_block,
             "summary": dict(self.summary),
         }
         if self.transparency_log is not None:
@@ -452,6 +476,7 @@ class ReceiptBuilder:
         signer: Optional[ReceiptSigner] = None,
         transparency_log: Optional[Dict[str, Any]] = None,
         trajectory: Optional[TrajectoryContext] = None,
+        access_control: Optional[Dict[str, Any]] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -473,6 +498,12 @@ class ReceiptBuilder:
                 receipt into a multi-step agentic trajectory. When supplied,
                 the trajectory block is emitted on the receipt and covered
                 by the signature. See :mod:`provenex.core.trajectory`.
+            access_control: Optional schema-2.0.0 ``policy.access_control``
+                payload — evaluator identity, policy_id, policy_version_hash,
+                policy_in_transparency_log, and the per-chunk decisions[].
+                Callers normally do not assemble this by hand: see
+                :func:`provenex.core.verify.verify_chunks`, which builds
+                it from a configured :class:`Policy`.
 
         Returns:
             The completed :class:`ProvenanceReceipt`.
@@ -486,6 +517,7 @@ class ReceiptBuilder:
             summary=self._summary(),
             transparency_log=dict(transparency_log) if transparency_log else None,
             trajectory=trajectory.to_dict() if trajectory is not None else None,
+            access_control=dict(access_control) if access_control else None,
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

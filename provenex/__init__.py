@@ -1,8 +1,10 @@
-"""Provenex — cryptographic provenance verification for enterprise RAG.
+"""Provenex — policy enforcement for AI data access, with cryptographic proof.
 
-This is the open source core: fingerprinting, local SQLite index, receipt
-generation, and LangChain/LlamaIndex integration. The algorithm is open so
-enterprises can audit it. Hosted infrastructure, Bloom-filter acceleration,
+This is the open source core: fingerprinting, local SQLite index, the
+native YAML data-access policy DSL (schema 1.5.0), receipt generation,
+and integrations for LangChain / LangGraph / LlamaIndex / CrewAI. The
+algorithm is open so enterprises can audit it. Hosted infrastructure,
+the Rego adapter, the OPA service adapter, Bloom-filter acceleration,
 compliance-grade exports, and cross-enterprise provenance graphs are
 available separately — see https://provenex.ai.
 """
@@ -31,10 +33,33 @@ from .core.trajectory import (
 )
 from .core.verify import VerifiedChunks, verify_chunks
 from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
+from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
 from .index.sqlite_index import SQLiteProvenanceIndex
+from .policy.evaluator import (
+    DECISION_ALLOW,
+    DECISION_ALLOW_WITH_CONDITIONS,
+    DECISION_DENY,
+    EVALUATOR_CUSTOM,
+    EVALUATOR_NATIVE_YAML,
+    EVALUATOR_NONE,
+    EVALUATOR_OPA_SERVICE,
+    EVALUATOR_REGO,
+    ChunkContext,
+    NullPolicyEvaluator,
+    PolicyDecision,
+    PolicyError,
+    PolicyEvaluator,
+    PolicyParseError,
+    RequestContext,
+    UnsupportedPolicyFeature,
+    compute_inputs_hash,
+    compute_policy_version_hash,
+)
 from .policy.policy import VerificationPolicy, overall_status
+from .policy.unified import Policy
+from .policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # Core
@@ -49,9 +74,36 @@ __all__ = [
     "ProvenanceIndex",
     "SQLiteProvenanceIndex",
     "VerificationOutcome",
-    # Policy
+    # Bloom acceleration interface (stub in OSS; real impl is commercial)
+    "BloomFilterIndex",
+    "NoopBloomFilter",
+    "BloomAcceleratedIndex",
+    # Unified policy (schema 2.0.0)
+    "Policy",
+    # Verification policy (the five-outcome half, since v0.1)
     "VerificationPolicy",
     "overall_status",
+    # Data-access policy framework (schema 2.0.0)
+    "ChunkContext",
+    "RequestContext",
+    "PolicyDecision",
+    "PolicyEvaluator",
+    "PolicyError",
+    "PolicyParseError",
+    "UnsupportedPolicyFeature",
+    "NullPolicyEvaluator",
+    "NativeYamlEvaluator",
+    "validate_policy_file",
+    "compute_policy_version_hash",
+    "compute_inputs_hash",
+    "DECISION_ALLOW",
+    "DECISION_DENY",
+    "DECISION_ALLOW_WITH_CONDITIONS",
+    "EVALUATOR_NATIVE_YAML",
+    "EVALUATOR_REGO",
+    "EVALUATOR_OPA_SERVICE",
+    "EVALUATOR_CUSTOM",
+    "EVALUATOR_NONE",
     # Receipt
     "ProvenanceReceipt",
     "ReceiptBuilder",

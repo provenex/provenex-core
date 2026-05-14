@@ -1,0 +1,392 @@
+# Policy reference
+
+Provenex enforces policy at retrieval time and emits a cryptographically signed record of every decision. Schema 2.0.0 (Provenex v0.4) unified the verification gate and the data-access gate under a single `Policy` object. This document is the reference.
+
+Before reading this, you may want the architectural framing in [`how_it_works.md`](how_it_works.md) and the receipt schema in [`receipt_format.md`](receipt_format.md).
+
+## The unified `Policy`
+
+A Provenex `Policy` has two halves:
+
+- **`verification`** — the five-outcome gate. Decides which of `VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED` block a chunk before the next stage.
+- **`access_control`** — the data-access policy. A pluggable `PolicyEvaluator` that runs declarative rules over chunk metadata and the request context.
+
+A chunk reaches the LLM only if **both** halves allow it. The verification half is always present (with sensible defaults if the caller doesn't override). The access-control half is optional — early-stage deployments can ship with verification only.
+
+```python
+from provenex import Policy, VerificationPolicy, NativeYamlEvaluator
+
+# Explicit construction
+policy = Policy(
+    verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
+    access_control=NativeYamlEvaluator.from_path("hr_policy.yaml"),
+)
+
+# Or from a unified YAML config (single file holds both halves)
+policy = Policy.from_yaml("provenex_policy.yaml")
+```
+
+## What policy can express
+
+In scope:
+
+- **Origin / provenance** — flows through the existing five-outcome verification policy.
+- **Freshness / recency** — `chunk.ingested_at` against a duration window (`not_older_than: 90d`).
+- **Access control** — fields under `request.caller.*` against rule expectations. Identity-provider integration is your concern; Provenex consumes the caller dict you supply.
+- **Jurisdiction / data residency** — `chunk.metadata.residency` against `request.jurisdiction`.
+- **Sensitivity / classification** — `chunk.metadata.classification` against caller role or purpose.
+- **PII presence and handling** — `chunk.metadata.contains_pii` (or any tag your upstream PII tool sets) against caller role.
+- **Authorization scope** — `request.purpose` and arbitrary combinations.
+
+## What policy cannot express (the refusal list)
+
+Provenex's `PolicyEvaluator` explicitly does **NOT**:
+
+- Assess content quality.
+- Detect factual accuracy or hallucinations.
+- Detect bias.
+- Moderate output content.
+- Make cost-based routing decisions.
+- Enforce arbitrary business logic.
+- **Detect PII** (it enforces tags from upstream PII detectors).
+- **Evaluate quality** (it enforces decisions made by upstream data governance).
+
+If a policy rule needs one of these, the right answer is to fix the upstream system that should be producing the tag — not extend Provenex.
+
+## Unified YAML config file
+
+The single file an operator authors and ships. Either subsection can be omitted; a file with neither produces a Policy with defaults.
+
+```yaml
+version: 1
+policy_id: hr-corpus-retrieval-v3       # appears on every receipt produced under this policy
+description: HR corpus access policy    # free-form, ignored by the evaluator
+
+# ---- VERIFICATION HALF ----
+# The five-outcome gate. Omitted keys take VerificationPolicy defaults
+# (block UNAUTHORIZED + TAMPERED; flag everything else).
+verification:
+  block_stale: false
+  block_unauthorized: true
+  block_unverified: false
+  block_tampered: true
+  flag_stale: true
+  flag_unauthorized: true
+  flag_unverified: true
+  flag_tampered: true
+
+# ---- ACCESS-CONTROL HALF ----
+# Pluggable evaluator. The native YAML DSL is shipped in the open-source
+# core. Rego and OPA-service evaluators are commercial.
+access_control:
+  rules:
+    - name: jurisdiction_eu_only
+      when:
+        request.jurisdiction: EU
+      require:
+        chunk.metadata.residency:
+          in: [EU, EEA]
+      on_violation: deny
+
+    - name: pii_classification_gate
+      when:
+        chunk.metadata.contains_pii: true
+      require:
+        request.caller.role:
+          in: [hr_admin, payroll]
+      on_violation: deny
+
+    - name: freshness_for_policy_corpus
+      when:
+        chunk.metadata.corpus: policy_documents
+      require:
+        chunk.ingested_at:
+          not_older_than: 90d
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
+    policy_version_mismatch: deny
+```
+
+### Top-level fields
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `version` | yes (or omit, defaults to 1) | Must be `1`. Bumps when the unified schema grammar changes. |
+| `policy_id` | yes if `access_control` is present | Non-empty string. Appears on every receipt produced under this policy. |
+| `description` | no | Free-form text. |
+| `verification` | no | Verification gate config. Omitting it uses dataclass defaults. |
+| `access_control` | no | Access-control rules. Omitting it means no evaluator is configured — only the verification gate applies. |
+
+Unknown top-level keys raise a parse error. A typo is a load-time failure, not a silent allow.
+
+### `verification` subsection
+
+A flat map of booleans. Recognised keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `block_stale` | `False` | Block chunks whose document version is superseded. |
+| `block_unauthorized` | `True` | Block chunks whose document is not authorized. |
+| `block_unverified` | `False` | Block chunks not found in the index. |
+| `block_tampered` | `True` | Block chunks whose index-row signature failed. |
+| `flag_stale` | `True` | Note STALE chunks on the receipt summary, even if not blocked. |
+| `flag_unauthorized` | `True` | Note UNAUTHORIZED chunks on the receipt summary. |
+| `flag_unverified` | `True` | Note UNVERIFIED chunks on the receipt summary. |
+| `flag_tampered` | `True` | Note TAMPERED chunks on the receipt summary. |
+
+Unknown keys raise. Non-boolean values raise.
+
+### `access_control` subsection — Native YAML DSL
+
+The native DSL is intentionally small. Each rule:
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `name` | yes | Non-empty string. Appears in `rules_fired` on the receipt. |
+| `when` | no | Flat key/value map; rule applies iff every entry matches by direct equality. Omitting `when` makes the rule fire for every chunk. |
+| `require` | no | Flat key/value map of constraints. Operators below. |
+| `on_violation` | yes | Phase 1 supports `deny` only. `allow_with_conditions` is reserved. |
+
+#### Path roots
+
+| Path root | Resolves to |
+| --- | --- |
+| `chunk.fingerprint` | The chunk's SHA-256 fingerprint string. |
+| `chunk.document_id` | The chunk's document identifier from the index. |
+| `chunk.document_version` | The chunk's document version from the index. |
+| `chunk.ingested_at` | The chunk's ingestion timestamp from the index. |
+| `chunk.metadata.<key>` | Customer-defined tag under the chunk's metadata dict. |
+| `chunk.content_source` | One of `indexed_corpus`, `live_tool_output`, `memory_store`, `compiled_artifact`. |
+| `request.caller.<key>` | Field on the caller dict supplied with the request. |
+| `request.jurisdiction` | Free-form region code (`EU`, `US`, etc.). |
+| `request.purpose` | Free-form purpose string. |
+| `request.timestamp` | ISO-8601 UTC timestamp of the request. Also the "now" used for freshness comparisons. |
+
+A missing path in a `when` clause means the rule's scope does not apply — the rule does not fire. A missing path in a `require` clause is governed by `defaults.unknown_metadata` (defaults to `deny`).
+
+#### Require operators
+
+| Operator | Shape | Meaning |
+| --- | --- | --- |
+| direct equality | `<path>: <value>` | The path resolves to a value equal to the right-hand side. |
+| `in` | `<path>: { in: [a, b, c] }` | The path resolves to a value in the list. |
+| `not_in` | `<path>: { not_in: [a, b, c] }` | The path resolves to a value NOT in the list. |
+| `not_older_than` | `<path>: { not_older_than: 90d }` | The path resolves to an ISO-8601 timestamp whose age (relative to `request.timestamp`) is at most the duration. Supported units: `s`, `m`, `h`, `d`. |
+
+Unknown operators raise at load time.
+
+#### `defaults`
+
+| Key | Values | Behavior |
+| --- | --- | --- |
+| `unknown_metadata` | `allow` \| `deny` | What to do when a `require` clause references a path the chunk metadata or request context doesn't have. Default `deny`. |
+| `policy_version_mismatch` | `allow` \| `deny` | Reserved for a future release. Default `deny`. |
+
+### Reserved-but-unimplemented features
+
+The following raise `UnsupportedPolicyFeature` at load time:
+
+- `any_of`, `all_of`, `not` — boolean composition.
+- `nested` — nested rules.
+- `on_violation: allow_with_conditions`.
+- Custom functions and external data lookups.
+- Unknown `require` operators.
+
+The Rego adapter and OPA service adapter are commercial.
+
+## Evaluator interface
+
+Backends implement the `PolicyEvaluator` protocol from `provenex.policy.evaluator`:
+
+```python
+from typing import Protocol
+from provenex import ChunkContext, RequestContext, PolicyDecision
+
+class PolicyEvaluator(Protocol):
+    @property
+    def evaluator_name(self) -> str: ...
+    @property
+    def policy_id(self) -> str: ...
+    @property
+    def policy_version_hash(self) -> str: ...
+    def evaluate(
+        self,
+        chunk: ChunkContext,
+        request: RequestContext,
+    ) -> PolicyDecision: ...
+```
+
+Contracts every backend must hold:
+
+- **Deterministic.** The same `(chunk, request)` and the same bundle MUST produce the same decision. No clock reads outside `request.timestamp`, no random sampling, no network calls.
+- **Side-effect-free per evaluation.** Logging and audit emission are the caller's job.
+- **Stable `policy_version_hash`.** Two bundles that parse to equal Python structures produce the same hash. Whitespace and key reordering do not change the hash.
+
+The native YAML backend (`provenex.NativeYamlEvaluator`) is the reference implementation. Rego and OPA-service implementations of the same protocol ship commercially and emit the same receipt shape — the `evaluator` field on the receipt distinguishes them.
+
+## Receipt block reference
+
+When a Policy is configured, every receipt carries the unified `policy` block:
+
+```json
+{
+  "policy": {
+    "verification": {
+      "block_unauthorized": true,
+      "block_tampered": true,
+      "...": "..."
+    },
+    "access_control": {
+      "evaluator": "native_yaml",
+      "policy_id": "hr-corpus-retrieval-v3",
+      "policy_version_hash": "sha256:e10b1df5...",
+      "policy_in_transparency_log": false,
+      "decisions": [
+        {
+          "chunk_fingerprint": "sha256:1ebcde39...",
+          "decision": "allow",
+          "rules_fired": ["jurisdiction_eu_only", "freshness_for_policy_corpus"],
+          "inputs_hash": "sha256:a3f9c2d1...",
+          "inputs": { "chunk_metadata": { "...": "..." }, "request_context": { "...": "..." } }
+        }
+      ]
+    }
+  }
+}
+```
+
+Full field reference is in [`receipt_format.md`](receipt_format.md#policy).
+
+Key points:
+
+- The `verification` half is **always present**.
+- The `access_control` half is **optional** — receipts produced without a configured evaluator omit it.
+- `policy_version_hash` is canonical: two policies that differ only in formatting hash to the same value. Use `provenex policy hash <policy.yaml>` to print the hash a policy will produce.
+- `inputs_hash` is computed over the canonical inputs object regardless of whether `inputs` itself is recorded. An operator can redact `inputs: null` while keeping the hash, so an auditor with the original inputs can verify them independently.
+- **`metadata_binding`** (schema 2.1.0+) records the trust class of each input. `chunk_metadata` is `"at_ingest"` (signed by the index row) or `"at_evaluate"` (looked up at decision time). `request_context` is always `"at_evaluate"`. Declare via `verify_chunks(..., chunk_metadata_binding=...)`; default is `"at_evaluate"` for safety. See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model.
+
+## Worked examples
+
+### Example 1 — HR corpus with PII gating and EU residency
+
+See the file at the top of this document. EU jurisdiction only sees EU-resident chunks; PII-tagged chunks are gated to HR roles; policy-documents corpus has a 90-day freshness window.
+
+### Example 2 — Classification-by-role for a research assistant
+
+A simpler policy that gates a research-assistant retriever on classification level.
+
+```yaml
+version: 1
+policy_id: research-assistant-v1
+
+verification:
+  block_unauthorized: true
+  block_tampered: true
+
+access_control:
+  rules:
+    - name: confidential_to_senior_only
+      when:
+        chunk.metadata.classification: confidential
+      require:
+        request.caller.seniority:
+          in: [senior, staff, principal]
+      on_violation: deny
+
+    - name: secret_blocked_entirely
+      when:
+        chunk.metadata.classification: secret
+      require:
+        chunk.metadata.classification: public   # never satisfiable; always denies
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: allow   # default-allow during initial rollout
+```
+
+The `secret_blocked_entirely` rule shows a pattern for "absolute denylist" with the v0.4 operator set: the `require` clause is intentionally unsatisfiable so the rule always denies for chunks where the `when` clause matches.
+
+### Example 3 — Verification-only, no access control
+
+For early-stage deployments. The access_control section is omitted entirely; only the verification gate applies. This is `verify_chunks` behaviour from v0.1 through v0.3.
+
+```yaml
+version: 1
+policy_id: verification-only-v1
+
+verification:
+  block_unauthorized: true
+  block_unverified: true
+  block_tampered: true
+  block_stale: false
+```
+
+## Wiring
+
+A complete v0.4 retrieval call with policy enforcement:
+
+```python
+from provenex import (
+    verify_chunks, Policy, RequestContext,
+    HmacSha256Signer, SQLiteProvenanceIndex,
+)
+
+index = SQLiteProvenanceIndex("provenance.db")
+policy = Policy.from_yaml("hr_policy.yaml")
+request = RequestContext(
+    caller={"role": "hr_admin", "id": "u_4218"},
+    jurisdiction="EU",
+    purpose="customer_support",
+    timestamp="2026-05-13T14:32:07Z",
+)
+
+result = verify_chunks(
+    chunks=retrieved_chunks,
+    index=index,
+    signer=HmacSha256Signer(),
+    policy=policy,
+    request_context=request,
+    chunk_metadata=[
+        {"residency": "EU", "corpus": "policy_documents", "contains_pii": False},
+        {"residency": "US", "corpus": "policy_documents", "contains_pii": True},
+    ],
+)
+feed_to_llm(result.kept)   # only chunks that passed BOTH gates
+save_receipt(result.receipt)
+```
+
+The verification gate and the access-control gate are independent. A chunk reaches `result.kept` only if **both** allow it. `result.receipt.to_dict()["policy"]` carries both halves.
+
+For v0.4, `RequestContext` is constructed explicitly by the caller. Identity-provider integration (so the caller dict comes from your IdP rather than your code) is commercial.
+
+## CLI
+
+```bash
+provenex policy validate hr_policy.yaml   # parse + validate, non-zero on error
+provenex policy hash     hr_policy.yaml   # print canonical policy_version_hash
+provenex audit receipt.json --show-policy # render the unified policy block in audit output
+```
+
+Use `provenex policy validate` in CI to catch typos before a broken policy is deployed.
+
+## Commercial evaluators (Rego, OPA service)
+
+The `PolicyEvaluator` protocol is the integration point. Two backends ship commercially:
+
+- **Rego adapter.** Loads a Rego policy and routes evaluation to an embedded OPA engine. Targets teams who author authorization in Rego elsewhere and want one language across the stack.
+- **OPA service adapter.** Delegates each decision to a running OPA instance over HTTP. Targets teams who run OPA as a service.
+
+Both produce the same `policy.access_control` block shape on the receipt. The `evaluator` field distinguishes them (`rego`, `opa_service`). The decision semantics — allow / deny / `rules_fired` — are evaluator-agnostic by design, so an auditor reading a receipt does not need to know which backend was in use.
+
+The transparency-log integration for policy bundles (`policy_in_transparency_log: true`) is also commercial.
+
+## Threat model and trust boundaries
+
+See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model for policy decisions specifically. Two important boundaries:
+
+1. **A policy decision is only as trustworthy as the metadata feeding it.** Tag-at-ingest (the tag is signed alongside the fingerprint) and tag-at-evaluate (the tag is read from an external system at decision time) have different trust properties.
+2. **The operator who controls the signing key and the policy file can produce any decision they want.** The commercial transparency-log integration is the mitigation — it forces the operator to commit to the policy publicly.
+
+These are limits an honest deployment should understand.

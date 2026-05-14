@@ -250,6 +250,90 @@ End-to-end audit from the shell:
 provenex audit --trajectory ./receipts/   # validates the whole DAG
 ```
 
+## Path F: policy-driven retrieval
+
+When you want every retrieval to clear a unified policy (verification + access control) and emit a signed decision record.
+
+```bash
+pip install "provenex-core[policy]"   # adds PyYAML for the native DSL
+```
+
+Write a unified policy YAML. Save as `provenex_policy.yaml`:
+
+```yaml
+version: 1
+policy_id: hr-corpus-retrieval-v3
+
+verification:
+  block_unauthorized: true
+  block_tampered: true
+
+access_control:
+  rules:
+    - name: jurisdiction_eu_only
+      when:
+        request.jurisdiction: EU
+      require:
+        chunk.metadata.residency:
+          in: [EU, EEA]
+      on_violation: deny
+  defaults:
+    unknown_metadata: deny
+```
+
+Validate it at build time so a typo fails fast:
+
+```bash
+provenex policy validate provenex_policy.yaml
+provenex policy hash provenex_policy.yaml
+```
+
+Wire it into retrieval:
+
+```python
+from provenex import (
+    verify_chunks, Policy, RequestContext,
+    HmacSha256Signer, SQLiteProvenanceIndex,
+)
+
+index = SQLiteProvenanceIndex("provenance.db")
+policy = Policy.from_yaml("provenex_policy.yaml")
+
+# At query time, build the request context for the caller and surface
+# the per-chunk metadata your upstream PII / classification / residency
+# tools have tagged.
+request = RequestContext(
+    caller={"role": "hr_admin", "id": "u_4218"},
+    jurisdiction="EU",
+    purpose="customer_support",
+    timestamp="2026-05-13T14:32:07Z",
+)
+chunks = [doc.page_content for doc in retrieved_documents]
+metadata = [doc.metadata for doc in retrieved_documents]
+
+result = verify_chunks(
+    chunks=chunks,
+    index=index,
+    signer=HmacSha256Signer(),
+    policy=policy,
+    request_context=request,
+    chunk_metadata=metadata,
+)
+
+# Only chunks that passed BOTH gates appear in result.kept. The receipt
+# records both verdicts on every chunk under the unified `policy` block.
+feed_to_llm(result.kept)
+save_receipt(result.receipt)
+```
+
+Inspect the receipt with the unified policy block rendered:
+
+```bash
+provenex audit receipt.json --show-policy
+```
+
+A `VERIFIED` chunk can still be policy-denied (wrong jurisdiction, missing role); a `STALE` chunk can still be policy-allowed if the policy explicitly accepts stale chunks. The two gates are independent. See [`docs/policy.md`](policy.md) for the DSL reference and worked examples; see [`docs/threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model.
+
 ## Verify a receipt independently
 
 Anyone with the receipt JSON and the signing secret can confirm the receipt hasn't been altered:
@@ -268,6 +352,7 @@ For asymmetric verification (so an auditor can verify without holding the signin
 ## Next steps
 
 - [`how_it_works.md`](how_it_works.md): the algorithm, end to end
+- [`policy.md`](policy.md): native YAML DSL reference, evaluator protocol, worked examples, roadmap
 - [`receipt_format.md`](receipt_format.md): schema reference for the receipt JSON
 - [`langchain_integration.md`](langchain_integration.md): deeper LangChain integration notes
 - [`../examples/standalone_demo.py`](../examples/standalone_demo.py): end-to-end Merkle demo. Ingest, verify, tamper-detection, offline proof verification. Pure stdlib, no LangChain.

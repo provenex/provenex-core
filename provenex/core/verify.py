@@ -34,13 +34,22 @@ Quick reference
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .fingerprinter import Fingerprinter, FingerprinterConfig
 from .receipt import ProvenanceReceipt, ReceiptBuilder, ReceiptSigner
 from .trajectory import TrajectoryContext
-from ..index.base import ProvenanceIndex
+from ..index.base import IndexEntry, ProvenanceIndex
+from ..policy.evaluator import (
+    BINDING_AT_EVALUATE,
+    BINDING_AT_INGEST,
+    DECISION_ALLOW,
+    ChunkContext,
+    PolicyDecision,
+    RequestContext,
+)
 from ..policy.policy import VerificationPolicy
+from ..policy.unified import Policy, build_access_control_metadata, coerce_policy
 
 
 @dataclass
@@ -112,16 +121,42 @@ def _coerce_chunks(value: Any) -> List[str]:
     )
 
 
+def _build_chunk_context(
+    *,
+    fingerprint: str,
+    entry: Optional[IndexEntry],
+    metadata: Optional[Dict[str, Any]],
+) -> ChunkContext:
+    """Assemble a :class:`ChunkContext` for the policy evaluator.
+
+    Pulls document_id / document_version / ingested_at off the index
+    entry when available. For UNVERIFIED chunks (no entry), those
+    attributes are ``None`` and the policy author can decide how to
+    handle them via ``defaults.unknown_metadata``.
+    """
+    return ChunkContext(
+        fingerprint=fingerprint,
+        document_id=getattr(entry, "document_id", None),
+        document_version=getattr(entry, "document_version", None),
+        ingested_at=getattr(entry, "ingested_at", None),
+        metadata=dict(metadata) if metadata else {},
+        content_source=None,
+    )
+
+
 def verify_chunks(
     chunks: Any,
     index: ProvenanceIndex,
     signer: Optional[ReceiptSigner] = None,
-    policy: Optional[VerificationPolicy] = None,
+    policy: Any = None,  # Policy | VerificationPolicy | None
     fingerprinter: Optional[Fingerprinter] = None,
     trajectory: Optional[TrajectoryContext] = None,
     step_kind: Optional[str] = None,
     agent_id: Optional[str] = None,
     output_text: str = "",
+    request_context: Optional[RequestContext] = None,
+    chunk_metadata: Optional[List[Dict[str, Any]]] = None,
+    chunk_metadata_binding: str = BINDING_AT_EVALUATE,
 ) -> VerifiedChunks:
     """Verify a set of chunks against the index and emit a signed receipt.
 
@@ -138,9 +173,11 @@ def verify_chunks(
         index: The :class:`ProvenanceIndex` to verify against.
         signer: Optional :class:`ReceiptSigner`. Production should always
             sign.
-        policy: Optional :class:`VerificationPolicy`. Defaults to the
-            production defaults (block unauthorized + tampered, flag
-            everything else).
+        policy: Optional unified :class:`Policy` carrying the verification
+            gate config and (optionally) a data-access evaluator. Defaults
+            to a Policy with default verification (block UNAUTHORIZED +
+            TAMPERED) and no access control. Load a unified YAML config
+            with :meth:`Policy.from_yaml`.
         fingerprinter: Optional custom :class:`Fingerprinter`. Must match
             the one used at ingest time, otherwise nothing will verify.
         trajectory: Optional :class:`TrajectoryContext`. When supplied,
@@ -157,6 +194,24 @@ def verify_chunks(
             on the receipt. Defaults to empty (the receipt covers the
             chunks but no answer); pass the actual answer on the final
             call in a multi-step flow.
+        request_context: Required when ``policy.access_control`` is set.
+            The caller / jurisdiction / purpose / timestamp the evaluator
+            checks against. For v0.4 the caller constructs this
+            explicitly; identity-provider integration is future work.
+        chunk_metadata: Optional list, one entry per chunk in retrieval
+            order, of opaque metadata dicts surfaced to the policy
+            evaluator under ``chunk.metadata.*``. Use this to pass
+            tagging set by upstream PII / classification tools. If
+            omitted, ``chunk.metadata`` is empty for every chunk.
+        chunk_metadata_binding: Schema 2.1.0+. Whether ``chunk_metadata``
+            was tag-at-ingest (signed by the index row; defaults to
+            ``"at_ingest"`` if the caller declares it) or tag-at-evaluate
+            (the default — the caller looked it up at retrieval time).
+            ``request_context`` is always ``"at_evaluate"`` and is
+            recorded that way on the receipt. The binding is non-load-
+            bearing: it does not change the decision, only what an
+            auditor reading the receipt knows about the trust class of
+            each input. See [docs/threat_model.md] for the trust model.
 
     Returns:
         A :class:`VerifiedChunks` containing the kept chunks, blocked
@@ -165,16 +220,41 @@ def verify_chunks(
 
     Raises:
         TypeError: When ``chunks`` is of an unrecognised shape.
+        ValueError: When ``policy.access_control`` is set without a
+            ``request_context``, or when ``chunk_metadata`` is provided
+            but has a different length than ``chunks``.
     """
-    pol = policy or VerificationPolicy()
+    eff_policy: Policy = coerce_policy(policy)
     fp = fingerprinter or Fingerprinter(FingerprinterConfig())
 
     texts = _coerce_chunks(chunks)
-    builder = ReceiptBuilder(policy=pol)
+
+    # Validate the access-control + request-context combination eagerly.
+    # The retriever should not silently degrade if the operator forgot
+    # the request context — that would emit allow-by-default receipts.
+    if eff_policy.access_control is not None and request_context is None:
+        raise ValueError(
+            "verify_chunks: policy.access_control was set but "
+            "request_context is None. Pass a RequestContext."
+        )
+    if chunk_metadata is not None and len(chunk_metadata) != len(texts):
+        raise ValueError(
+            f"verify_chunks: chunk_metadata length {len(chunk_metadata)} "
+            f"does not match chunks length {len(texts)}"
+        )
+    if chunk_metadata_binding not in (BINDING_AT_INGEST, BINDING_AT_EVALUATE):
+        raise ValueError(
+            f"verify_chunks: chunk_metadata_binding must be "
+            f"{BINDING_AT_INGEST!r} or {BINDING_AT_EVALUATE!r}, got "
+            f"{chunk_metadata_binding!r}"
+        )
+
+    builder = ReceiptBuilder(policy=eff_policy.verification)
     kept: List[str] = []
     blocked: List[str] = []
+    policy_decisions: List[Dict[str, Any]] = []
 
-    for text in texts:
+    for i, text in enumerate(texts):
         fingerprint = fp.fingerprint_chunk(text)
         outcome = index.verify(fingerprint)
         entry = index.lookup(fingerprint)
@@ -186,7 +266,33 @@ def verify_chunks(
                 fp.fingerprint(text).normalization_applied
             ),
         )
-        if pol.should_block(outcome):
+        block_by_verification = eff_policy.verification.should_block(outcome)
+        block_by_policy = False
+        if eff_policy.access_control is not None and request_context is not None:
+            chunk_ctx = _build_chunk_context(
+                fingerprint=fingerprint,
+                entry=entry,
+                metadata=chunk_metadata[i] if chunk_metadata else None,
+            )
+            decision = eff_policy.access_control.evaluate(
+                chunk_ctx, request_context
+            )
+            decision_with_binding = PolicyDecision(
+                decision=decision.decision,
+                rules_fired=decision.rules_fired,
+                inputs_hash=decision.inputs_hash,
+                inputs=decision.inputs,
+                metadata_binding={
+                    "chunk_metadata": chunk_metadata_binding,
+                    "request_context": BINDING_AT_EVALUATE,
+                },
+            )
+            policy_decisions.append(
+                decision_with_binding.to_dict(chunk_fingerprint=fingerprint)
+            )
+            block_by_policy = decision.decision != DECISION_ALLOW
+
+        if block_by_verification or block_by_policy:
             blocked.append(text)
         else:
             kept.append(text)
@@ -206,10 +312,17 @@ def verify_chunks(
             agent_id=agent_id if agent_id is not None else trajectory.agent_id,
         )
 
+    access_control_block: Optional[Dict[str, Any]] = None
+    if eff_policy.access_control is not None:
+        access_control_block = build_access_control_metadata(
+            eff_policy.access_control, policy_decisions
+        )
+
     receipt = builder.finalize(
         output_text=output_text,
         signer=signer,
         trajectory=emit_trajectory,
+        access_control=access_control_block,
     )
 
     next_trajectory: Optional[TrajectoryContext] = None

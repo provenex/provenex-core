@@ -2,9 +2,9 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`1.4.0`**.
+This document specifies the schema. The current schema version is **`2.1.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification` and (optional) `access_control` subsections.
 
-Schema history (every minor bump is additive — earlier-version receipts remain valid subsets of later versions):
+Schema history:
 
 | Version | What it added |
 | --- | --- |
@@ -13,6 +13,25 @@ Schema history (every minor bump is additive — earlier-version receipts remain
 | `1.2.0` | *Reserved* for a future coverage block (chunk-identity-under-drift). |
 | `1.3.0` | Optional `trajectory` block (multi-step agentic linkage). |
 | `1.4.0` | Per-source `claims[]` (self-attribution) + per-source `content_source` (origin classifier). |
+| `1.5.0` | (Skipped.) Interim shape that put `access_policy` as a separate top-level block. Never released. |
+| `2.0.0` | **Breaking.** Unified `policy` block with `verification` and optional `access_control` subsections. The 1.x top-level `policy` (which held only the verification config) is replaced by `policy.verification`. |
+| `2.1.0` | Per-decision `metadata_binding` field on `policy.access_control.decisions[]` recording whether `chunk_metadata` was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Additive: receipts without the field are valid 2.0.0 subsets. |
+
+Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
+
+### Migrating from 1.x receipts
+
+If your code reads a 1.x receipt:
+
+| 1.x access path | 2.0.0 access path |
+| --- | --- |
+| `receipt["policy"]["block_stale"]` | `receipt["policy"]["verification"]["block_stale"]` |
+| `receipt["policy"]["block_unauthorized"]` | `receipt["policy"]["verification"]["block_unauthorized"]` |
+| *(no equivalent)* | `receipt["policy"]["access_control"]["evaluator"]` |
+| *(no equivalent)* | `receipt["policy"]["access_control"]["policy_id"]` |
+| *(no equivalent)* | `receipt["policy"]["access_control"]["decisions"][i]` |
+
+The Provenex SDK only emits 2.0.0 receipts. Historical 1.x receipts remain valid artifacts — keep an older SDK around if you need to re-verify them.
 
 ## Design properties
 
@@ -28,12 +47,15 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "1.4.0",
-  "issued_at": "2026-05-08T14:32:07.441Z",
-  "issuer": "provenex-core/0.2.0",
+  "schema_version": "2.1.0",
+  "issued_at": "2026-05-13T14:32:07.441Z",
+  "issuer": "provenex-core/0.4.0",
   "output": { ... },
   "sources": [ ... ],
-  "policy": { ... },
+  "policy": {
+    "verification": { ... },
+    "access_control": { ... }   // optional
+  },
   "summary": { ... },
   "transparency_log": { ... },
   "trajectory": { ... },
@@ -44,16 +66,23 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. `1.4.0` for this revision. |
+| `schema_version` | string | Semver. Always `2.1.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/0.2.0`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/0.4.0`. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
-| `policy` | object | The verification policy in effect. See below. |
+| `policy` | object | The unified policy in effect. Always present. `policy.verification` is always there; `policy.access_control` appears iff an evaluator was configured. See below. |
 | `summary` | object | Aggregate counts and overall status. See below. |
 | `transparency_log` | object | Optional. Present iff the receipt was produced against a Merkle transparency log (1.1.0+). See below. |
 | `trajectory` | object | Optional. Present iff the receipt is part of a multi-step agent trajectory (1.3.0+). See below. |
-| `signature` | object | Optional. Present iff the receipt was signed. See below. |
+| `signature` | object | Optional. Present iff the receipt was signed. |
+
+The unified `policy` block carries **both gates**:
+
+- `policy.verification` (always present): the per-outcome blocking and flagging configuration for the five verification outcomes (`VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`).
+- `policy.access_control` (optional): the data-access policy decision record — which evaluator was used, the canonical policy version hash, and the per-chunk allow / deny verdict with the rules that fired.
+
+Both gates are evaluated independently. A chunk reaches the LLM only if it clears BOTH.
 
 ## `output`
 
@@ -173,29 +202,81 @@ Combined with `verification_outcome`, this lets auditors distinguish "expected m
 
 ## `policy`
 
-The full `VerificationPolicy` configuration that was in effect when this receipt was issued.
+The unified policy in effect when the receipt was issued. Always present; carries both gates in two subsections.
 
 ```json
 {
   "policy": {
-    "block_stale": false,
-    "block_unauthorized": true,
-    "block_unverified": false,
-    "block_tampered": true,
-    "flag_stale": true,
-    "flag_unauthorized": true,
-    "flag_unverified": true,
-    "flag_tampered": true
+    "verification": {
+      "block_stale": false,
+      "block_unauthorized": true,
+      "block_unverified": false,
+      "block_tampered": true,
+      "flag_stale": true,
+      "flag_unauthorized": true,
+      "flag_unverified": true,
+      "flag_tampered": true
+    },
+    "access_control": {
+      "evaluator": "native_yaml",
+      "policy_id": "hr-corpus-retrieval-v3",
+      "policy_version_hash": "sha256:e10b1df5...",
+      "policy_in_transparency_log": false,
+      "decisions": [
+        {
+          "chunk_fingerprint": "sha256:1ebcde39...",
+          "decision": "allow",
+          "rules_fired": ["jurisdiction_eu_only", "freshness_for_policy_corpus"],
+          "inputs_hash": "sha256:a3f9c2d1...",
+          "inputs": {
+            "chunk_metadata": {"residency": "EU", "corpus": "policy_documents", "ingested_at": "2026-04-01T09:00:00Z"},
+            "request_context": {"caller": {"role": "hr_admin"}, "jurisdiction": "EU", "purpose": "customer_support", "timestamp": "2026-05-13T14:32:07Z"}
+          }
+        },
+        {
+          "chunk_fingerprint": "sha256:7a2bf015...",
+          "decision": "deny",
+          "rules_fired": ["pii_classification_gate"],
+          "inputs_hash": "sha256:b8e441f7...",
+          "inputs": null
+        }
+      ]
+    }
   }
 }
 ```
 
+### `policy.verification`
+
+The verification gate config. Always present.
+
 | Field | Type | Notes |
 | --- | --- | --- |
-| `block_*` | boolean | If true, chunks with this outcome are removed before reaching the LLM. |
+| `block_*` | boolean | If true, chunks with this outcome are removed before the next stage. |
 | `flag_*` | boolean | If true, chunks with this outcome are reflected in the summary even when not blocked. |
 
-Recording the policy on the receipt means an auditor can reason about what happened *and* what would have happened under a stricter policy.
+Recording the verification config on the receipt means an auditor can reason about what happened *and* what would have happened under a stricter policy.
+
+### `policy.access_control`
+
+The data-access policy decision record. Optional — present iff a `PolicyEvaluator` was configured at retrieval time.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `evaluator` | string | Backend identifier. Enum: `native_yaml` (open-source core), `rego` (commercial), `opa_service` (commercial), `custom`, `none`. |
+| `policy_id` | string | The `policy_id` from the policy bundle. The literal string `"none"` when no policy was configured. |
+| `policy_version_hash` | string | SHA-256 over the canonicalized policy bundle (`sha256:` prefix). Two policies that differ only in formatting hash to the same value. This is the field that would be published to the transparency log in the commercial transparency-log integration. |
+| `policy_in_transparency_log` | boolean | Whether `policy_version_hash` is recorded in the transparency log. Always `false` in the open-source core; the commercial transparency-log integration lights this up. |
+| `decisions` | array | Per-chunk decisions in retrieval order. One entry per chunk in `sources[]`. |
+| `decisions[].chunk_fingerprint` | string | The chunk's fingerprint. Matches `sources[i].fingerprint`. |
+| `decisions[].decision` | string | Enum: `allow`, `deny`, `allow_with_conditions`. v0.4 emits `allow` and `deny`; `allow_with_conditions` is reserved. |
+| `decisions[].rules_fired` | array of string | Names of the rules whose `when` clause matched. The trace of rules that participated in the decision (regardless of pass / fail). Empty when no rules fired. |
+| `decisions[].inputs_hash` | string | SHA-256 over the canonical `inputs` object. Always present — even when `inputs` is redacted, the hash lets an auditor with the original inputs independently verify. |
+| `decisions[].inputs` | object \| null | The canonical inputs the evaluator looked at, or `null` if the operator chose to redact. Shape: `{"chunk_metadata": {...}, "request_context": {...}}`. |
+| `decisions[].metadata_binding` | object | **Schema 2.1.0+.** Per-section trust class of the inputs. Shape: `{"chunk_metadata": "at_ingest"|"at_evaluate", "request_context": "at_evaluate"}`. `request_context` is always `at_evaluate` (the caller dict is built freshly at retrieval). `chunk_metadata` is operator-declared via `verify_chunks(..., chunk_metadata_binding=...)` — default `"at_evaluate"` for safety. See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions). |
+
+The whole `policy` block is covered by the receipt signature using the canonical-JSON rule. Tampering with any field — including reordering decisions, rewriting `rules_fired`, or flipping a `metadata_binding` value — invalidates the signature.
+
 
 ## `summary`
 

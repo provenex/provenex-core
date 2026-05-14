@@ -96,6 +96,24 @@ is 20 hashes (640 bytes) regardless of corpus size up through 1M;
 doubling the corpus to 2M adds one hash, four billion chunks would
 still fit in 32 hashes.
 
+### Policy evaluation (schema 2.0.0 access-control gate)
+
+| Metric | Value (10k synthetic) |
+|---|---|
+| Sample size | 1,000 evaluations |
+| Sustained throughput | **30k+ evaluations/sec** |
+| p50 / p95 / p99 / p999 | **22 µs / 34 µs / 38 µs / 54 µs** |
+| Max observed | 64 µs |
+| Rules in policy | 3 (jurisdiction, PII gate, freshness) |
+
+The native YAML evaluator runs well under verification latency — the
+access-control gate is not the bottleneck. A typical 5–10 chunk
+retrieval adds <0.5 ms of policy overhead on top of verification.
+The policy is independent of corpus size: latency depends on the
+number of rules and the depth of metadata paths, not on the index.
+
+Run the policy bench with: `python -m bench.scale --scale 10k --policy-samples 10000`
+
 ---
 
 ## Real-data validation (Wikipedia 100K)

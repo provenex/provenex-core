@@ -1,6 +1,6 @@
 """Provenex command-line interface.
 
-Four subcommands:
+Subcommands:
 
     provenex ingest --index <db> --doc-id <id> <file>...
         Fingerprint one or more files and write them to a SQLite provenance
@@ -16,11 +16,23 @@ Four subcommands:
         Generate a provenance receipt for a set of chunk files plus an LLM
         output, signed with PROVENEX_SIGNING_SECRET, and write JSON to stdout.
 
-    provenex audit <receipt.json>
+    provenex audit <receipt.json> [--show-policy]
         Independently verify a receipt. Checks the signature (if the signing
         secret is in the environment) and verifies each inclusion proof
-        against the transparency-log tree root carried on the receipt.
+        against the transparency-log tree root carried on the receipt. With
+        ``--show-policy``, also prints the per-chunk data-access policy
+        decisions from the receipt's ``access_policy`` block (schema 1.5.0+).
         Needs no database access. This is the auditor's tool.
+
+    provenex policy validate <policy.yaml>
+        Parse and validate a native YAML policy file. Exit 0 if valid,
+        non-zero with a clear message if not. Use in CI to catch typos
+        before a broken policy is deployed.
+
+    provenex policy hash <policy.yaml>
+        Print the canonical ``policy_version_hash`` for a policy file.
+        Useful for confirming what hash will appear in receipts and (in
+        Phase 2) what gets published to the transparency log.
 
 The CLI is intentionally minimal. For production use, embed the Python SDK
 directly.
@@ -43,6 +55,7 @@ from ..core.trajectory import audit_trajectory_dag
 from ..index.base import VerificationOutcome
 from ..index.sqlite_index import SQLiteProvenanceIndex
 from ..policy.policy import VerificationPolicy
+from ..policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
 
 
 def _read_text(path: str) -> str:
@@ -515,6 +528,9 @@ def _cmd_audit(args: argparse.Namespace) -> int:
                 f"{_dim('(HMAC-only index, no transparency log.)')}"
             )
 
+        if getattr(args, "show_policy", False):
+            _print_policy_block(receipt)
+
         print()
         if all_ok:
             print(f"  Overall: {_green('PASS')}")
@@ -528,13 +544,95 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# policy                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_policy_validate(args: argparse.Namespace) -> int:
+    """Parse and validate a native YAML policy file.
+
+    Exit code is 0 on a valid file and non-zero (with a message on stderr)
+    on any parse or unsupported-feature error. Designed for use in CI:
+    a typo or a reserved-but-unimplemented feature should fail the build,
+    not silently allow.
+    """
+    ok, err = validate_policy_file(args.file)
+    if not ok:
+        print(f"error: {err}", file=sys.stderr)
+        return 1
+    if not args.quiet:
+        print(f"{args.file}: valid")
+    return 0
+
+
+def _cmd_policy_hash(args: argparse.Namespace) -> int:
+    """Print the canonical ``policy_version_hash`` for a policy file.
+
+    This is what would appear on every receipt produced under this policy,
+    and (in Phase 2) what gets entered into the transparency log. Useful
+    for confirming a policy update has actually changed the bytes that
+    matter to an auditor, vs. whitespace-only or key-reordering edits.
+    """
+    try:
+        evaluator = NativeYamlEvaluator.from_path(args.file)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(evaluator.policy_version_hash)
+    return 0
+
+
+def _print_policy_block(receipt: Dict[str, Any]) -> None:
+    """Render the unified ``policy`` block for ``provenex audit --show-policy``.
+
+    Schema 2.0.0: ``policy.verification`` is always present; the optional
+    ``policy.access_control`` carries the evaluator metadata and per-chunk
+    decisions. We render both so an auditor can see both gates at a glance.
+    """
+    policy_block = receipt.get("policy") or {}
+    print()
+    print(f"  {_dim('Policy:')}")
+
+    # Verification half — always there.
+    verification = policy_block.get("verification") or {}
+    blocking = [k.replace("block_", "") for k, v in verification.items() if k.startswith("block_") and v]
+    if blocking:
+        print(f"    {_dim('verification (blocks):')} {', '.join(blocking)}")
+    else:
+        print(f"    {_dim('verification (blocks):')} {_dim('(none)')}")
+
+    # Access-control half — optional.
+    ac = policy_block.get("access_control")
+    if not ac:
+        print(f"    {_dim('access control:        none (no evaluator configured)')}")
+        return
+    print(f"    {_dim('access control:')}")
+    print(f"      {_dim('evaluator:           ')} {ac.get('evaluator', '?')}")
+    print(f"      {_dim('policy_id:           ')} {ac.get('policy_id', '?')}")
+    print(f"      {_dim('policy_version_hash: ')} {ac.get('policy_version_hash', '?')}")
+    in_log = ac.get("policy_in_transparency_log")
+    print(f"      {_dim('in transparency log: ')} {in_log!s}")
+    decisions = ac.get("decisions") or []
+    print(f"      {_dim('decisions:           ')} {len(decisions)}")
+    for i, d in enumerate(decisions):
+        verdict = d.get("decision", "?")
+        mark = _green("ALLOW") if verdict == "allow" else _red(verdict.upper())
+        rules = d.get("rules_fired") or []
+        rules_str = ", ".join(rules) if rules else _dim("(no rules fired)")
+        fp = (d.get("chunk_fingerprint") or "?")[:40]
+        print(f"      [{mark}] chunk #{i}  {_dim(fp + '...')}  rules: {rules_str}")
+
+
+# --------------------------------------------------------------------------- #
 
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argparse parser."""
     parser = argparse.ArgumentParser(
         prog="provenex",
-        description="Cryptographic provenance verification for RAG pipelines.",
+        description=(
+            "Policy enforcement for AI data access, with cryptographic proof."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -613,7 +711,48 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print only PASS/FAIL (overrides default human-readable output)",
     )
+    p_audit.add_argument(
+        "--show-policy",
+        action="store_true",
+        help=(
+            "Also print the receipt's access_policy block (schema 1.5.0+): "
+            "evaluator, policy_id, policy_version_hash, and per-chunk decisions "
+            "with rules_fired."
+        ),
+    )
     p_audit.set_defaults(func=_cmd_audit)
+
+    # policy subcommands (schema 1.5.0+).
+    p_policy = sub.add_parser(
+        "policy",
+        help="Data-access policy operations (validate, hash)",
+        description=(
+            "Operations on native YAML data-access policy files (schema "
+            "1.5.0+). Use 'policy validate' in CI to catch typos before a "
+            "broken policy is deployed; use 'policy hash' to confirm the "
+            "canonical version hash that will appear on receipts."
+        ),
+    )
+    p_policy_sub = p_policy.add_subparsers(dest="policy_command", required=True)
+
+    p_policy_validate = p_policy_sub.add_parser(
+        "validate",
+        help="Parse and validate a native YAML policy file",
+    )
+    p_policy_validate.add_argument("file", help="Path to a policy YAML file")
+    p_policy_validate.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Exit 0/1 without printing on success",
+    )
+    p_policy_validate.set_defaults(func=_cmd_policy_validate)
+
+    p_policy_hash = p_policy_sub.add_parser(
+        "hash",
+        help="Print the canonical policy_version_hash for a policy file",
+    )
+    p_policy_hash.add_argument("file", help="Path to a policy YAML file")
+    p_policy_hash.set_defaults(func=_cmd_policy_hash)
 
     return parser
 

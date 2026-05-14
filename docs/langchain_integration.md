@@ -74,10 +74,12 @@ All fingerprints under that `doc_id` will now return `UNAUTHORIZED` at verificat
 
 ## Retrieval
 
+For a verification-only setup (the simplest case), pass a `VerificationPolicy`:
+
 ```python
 from provenex.integrations.langchain import ProvenexRetriever
 from provenex.core.receipt import HmacSha256Signer
-from provenex.policy.policy import VerificationPolicy
+from provenex import VerificationPolicy
 
 retriever = ProvenexRetriever(
     base_retriever=your_existing_retriever,
@@ -91,6 +93,36 @@ result = retriever.get_relevant_documents_with_receipt(
     output_text=llm_output,
 )
 ```
+
+For the full v0.4 policy enforcement story (verification + access-control gates, unified Policy), use the framework-agnostic [`verify_chunks`](../provenex/core/verify.py) entry point against the same retriever:
+
+```python
+from provenex import (
+    Policy, RequestContext, HmacSha256Signer,
+    SQLiteProvenanceIndex, verify_chunks,
+)
+
+policy = Policy.from_yaml("hr_policy.yaml")          # unified verification + access_control
+request = RequestContext(
+    caller={"role": "hr_admin"}, jurisdiction="EU",
+    purpose="customer_support", timestamp="2026-05-13T00:00:00Z",
+)
+
+retrieved = your_existing_retriever.invoke(query)    # LangChain docs come back here
+result = verify_chunks(
+    chunks=[d.page_content for d in retrieved],
+    index=index,
+    signer=HmacSha256Signer(),
+    policy=policy,
+    request_context=request,
+    chunk_metadata=[d.metadata for d in retrieved],
+    chunk_metadata_binding="at_ingest",              # declare tag trust class
+)
+# result.kept = chunks that cleared BOTH gates
+# result.receipt = unified policy decision record (schema 2.1.0)
+```
+
+The `ProvenexRetriever` wrapper currently surfaces only the verification half of the unified Policy. Use `verify_chunks` directly when you want access-control rules in the same pipeline. See [`examples/policy_driven_retrieval.py`](../examples/policy_driven_retrieval.py) for a complete runnable demo.
 
 `result` is a `RetrievalResult` with three fields:
 

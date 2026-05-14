@@ -294,7 +294,7 @@ def test_both_fields_can_coexist_on_one_source_record():
 # --------------------------------------------------------------------------- #
 
 
-def test_schema_bumped_to_1_4_0():
+def test_schema_version_is_current():
     receipt = ReceiptBuilder().finalize(output_text="")
-    assert receipt.schema_version == "1.4.0"
-    assert receipt.to_dict()["schema_version"] == "1.4.0"
+    assert receipt.schema_version == "2.1.0"
+    assert receipt.to_dict()["schema_version"] == "2.1.0"

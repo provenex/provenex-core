@@ -31,7 +31,7 @@ from typing import Dict, Tuple
 
 from .corpus import CorpusConfig, SyntheticCorpus
 from .report import BenchRun, to_json, to_markdown
-from .workloads import run_ingest, run_proof, run_verify
+from .workloads import run_ingest, run_policy_eval, run_proof, run_verify
 
 
 # Scale tier presets.
@@ -71,6 +71,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1_000,
         help="Number of inclusion proofs to generate and offline-verify.",
+    )
+    parser.add_argument(
+        "--policy-samples",
+        type=int,
+        default=10_000,
+        help="Number of native-YAML policy evaluations to run. 0 disables.",
     )
     parser.add_argument(
         "--unknown-rate",
@@ -183,6 +189,18 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed,
     )
 
+    policy_result = None
+    if args.policy_samples > 0:
+        print(
+            f"[bench] evaluating {args.policy_samples:,} policy decisions...",
+            file=sys.stderr,
+        )
+        policy_result = run_policy_eval(
+            fingerprints,
+            sample_size=args.policy_samples,
+            seed=args.seed,
+        )
+
     idx.close()
     ended_at = time.time()
 
@@ -200,9 +218,13 @@ def main(argv: list[str] | None = None) -> int:
             "corpus": corpus_config_dict,
             "verify_samples": args.verify_samples,
             "proof_samples": args.proof_samples,
+            "policy_samples": args.policy_samples,
             "unknown_rate": args.unknown_rate,
         },
-        results=[ingest_result, verify_result, proof_result],
+        results=[
+            r for r in (ingest_result, verify_result, proof_result, policy_result)
+            if r is not None
+        ],
         started_at=started_at,
         ended_at=ended_at,
         db_size_bytes=db_size_bytes,

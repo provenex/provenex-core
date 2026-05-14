@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenex-core"
-version = "0.3.0"
-description = "Cryptographic provenance verification for enterprise RAG pipelines"
+version = "0.4.0"
+description = "Policy enforcement for AI data access, with cryptographic proof"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Provenex" }]
-keywords = ["rag", "provenance", "ai", "compliance", "fingerprinting", "langchain"]
+keywords = ["rag", "provenance", "ai", "policy", "security", "compliance", "fingerprinting", "langchain"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -39,6 +39,10 @@ crewai = ["crewai>=0.55"]
 # Adds Ed25519 asymmetric signing so auditors can verify receipts without
 # holding the signing key. The core remains pure-stdlib without this extra.
 ed25519 = ["cryptography>=42.0"]
+# Native YAML data-access policy DSL (schema 1.5.0). The evaluator imports
+# PyYAML lazily and raises a clear error if this extra is missing, so the
+# core remains pure-stdlib for users who don't author policies in YAML.
+policy = ["PyYAML>=6.0"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
@@ -46,6 +50,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "cryptography>=42.0",
+    "PyYAML>=6.0",
 ]
 
 [project.scripts]

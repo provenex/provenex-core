@@ -7,8 +7,9 @@ A walkthrough of dropping Provenex into a Pinecone-backed RAG pipeline. The code
 ## What you'll have at the end
 
 - Documents ingested into Pinecone for similarity search **and** into Provenex for cryptographic verification, in parallel writes
-- A retriever that asks Pinecone for top-k chunks, re-fingerprints each one at the boundary, and emits a signed receipt
+- A retriever that asks Pinecone for top-k chunks, re-fingerprints each one at the boundary, evaluates them against a unified policy (verification gate + access-control gate), and emits a signed receipt
 - Any chunk that wasn't ingested through Provenex (a poisoned document, an out-of-band write to Pinecone, a colleague who skipped the runbook) is caught at the retrieval boundary, returns `UNVERIFIED`, and is blocked from reaching the LLM by policy
+- Any chunk that passed verification but fails the access-control rules (wrong jurisdiction, missing role, stale) is recorded as `policy_decision: deny` on the receipt with the rule that fired
 
 ## Prerequisites
 
@@ -35,11 +36,11 @@ import os
 from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 
+from provenex import (
+    Policy, RequestContext, HmacSha256Signer, verify_chunks,
+)
 from provenex.core.fingerprinter import Fingerprinter
-from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
-from provenex.index.base import VerificationOutcome
-from provenex.policy.policy import VerificationPolicy
 
 
 # ---- shared infra: vector store + embedder + provenance index ----------------
@@ -123,12 +124,16 @@ def ingest_document(text: str, doc_id: str, authorized: bool = True) -> None:
 
 # ---- retrieve + verify -------------------------------------------------------
 
+policy = Policy.from_yaml("provenex_policy.yaml")  # unified verification + access_control
+
+
 def answer_with_provenance(
     query: str,
+    request: RequestContext,
     top_k: int = 5,
     output_text: str = "",
 ) -> tuple[list[str], dict]:
-    """Retrieve from Pinecone, verify with Provenex, return (kept chunks, receipt).
+    """Retrieve from Pinecone, run the unified policy, return (kept chunks, receipt).
 
     The kept chunks are what you'd pass to the LLM. The receipt is what
     you'd persist for compliance.
@@ -140,50 +145,35 @@ def answer_with_provenance(
         vector=query_emb, top_k=top_k, include_metadata=True
     )
 
-    policy = VerificationPolicy(block_unverified=True, block_tampered=True)
-    builder = ReceiptBuilder(policy=policy)
+    chunks = [m.metadata["text"] for m in results.matches]
+    # Surface whatever tags Pinecone metadata carries that your policy
+    # rules want to read (residency, classification, PII flag, ...).
+    chunk_metadata = [
+        {
+            "residency": m.metadata.get("residency"),
+            "classification": m.metadata.get("classification"),
+            "contains_pii": m.metadata.get("contains_pii", False),
+            "corpus": m.metadata.get("corpus"),
+        }
+        for m in results.matches
+    ]
 
-    kept: list[str] = []
-    for match in results.matches:
-        text = match.metadata["text"]
-        chunk_fp = fp.fingerprint_chunk(text)
-
-        outcome = provenance_index.verify(chunk_fp)
-        entry = provenance_index.lookup(chunk_fp)
-
-        # If this chunk has an inclusion proof, attach it to the receipt
-        # so an offline auditor can re-verify against the tree root.
-        leaf_index: int | None = None
-        inclusion_proof: list[str] | None = None
-        if outcome == VerificationOutcome.VERIFIED:
-            try:
-                _leaf, leaf_index, inclusion_proof = (
-                    provenance_index.inclusion_proof(chunk_fp)
-                )
-            except KeyError:
-                pass  # not in the log; skip the proof
-
-        builder.add_source(
-            fingerprint=chunk_fp,
-            outcome=outcome,
-            entry=entry,
-            leaf_index=leaf_index,
-            inclusion_proof=inclusion_proof,
-        )
-
-        if not policy.should_block(outcome):
-            kept.append(text)
-
-    receipt = builder.finalize(
-        output_text=output_text,
+    result = verify_chunks(
+        chunks=chunks,
+        index=provenance_index,
         signer=HmacSha256Signer(),
-        transparency_log={
-            "tree_size": provenance_index.tree_size(),
-            "tree_root": provenance_index.tree_root(),
-        },
+        policy=policy,
+        request_context=request,
+        chunk_metadata=chunk_metadata,
+        # Declare that these tags came from the signed index row, not from
+        # an external lookup. Recorded on the receipt as a trust signal.
+        chunk_metadata_binding="at_ingest",
+        output_text=output_text,
     )
-    return kept, receipt.to_dict()
+    return result.kept, result.receipt.to_dict()
 ```
+
+The merkle-log inclusion proofs are attached automatically when the index is a `MerkleSQLiteProvenanceIndex` — no extra plumbing needed on the caller side.
 
 ## What this gets you
 

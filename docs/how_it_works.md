@@ -8,9 +8,11 @@ The matching source is in [`provenex/`](../provenex/) and is small: roughly 1,20
 
 A RAG pipeline retrieves chunks of text and passes them to an LLM. After the LLM produces an answer, no record exists of which chunks it actually used, whether those chunks were current, whether the user was authorized to see them, or whether anything was injected mid-pipeline. Compliance teams holding a transcript of "the model said X" have no way to prove X was grounded in authorized sources.
 
-Provenex fixes this by attaching a cryptographically signed receipt to every retrieval that records, per chunk: a one-way fingerprint, the source document's identity and version, when it was ingested, whether it was authorized at retrieval time, and the verification outcome. The receipt covers an LLM-output hash and is signed end-to-end.
+Provenex fixes this by attaching a cryptographically signed receipt to every retrieval that records, per chunk: a one-way fingerprint, the source document's identity and version, when it was ingested, whether it was authorized at retrieval time, the verification outcome, and the per-chunk access-control decision. The receipt covers an LLM-output hash and is signed end-to-end.
 
-## Three components
+> **Decision and proof, not execution.** Provenex is an admission controller for AI data access — it evaluates each chunk against policy at the access point, records the decision, and returns allow / deny / verdict. It does NOT become the data path: the retriever still calls the vector DB; Provenex does not hold OAuth tokens, proxy network calls, or sit on the critical path between caller and storage. Kubernetes admission controllers do not run workloads; they decide whether workloads are admitted. That is the model. This scope discipline is what keeps Provenex a policy engine rather than an integration platform with the operational burden of one. (The same scope line applies to Phase 2 tool-call enforcement in a separate repo — it intercepts at the MCP boundary and emits a signed receipt, never brokers the actual tool call.)
+
+## Four components
 
 ### 1. Fingerprinting
 
@@ -103,18 +105,36 @@ The result is one of five outcomes:
 | `STALE` | Fingerprint in index, signature OK, document authorized, but row is superseded by a newer version. |
 | `VERIFIED` | All checks pass. |
 
-A configurable `VerificationPolicy` decides which outcomes block the chunk before it reaches the LLM. The receipt records both the kept chunks and the blocked chunks, so the picture is complete regardless of policy.
+A configurable `verification` gate (the verification half of the unified `Policy`) decides which outcomes block the chunk before reaching the next stage. The receipt records both the kept chunks and the blocked chunks, so the picture is complete regardless of policy.
+
+### 4. Data-access policy evaluation
+
+The verification outcome answers "did this chunk come from where we said, and is it intact?" A separate question — "is the caller allowed to see this chunk?" — is answered by the data-access policy evaluator (the `access_control` half of the unified `Policy`, schema 2.0.0).
+
+Provenex ships an evaluator-agnostic `PolicyEvaluator` protocol with one reference backend in the open-source core: the native YAML DSL ([`provenex/policy/yaml_evaluator.py`](../provenex/policy/yaml_evaluator.py)). The Rego adapter and the OPA-service adapter ship commercially. The decision shape on the receipt is the same regardless of backend.
+
+The flow for each chunk:
+
+1. Re-fingerprint, look up in the index, assign one of the five verification outcomes (unchanged from v0.3).
+2. If `policy.access_control` is configured, build a `ChunkContext` (document_id, document_version, ingested_at, opaque metadata tags, content_source) and pass it with the operator-supplied `RequestContext` (caller, jurisdiction, purpose, timestamp) to `evaluator.evaluate(...)`. The evaluator returns `allow` or `deny` plus the names of rules that fired.
+3. The chunk reaches the LLM only if BOTH gates pass: the verification policy AND the access-control policy.
+
+The verification outcome and the policy decision are independent. A `VERIFIED` chunk can still be policy-denied (wrong jurisdiction, missing role). A `STALE` chunk can still be policy-allowed (the policy explicitly accepts stale chunks for non-critical contexts). The receipt records both verdicts on every chunk — `sources[i].verification_outcome` and `policy.access_control.decisions[i].decision` — so an auditor can reason about them independently.
+
+The policy bundle is canonicalized (key-sorted JSON, no whitespace) and hashed with SHA-256 to produce the `policy_version_hash`. Two policies that differ only in formatting hash to the same value. This is the field that would be published to a transparency log in the commercial transparency-log integration, so auditors can independently confirm which policy was in effect at the time of a decision.
+
+See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator protocol, worked examples, and the commercial roadmap. See [`docs/threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model for policy decisions specifically.
 
 ## The receipt
 
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `1.1.0`) and `issuer` (`provenex-core/0.2.0`)
+- `schema_version` (currently `2.0.0`) and `issuer` (`provenex-core/0.4.0`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
 - The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied)
-- The policy in effect
+- The unified `policy` block: `policy.verification` (always present) and `policy.access_control` (optional, with per-chunk decisions)
 - A summary (`total_chunks`, counts per outcome, `overall_status` of `PASS` / `PARTIAL` / `FAIL`)
 - A signature block (`algorithm`, `value`)
 
