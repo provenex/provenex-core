@@ -70,7 +70,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.6.1"
+__version__ = "0.6.2"
 
 __all__ = [
     # Core

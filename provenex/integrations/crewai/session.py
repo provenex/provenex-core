@@ -24,14 +24,22 @@ call site.
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from ...core.fingerprinter import Fingerprinter, FingerprinterConfig
 from ...core.receipt import ProvenanceReceipt, ReceiptSigner
 from ...core.trajectory import TrajectoryContext, start_trajectory
 from ...core.verify import VerifiedChunks, verify_chunks as _core_verify_chunks
 from ...index.base import ProvenanceIndex
+from ...policy.evaluator import RequestContext
 from ...policy.policy import VerificationPolicy
+from ...policy.unified import Policy, coerce_policy
+from ...tool_call.admission import (
+    AdmissionResult,
+    ToolCallDenied,
+    admission_check as _core_admission_check,
+)
+from ...tool_call.context import ToolCallContext
 
 
 class ProvenexCrewSession:
@@ -61,13 +69,18 @@ class ProvenexCrewSession:
         self,
         index: ProvenanceIndex,
         signer: Optional[ReceiptSigner] = None,
-        policy: Optional[VerificationPolicy] = None,
+        policy: Any = None,  # Policy | VerificationPolicy | None
         fingerprinter: Optional[Fingerprinter] = None,
         agent_id: Optional[str] = None,
     ) -> None:
         self._index = index
         self._signer = signer
-        self._policy = policy or VerificationPolicy()
+        # Accept a unified Policy (Phase 2) or a bare VerificationPolicy
+        # (Phase 1 callers continue to work). coerce_policy wraps the
+        # legacy form. The Policy object carries verification +
+        # access_control + tool_call_control; verify_chunks and
+        # admission_check pick the half they need.
+        self._policy: Policy = coerce_policy(policy)
         self._fingerprinter = fingerprinter or Fingerprinter(FingerprinterConfig())
         self._agent_id = agent_id
         self._trajectory: TrajectoryContext = start_trajectory(agent_id=agent_id)
@@ -91,6 +104,11 @@ class ProvenexCrewSession:
         return self._trajectory.trajectory_id
 
     # ----------------------------------------------------------------- core verify
+
+    @property
+    def policy(self) -> Policy:
+        """The unified policy in effect for this session."""
+        return self._policy
 
     def verify_chunks(
         self,
@@ -192,6 +210,182 @@ class ProvenexCrewSession:
             if isinstance(raw, str):
                 return "\n".join(output_chunks)
             return output_chunks
+
+        return wrapped
+
+    # ----------------------------------------------------------------- tool-call admission
+
+    def admission_check(
+        self,
+        tool: ToolCallContext,
+        request: RequestContext,
+        step_kind: str = "tool_call",
+        agent_id: Optional[str] = None,
+        output_text: str = "",
+        redact_parameters: bool = False,
+        redact_inputs: bool = False,
+    ) -> AdmissionResult:
+        """Run Phase 2 admission on a tool-call attempt and thread state.
+
+        Session-aware sibling of :func:`provenex.admission_check`. Pulls
+        the policy and signer off the session, supplies the current
+        trajectory cursor, advances the cursor on the result, and
+        appends the receipt to :attr:`receipts`.
+
+        Args:
+            tool: The :class:`ToolCallContext` describing the attempt.
+            request: The :class:`RequestContext` carrying caller identity
+                and timestamp. CrewAI does not surface identity to tool
+                callables; the host application must supply it.
+            step_kind: Trajectory ``step_kind`` recorded on the emitted
+                receipt. Defaults to ``"tool_call"``.
+            agent_id: Optional per-call agent override.
+            output_text: Optional text whose hash should appear on the
+                receipt. Usually empty for admission steps.
+            redact_parameters: If True, the receipt records
+                ``actions[i].parameters = null`` (the
+                ``parameters_hash`` survives). Same semantics as
+                :func:`provenex.admission_check`.
+            redact_inputs: If True, the receipt's
+                ``policy.tool_call_control.decisions[i].inputs`` is set
+                to ``None``.
+
+        Returns:
+            An :class:`AdmissionResult`. The session's trajectory cursor
+            advances by one step; the receipt is appended to
+            :attr:`receipts`.
+        """
+        result = _core_admission_check(
+            tool=tool,
+            request=request,
+            policy=self._policy,
+            signer=self._signer,
+            trajectory=self._trajectory,
+            step_kind=step_kind,
+            agent_id=agent_id if agent_id is not None else self._agent_id,
+            output_text=output_text,
+            redact_parameters=redact_parameters,
+            redact_inputs=redact_inputs,
+        )
+        # Thread the new cursor back into session state. ``next_trajectory``
+        # is non-None because we passed a trajectory in.
+        assert result.next_trajectory is not None
+        self._trajectory = result.next_trajectory
+        self._receipts.append(result.receipt)
+        return result
+
+    def wrap_tool_admission(
+        self,
+        tool: Callable[..., Any],
+        *,
+        name: str,
+        request_factory: Callable[..., RequestContext],
+        operation: str = "invoke",
+        target_system: Optional[str] = None,
+        params_extractor: Optional[Callable[..., Dict[str, Any]]] = None,
+        step_kind: str = "tool_call",
+        agent_id: Optional[str] = None,
+        redact_parameters: bool = False,
+        on_deny: Optional[Callable[[AdmissionResult], Any]] = None,
+    ) -> Callable[..., Any]:
+        """Wrap a CrewAI tool with **Phase 2 admission** semantics.
+
+        Parallel to :meth:`wrap_tool`, but instead of verifying the
+        tool's *output* (Phase 1), this runs admission *before* the
+        tool is invoked (Phase 2). The decision is "should this tool
+        be called at all," not "should this chunk reach the LLM."
+
+        The returned callable:
+
+            1. Builds a :class:`ToolCallContext` from the call arguments
+               (via ``params_extractor`` if supplied, else
+               ``dict(kwargs)`` or ``{"input": args[0]}`` for a single
+               positional).
+            2. Resolves a :class:`RequestContext` via ``request_factory``.
+            3. Calls :meth:`admission_check`. On deny:
+               - if ``on_deny`` is set, returns ``on_deny(result)``;
+               - else raises :class:`provenex.ToolCallDenied`.
+            4. On allow, invokes the underlying tool with the original
+               args/kwargs and returns its result.
+
+        The receipt is appended to the session whether the call was
+        admitted or denied — denials are auditable.
+
+        Args:
+            tool: Any CrewAI-style callable.
+            name: Tool identifier evaluated against ``tool.name`` in the
+                policy. For MCP servers, the server-and-tool path.
+            request_factory: Callable that takes the same ``*args, **kwargs``
+                the tool receives and returns a :class:`RequestContext`.
+                Provenex does not own identity; this factory is where the
+                host application injects caller / jurisdiction / purpose
+                / timestamp.
+            operation: Optional default operation string. Many CrewAI
+                tools have one operation per tool, so a constant like
+                ``"invoke"`` is the right default. Per-call overrides
+                via the ``__operation__`` kwarg are also accepted.
+            target_system: Optional default target system. Per-call
+                overrides via the ``__target_system__`` kwarg are also
+                accepted.
+            params_extractor: Optional callable mapping
+                ``(*args, **kwargs) → parameters dict``. Default: any
+                ``__operation__`` / ``__target_system__`` /
+                ``__invocation_id__`` keys are stripped from kwargs,
+                and the rest become the parameters dict. A single
+                positional arg becomes ``{"input": arg}``.
+            step_kind: Trajectory step kind. Default ``"tool_call"``.
+            agent_id: Optional per-tool agent override.
+            redact_parameters: If True, receipts have
+                ``parameters: null`` (hash survives).
+            on_deny: Optional callback invoked on deny instead of
+                raising; its return value becomes the wrapped tool's
+                return value. Useful when an agent framework expects
+                a structured error rather than an exception.
+
+        Returns:
+            A new callable with the same signature as ``tool``.
+            ``functools.wraps`` preserves the original name/docstring
+            so CrewAI tool introspection still works.
+        """
+
+        @functools.wraps(tool)
+        def wrapped(*args: Any, **kwargs: Any) -> Any:
+            # Extract Provenex-reserved per-call overrides before
+            # touching the user-visible parameter set.
+            op = kwargs.pop("__operation__", operation)
+            tgt = kwargs.pop("__target_system__", target_system)
+            inv_id = kwargs.pop("__invocation_id__", None)
+
+            if params_extractor is not None:
+                parameters = params_extractor(*args, **kwargs)
+            elif kwargs:
+                parameters = dict(kwargs)
+            elif len(args) == 1:
+                # Common CrewAI pattern: tool(query: str).
+                parameters = {"input": args[0]}
+            else:
+                parameters = {f"arg{i}": v for i, v in enumerate(args)}
+
+            tool_ctx = ToolCallContext(
+                name=name,
+                operation=op,
+                parameters=parameters,
+                target_system=tgt,
+                invocation_id=inv_id,
+            )
+            request = request_factory(*args, **kwargs)
+            result = self.admission_check(
+                tool=tool_ctx,
+                request=request,
+                step_kind=step_kind,
+                agent_id=agent_id,
+                redact_parameters=redact_parameters,
+            )
+            if not result.allowed:
+                if on_deny is not None:
+                    return on_deny(result)
+                raise ToolCallDenied(result)
+            return tool(*args, **kwargs)
 
         return wrapped
 
