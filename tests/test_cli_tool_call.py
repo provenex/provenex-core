@@ -339,6 +339,138 @@ def test_audit_trajectory_on_mixed_retrieve_and_tool_call(tmp_path, capsys):
     assert rc == 0
 
 
+def test_audit_trajectory_json_summary_aggregates_mixed_step_kinds(
+    tmp_path, capsys
+):
+    """``audit --trajectory --json`` produces a ``summary`` block that
+    aggregates chunk counts AND tool-call counts across the whole
+    trajectory, with a ``per_step_kind`` breakdown an auditor can read
+    at a glance.
+    """
+    secret = secrets.token_hex(32)
+    os.environ["PROVENEX_SIGNING_SECRET"] = secret
+    signer = HmacSha256Signer()
+
+    # Set up: one verified chunk to retrieve, one tool-call admission.
+    index_path = tmp_path / "prov.db"
+    index = SQLiteProvenanceIndex(str(index_path))
+    from provenex.core.fingerprinter import Fingerprinter
+    fp = Fingerprinter()
+    chunk_text = "Aggregate-summary trajectory test chunk."
+    chunk_fp = fp.fingerprint_chunk(chunk_text)
+    index.add(
+        fingerprint=chunk_fp,
+        document_id="doc-1",
+        document_version="sha256:" + "v" * 64,
+        chunk_offset=0,
+        chunk_length=len(chunk_text),
+        authorized=True,
+    )
+
+    policy = Policy.from_text(VALID_UNIFIED_BOTH)
+    request = RequestContext(
+        caller={"role": "engineer"},
+        jurisdiction="US",
+        purpose="incident_response",
+        timestamp="2026-05-14T11:30:00Z",
+    )
+
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+
+    trj = start_trajectory(agent_id="agg_test")
+    # NOTE: Phase 1's verify_chunks doesn't auto-stamp step_kind on
+    # the emitted receipt; we pass it explicitly so the aggregator can
+    # bucket retrieval receipts under "retrieval". This is the same
+    # caller-side discipline `examples/agentic_admission_demo.py`
+    # follows when it wants step_kind on retrieval receipts.
+    r0 = verify_chunks(
+        chunks=[chunk_text], index=index, signer=signer, policy=policy,
+        request_context=request, chunk_metadata=[{"classification": "public"}],
+        trajectory=trj, step_kind="retrieval",
+    )
+    (receipts_dir / "r0.json").write_text(r0.receipt.to_json(), encoding="utf-8")
+
+    # Allowed tool call.
+    r1 = admission_check(
+        ToolCallContext(
+            name="web_search", operation="query",
+            parameters={"q": "x"}, target_system="google_custom_search",
+        ),
+        request, policy=policy, signer=signer, trajectory=r0.next_trajectory,
+    )
+    (receipts_dir / "r1.json").write_text(r1.receipt.to_json(), encoding="utf-8")
+
+    # Denied tool call (so the aggregate shows non-zero denied).
+    r2 = admission_check(
+        ToolCallContext(
+            name="web_search", operation="query",
+            parameters={"q": "y"}, target_system="duckduckgo",
+        ),
+        request, policy=policy, signer=signer, trajectory=r1.next_trajectory,
+    )
+    (receipts_dir / "r2.json").write_text(r2.receipt.to_json(), encoding="utf-8")
+
+    index.close()
+
+    rc = main(["audit", "--trajectory", str(receipts_dir), "--json"])
+    # rc==1 because the trajectory contains a denied tool call (FAIL overall).
+    # That's data, not an error in the audit itself.
+    assert rc in (0, 1)
+    report = json.loads(capsys.readouterr().out)
+    assert report["receipt_count"] == 3
+    summary = report["summary"]
+    # Chunk totals.
+    assert summary["total_chunks"] == 1
+    assert summary["verified"] == 1
+    # Action totals across both admission receipts.
+    assert summary["total_actions"] == 2
+    assert summary["actions_allowed"] == 1
+    assert summary["actions_denied"] == 1
+    # Step-kind breakdown.
+    assert summary["per_step_kind"]["retrieval"] == 1
+    assert summary["per_step_kind"]["tool_call"] == 2
+    # Aggregate status reflects the denied action.
+    assert summary["overall_status"] == "FAIL"
+
+
+def test_audit_trajectory_human_summary_mentions_actions(tmp_path, capsys):
+    """The non-JSON output adds a one-line headline so operators get the
+    shape of the trajectory at a glance without paging through detail.
+    """
+    secret = secrets.token_hex(32)
+    os.environ["PROVENEX_SIGNING_SECRET"] = secret
+    signer = HmacSha256Signer()
+    policy = Policy.from_text(VALID_TOOL_POLICY)
+    request = RequestContext(
+        caller={"role": "engineer"}, jurisdiction="US",
+        purpose="test", timestamp="2026-05-14T11:30:00Z",
+    )
+    receipts_dir = tmp_path / "receipts"
+    receipts_dir.mkdir()
+    trj = start_trajectory(agent_id="t")
+    r0 = admission_check(
+        ToolCallContext(
+            name="web_search", operation="query",
+            parameters={"q": "x"}, target_system="google_custom_search",
+        ),
+        request, policy=policy, signer=signer, trajectory=trj,
+    )
+    (receipts_dir / "r0.json").write_text(r0.receipt.to_json(), encoding="utf-8")
+    os.environ["NO_COLOR"] = "1"
+    try:
+        rc = main(["audit", "--trajectory", str(receipts_dir)])
+    finally:
+        os.environ.pop("NO_COLOR", None)
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Headline aggregate lines.
+    assert "Steps:" in out
+    assert "tool_call" in out
+    assert "Actions:" in out
+    assert "1 allowed" in out
+
+
 def test_audit_trajectory_json_mode_includes_all_three_step_kinds(tmp_path, capsys):
     """JSON-mode output makes the multi-step shape easily inspectable."""
     secret = secrets.token_hex(32)

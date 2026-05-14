@@ -13,12 +13,14 @@ callable that takes and returns a dict-like state).
 """
 
 from .node import (
+    provenex_admission_node,
     provenex_retrieval_node,
-    start_trajectory_state,
     record_step_receipt,
+    start_trajectory_state,
 )
 
 __all__ = [
+    "provenex_admission_node",
     "provenex_retrieval_node",
     "start_trajectory_state",
     "record_step_receipt",

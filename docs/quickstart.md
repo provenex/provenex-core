@@ -1,6 +1,6 @@
 # Quickstart
 
-Get a working provenance receipt in five minutes. Several paths below — drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, or thread receipts through an agentic / multi-step flow.
+Get a working provenance receipt in five minutes. Several paths below — drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, thread receipts through an agentic / multi-step flow, or enforce policy on agentic tool calls (Phase 2, schema 2.2.0).
 
 ## Install
 
@@ -247,8 +247,10 @@ memory_read = session.wrap_tool(your_memory_callable, step_kind="memory_read")
 End-to-end audit from the shell:
 
 ```bash
-provenex audit --trajectory ./receipts/   # validates the whole DAG
+provenex audit --trajectory ./receipts/   # validates the whole DAG, incl. tool-call steps
 ```
+
+The trajectory audit now emits an aggregate summary alongside the per-receipt detail — total chunks (verified / stale / unauthorized / unverified / tampered), total actions (allowed / denied), and a breakdown by step kind. Both human-readable and `--json` output include it.
 
 ## Path F: policy-driven retrieval
 
@@ -334,6 +336,164 @@ provenex audit receipt.json --show-policy
 
 A `VERIFIED` chunk can still be policy-denied (wrong jurisdiction, missing role); a `STALE` chunk can still be policy-allowed if the policy explicitly accepts stale chunks. The two gates are independent. See [`docs/policy.md`](policy.md) for the DSL reference and worked examples; see [`docs/threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model.
 
+## Path G: agentic tool-call admission (Phase 2)
+
+For enforcing what an agent is allowed to **do**, not just what it can read. Same unified policy file, second half lit up.
+
+```bash
+pip install "provenex-core[policy]"   # PyYAML for the DSL; same extra as access_control
+```
+
+Extend the unified YAML with a `tool_call_control:` section:
+
+```yaml
+version: 1
+policy_id: incident-response-agent-v1
+
+# ... verification + access_control as before ...
+
+tool_call_control:
+  rules:
+    - name: web_search_provider_allowlist
+      when: { tool.name: web_search }
+      require:
+        tool.target_system: { in: [google_custom_search, bing_v7] }
+      on_violation: deny
+
+    - name: no_secrets_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+        tool.parameters.q:
+          length_at_most: 500
+      on_violation: deny
+
+    - name: jira_writes_require_role
+      when:
+        tool.name: jira
+        tool.operation: { in: [create_issue, update_issue, delete_issue] }
+      require:
+        request.caller.role: { in: [engineer, manager, admin] }
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
+```
+
+**Framework-agnostic** — `admission_check` is the Phase 2 sibling of `verify_chunks`:
+
+```python
+from provenex import (
+    HmacSha256Signer, Policy, RequestContext,
+    ToolCallContext, admission_check,
+)
+
+policy = Policy.from_yaml("agent_policy.yaml")
+request = RequestContext(
+    caller={"id": "u_42", "role": "engineer"},
+    jurisdiction="US",
+    purpose="incident_response",
+    timestamp="2026-05-14T11:30:00Z",
+)
+
+result = admission_check(
+    tool=ToolCallContext(
+        name="jira", operation="create_issue",
+        parameters={"project": "INC", "summary": "..."},
+        target_system="acme.atlassian.net",
+    ),
+    request=request,
+    policy=policy,
+    signer=HmacSha256Signer(),
+)
+if result.allowed:
+    jira_client.create_issue(...)        # YOUR code, YOUR credentials
+save_receipt(result.receipt)             # signed; denials are auditable too
+```
+
+**Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call. Provenex never holds OAuth tokens, never proxies traffic, and never sits on the response-data path.
+
+**LangChain** — wrap any tool with admission semantics:
+
+```python
+from provenex.tool_call.integrations.langchain import ProvenexToolWrapper
+
+wrapped = ProvenexToolWrapper(
+    base_tool=jira_tool,                 # any object with .name + .invoke(input)
+    policy=Policy.from_yaml("agent_policy.yaml"),
+    signer=HmacSha256Signer(),
+    request_factory=lambda inv: RequestContext(...),   # host owns identity
+)
+agent.tools = [wrapped]                  # rest of the agent code unchanged
+```
+
+**CrewAI** — the session wraps tool callables; receipts accumulate in `session.receipts`:
+
+```python
+from provenex.integrations.crewai import ProvenexCrewSession
+
+session = ProvenexCrewSession(
+    index=SQLiteProvenanceIndex("provenance.db"),
+    signer=HmacSha256Signer(),
+    policy=Policy.from_yaml("agent_policy.yaml"),
+    agent_id="incident_agent",
+)
+wrapped_web_search = session.wrap_tool_admission(
+    web_search_tool,
+    name="web_search", operation="query",
+    target_system="google_custom_search",
+    request_factory=lambda *a, **kw: RequestContext(...),
+)
+# Pass wrapped_web_search to CrewAI Agents as a tool. Denials raise
+# ToolCallDenied; the receipt is still appended for audit.
+```
+
+**LangGraph** — admission node writes the decision into state so a conditional edge routes execution:
+
+```python
+from provenex.integrations.langgraph import provenex_admission_node
+
+admit_jira = provenex_admission_node(
+    name="jira",
+    policy=Policy.from_yaml("agent_policy.yaml"),
+    signer=HmacSha256Signer(),
+    operation="create_issue",
+    target_system="acme.atlassian.net",
+    request_factory=lambda state: RequestContext(
+        caller=state["caller"], jurisdiction=state["jurisdiction"],
+        purpose=state["purpose"], timestamp=state["timestamp"],
+    ),
+)
+# graph.add_node("admit_jira", admit_jira)
+# graph.add_conditional_edges(
+#     "admit_jira",
+#     lambda s: "execute_jira" if s["tool_admitted"] else "denied_handler",
+# )
+```
+
+**MCP** — decorate a `tools/call` handler:
+
+```python
+from provenex.tool_call.integrations.mcp import provenex_mcp_admission
+
+@provenex_mcp_admission(
+    policy=Policy.from_yaml("agent_policy.yaml"),
+    signer=HmacSha256Signer(),
+    request_factory=build_request_context_from_mcp_request,
+)
+def handle_tools_call(request):
+    # On allow: this handler runs as normal.
+    # On deny: ToolCallDenied is raised (or your on_deny callback fires).
+    return your_existing_tool_handler(request)
+```
+
+Every wrapper emits the same receipt shape. A receipt produced via the LangChain wrapper validates the same way as one via MCP middleware. That's the standard — and it does not fragment by framework.
+
+For the headline demo — a four-step `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory audited end-to-end in one CLI invocation — run [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py).
+
+See [`docs/policy.md`](policy.md) for the full DSL reference including the new `matches_pattern` / `not_matches_pattern` / `length_at_most` operators and the `tool.*` path roots; see [`docs/receipt_format.md`](receipt_format.md) for the schema 2.2.0 `actions[]` and `policy.tool_call_control` field reference.
+
 ## Verify a receipt independently
 
 Anyone with the receipt JSON and the signing secret can confirm the receipt hasn't been altered:
@@ -359,4 +519,5 @@ For asymmetric verification (so an auditor can verify without holding the signin
 - [`../examples/rag_with_provenance.py`](../examples/rag_with_provenance.py): RAG integration pattern. Ingest into both vector store and Provenex, verify at retrieval, watch the policy block a chunk that bypassed Provenex ingest.
 - [`../examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py): full runnable end-to-end demo against a LangChain retriever
 - [`../examples/policy_configuration.py`](../examples/policy_configuration.py): dev / prod / high-assurance policy presets
+- [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py): the Phase 2 headline demo. Mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory; one CLI audit pass over four signed receipts.
 - [`scaling.md`](scaling.md): 1M-chunk benchmark numbers (verify p50 371 µs, offline proof verify 47 µs) and honest discussion of how they move on enterprise hardware

@@ -6,6 +6,13 @@ supplies:
     * :func:`provenex_retrieval_node` — a factory that builds a retrieval
       node which verifies returned chunks, emits a trajectory-linked
       receipt, and threads the trajectory cursor forward in state.
+    * :func:`provenex_admission_node` — Phase 2 sibling. A factory that
+      builds a tool-call admission node: runs admission against policy,
+      emits a signed receipt either way, and writes
+      ``tool_admitted`` / ``tool_decision`` / ``tool_rules_fired``
+      into state so a conditional edge can route execution. **Decision
+      and proof, not execution** — the node never invokes the tool.
+      That stays on a downstream node owned by the graph.
     * :func:`start_trajectory_state` — initialise a fresh trajectory inside
       a state dict, plus an empty receipts list.
     * :func:`record_step_receipt` — append a receipt and advance the
@@ -26,6 +33,15 @@ By default, the helpers and the factory read/write these state keys:
     * ``"receipts"`` — list of :class:`ProvenanceReceipt` accumulated so far.
     * ``"trajectory"`` — current :class:`TrajectoryContext` cursor.
 
+The admission node adds:
+
+    * ``"tool_parameters"`` — dict of parameters for the pending tool call
+      (input; can be remapped or supplied via ``params_extractor``).
+    * ``"tool_admitted"`` — bool, True iff the decision was allow.
+    * ``"tool_decision"`` — the verbatim decision string
+      (``"allow"`` / ``"deny"`` / reserved ``"allow_with_conditions"``).
+    * ``"tool_rules_fired"`` — list of rule names that fired.
+
 Any of these can be remapped per-node by passing a ``state_keys`` mapping
 to the factory. Keys not present in state are treated as missing rather
 than raising; missing ``"trajectory"`` is the trigger to start a fresh
@@ -41,7 +57,11 @@ from ...core.fingerprinter import Fingerprinter, FingerprinterConfig
 from ...core.receipt import ProvenanceReceipt, ReceiptBuilder, ReceiptSigner
 from ...core.trajectory import TrajectoryContext, start_trajectory
 from ...index.base import ProvenanceIndex
+from ...policy.evaluator import RequestContext
 from ...policy.policy import VerificationPolicy
+from ...policy.unified import Policy
+from ...tool_call.admission import admission_check
+from ...tool_call.context import ToolCallContext
 
 
 _DEFAULT_KEYS: Dict[str, str] = {
@@ -50,6 +70,11 @@ _DEFAULT_KEYS: Dict[str, str] = {
     "blocked_documents": "blocked_documents",
     "receipts": "receipts",
     "trajectory": "trajectory",
+    # Phase 2 admission node keys.
+    "tool_parameters": "tool_parameters",
+    "tool_admitted": "tool_admitted",
+    "tool_decision": "tool_decision",
+    "tool_rules_fired": "tool_rules_fired",
 }
 
 
@@ -288,6 +313,161 @@ def provenex_retrieval_node(
             keys["blocked_documents"]: blocked,
             keys["receipts"]: previous_receipts,
             keys["trajectory"]: next_ctx,
+        }
+
+    return node
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2: tool-call admission node                                           #
+# --------------------------------------------------------------------------- #
+
+
+# A request factory: turns the LangGraph state into a RequestContext.
+# Provenex does not own identity; the host application supplies caller /
+# jurisdiction / purpose / timestamp by reading them off whatever state
+# field the graph happens to use.
+RequestFactory = Callable[[Mapping[str, Any]], RequestContext]
+
+
+def provenex_admission_node(
+    *,
+    name: str,
+    policy: Any,
+    request_factory: RequestFactory,
+    operation: str = "invoke",
+    target_system: Optional[str] = None,
+    params_extractor: Optional[Callable[[Mapping[str, Any]], Dict[str, Any]]] = None,
+    signer: Optional[ReceiptSigner] = None,
+    step_kind: str = "tool_call",
+    agent_id: Optional[str] = None,
+    redact_parameters: bool = False,
+    state_keys: Optional[Mapping[str, str]] = None,
+) -> Callable[[Mapping[str, Any]], Dict[str, Any]]:
+    """Build a LangGraph tool-call admission node.
+
+    The returned callable runs admission against the supplied unified
+    :class:`Policy`'s ``tool_call_control`` half, emits a signed
+    trajectory-linked receipt regardless of outcome, and writes the
+    decision into state so a conditional edge can route execution.
+
+    The node does NOT invoke the underlying tool. That's the load-bearing
+    "decision and proof, not execution" line: routing the actual call to
+    a downstream "execute" node is the graph's responsibility. The
+    conventional shape is::
+
+        graph.add_node("admit_jira", provenex_admission_node(name="jira", ...))
+        graph.add_node("execute_jira", _your_actual_jira_node)
+        graph.add_node("denied", _audit_log_node)
+        graph.add_conditional_edges(
+            "admit_jira",
+            lambda s: "execute_jira" if s["tool_admitted"] else "denied",
+        )
+
+    Args:
+        name: Tool identifier evaluated against ``tool.name`` in policy.
+        policy: A unified :class:`Policy`. Only the
+            ``tool_call_control`` half drives admission; the other
+            halves are recorded on the receipt unchanged.
+        request_factory: Callable that takes the current state and
+            returns a :class:`RequestContext`. The seam where the host
+            application injects caller identity from auth / IdP /
+            session.
+        operation: Default operation string. Overridable per-step by
+            placing an ``"__operation__"`` key in state (consumed before
+            being passed to admission).
+        target_system: Default target system. Overridable per-step by
+            placing an ``"__target_system__"`` key in state.
+        params_extractor: Optional callable that returns the parameters
+            dict from state. Default: read ``state["tool_parameters"]``
+            (after the configured state-key remap). Useful when the
+            graph's parameter layout doesn't match the default key.
+        signer: Optional :class:`ReceiptSigner`.
+        step_kind: Trajectory step kind. Default ``"tool_call"``.
+        agent_id: Optional default agent identifier.
+        redact_parameters: If True, the emitted receipt has
+            ``actions[i].parameters = null`` while preserving the
+            ``parameters_hash``.
+        state_keys: Optional state-key remapping. See module docstring.
+
+    Returns:
+        A LangGraph-compatible node function: ``(state) -> state_delta``.
+
+    Example:
+        >>> admit = provenex_admission_node(
+        ...     name="jira",
+        ...     policy=Policy.from_yaml("agent_policy.yaml"),
+        ...     signer=HmacSha256Signer(),
+        ...     operation="create_issue",
+        ...     target_system="acme.atlassian.net",
+        ...     request_factory=lambda s: RequestContext(
+        ...         caller=s["caller"], jurisdiction=s["jurisdiction"],
+        ...         purpose=s["purpose"], timestamp=s["timestamp"],
+        ...     ),
+        ... )
+    """
+    keys = _resolve_keys(state_keys)
+
+    def node(state: Mapping[str, Any]) -> Dict[str, Any]:
+        # Per-step overrides for operation / target_system / invocation_id.
+        # State is a Mapping; we do not mutate it. We read keys with the
+        # "__name__" prefix convention from the LangChain wrapper so
+        # graphs migrating between wrappers see the same shape.
+        op = state.get("__operation__", operation)
+        tgt = state.get("__target_system__", target_system)
+        inv_id = state.get("__invocation_id__")
+
+        if params_extractor is not None:
+            parameters = params_extractor(state)
+        else:
+            raw_params = state.get(keys["tool_parameters"])
+            if raw_params is None:
+                parameters = {}
+            elif isinstance(raw_params, dict):
+                parameters = dict(raw_params)
+            else:
+                # Single non-dict (e.g. a string from a planning node)
+                # is wrapped under "input" so the receipt has a stable
+                # key for the policy author to gate on.
+                parameters = {"input": raw_params}
+
+        tool_ctx = ToolCallContext(
+            name=name,
+            operation=op,
+            parameters=parameters,
+            target_system=tgt,
+            invocation_id=inv_id,
+        )
+        request = request_factory(state)
+
+        # Continue from existing trajectory or start fresh.
+        trajectory_ctx: Optional[TrajectoryContext] = state.get(keys["trajectory"])
+        if trajectory_ctx is None:
+            trajectory_ctx = start_trajectory(
+                agent_id=agent_id, step_kind=step_kind
+            )
+
+        result = admission_check(
+            tool=tool_ctx,
+            request=request,
+            policy=policy,
+            signer=signer,
+            trajectory=trajectory_ctx,
+            step_kind=step_kind,
+            agent_id=agent_id,
+            redact_parameters=redact_parameters,
+        )
+
+        previous_receipts = list(state.get(keys["receipts"], []))
+        previous_receipts.append(result.receipt)
+
+        assert result.next_trajectory is not None  # we supplied trajectory
+        return {
+            keys["tool_admitted"]: result.allowed,
+            keys["tool_decision"]: result.decision,
+            keys["tool_rules_fired"]: list(result.rules_fired),
+            keys["receipts"]: previous_receipts,
+            keys["trajectory"]: result.next_trajectory,
         }
 
     return node

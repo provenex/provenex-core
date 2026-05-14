@@ -331,6 +331,85 @@ def _audit_inclusion_proofs(
     return out
 
 
+def _aggregate_trajectory_summary(
+    receipts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Sum per-receipt summary blocks across a trajectory.
+
+    The output mirrors the per-receipt ``summary`` shape:
+
+        * Verification-outcome counts (``verified`` / ``stale`` /
+          ``unauthorized`` / ``unverified`` / ``tampered``) plus
+          ``total_chunks`` — always present.
+        * Tool-call counts (``actions_allowed`` / ``actions_denied``)
+          plus ``total_actions`` — emitted only when at least one
+          receipt in the trajectory carries actions.
+        * ``per_step_kind`` — receipt count per ``trajectory.step_kind``
+          (e.g. ``{"retrieval": 2, "tool_call": 1}``). Lets an auditor
+          see at a glance what shape of trajectory this was.
+        * ``overall_status`` — ``FAIL`` if any per-receipt summary is
+          FAIL; else ``PARTIAL`` if any is PARTIAL; else ``PASS``.
+
+    This is purely a summing aggregator over fields the issuing SDK
+    already wrote. We do not recompute outcomes; if the receipt's own
+    summary was wrong, the trajectory aggregate inherits that wrongness
+    — that's a per-receipt audit failure, not a summary issue.
+    """
+    chunk_keys = ("verified", "stale", "unauthorized", "unverified", "tampered")
+    aggregate: Dict[str, Any] = {
+        "total_chunks": 0,
+        "verified": 0,
+        "stale": 0,
+        "unauthorized": 0,
+        "unverified": 0,
+        "tampered": 0,
+    }
+    actions_total = 0
+    actions_allowed = 0
+    actions_denied = 0
+    any_actions = False
+    per_step_kind: Dict[str, int] = {}
+    statuses: List[str] = []
+
+    for r in receipts:
+        summary = r.get("summary") or {}
+        aggregate["total_chunks"] += summary.get("total_chunks", 0) or 0
+        for k in chunk_keys:
+            aggregate[k] += summary.get(k, 0) or 0
+        if "total_actions" in summary:
+            any_actions = True
+            actions_total += summary.get("total_actions", 0) or 0
+            actions_allowed += summary.get("actions_allowed", 0) or 0
+            actions_denied += summary.get("actions_denied", 0) or 0
+        status = summary.get("overall_status")
+        if isinstance(status, str):
+            statuses.append(status)
+        trajectory = r.get("trajectory") or {}
+        kind = trajectory.get("step_kind")
+        if isinstance(kind, str):
+            per_step_kind[kind] = per_step_kind.get(kind, 0) + 1
+
+    if any_actions:
+        aggregate["total_actions"] = actions_total
+        aggregate["actions_allowed"] = actions_allowed
+        aggregate["actions_denied"] = actions_denied
+
+    if per_step_kind:
+        aggregate["per_step_kind"] = per_step_kind
+
+    # Aggregate status: FAIL beats PARTIAL beats PASS.
+    if "FAIL" in statuses:
+        aggregate["overall_status"] = "FAIL"
+    elif "PARTIAL" in statuses:
+        aggregate["overall_status"] = "PARTIAL"
+    elif statuses:
+        aggregate["overall_status"] = "PASS"
+    else:
+        aggregate["overall_status"] = "PASS"
+
+    return aggregate
+
+
 def _collect_trajectory_receipts(path_or_glob: str) -> List[Path]:
     """Resolve --trajectory's argument to a list of receipt file paths.
 
@@ -406,10 +485,20 @@ def _cmd_audit_trajectory(args: argparse.Namespace) -> int:
     dag_result = audit_trajectory_dag(r for _, r in parsed)
     all_ok = all_per_receipt_ok and dag_result.ok
 
+    # Aggregate summary across the whole trajectory. The auditor cares
+    # about the totals (how many chunks, how many tool calls, how many
+    # of each verdict) — those are tedious to derive by hand from N
+    # receipt files. Sum the per-receipt summary blocks so the answer
+    # is one line in the JSON output. Pure retrieval receipts have no
+    # action keys; pure tool-call receipts have no verification counts;
+    # mixed receipts have both. The aggregator handles all three.
+    aggregate = _aggregate_trajectory_summary([r for _, r in parsed])
+
     if args.json:
         report = {
             "trajectory_id": dag_result.trajectory_id,
             "receipt_count": dag_result.receipt_count,
+            "summary": aggregate,
             "receipts": per_receipt_results,
             "trajectory_checks": [c.to_dict() for c in dag_result.checks],
             "overall": "PASS" if all_ok else "FAIL",
@@ -424,6 +513,25 @@ def _cmd_audit_trajectory(args: argparse.Namespace) -> int:
     # Human-readable.
     print(f"{_dim('Trajectory:')} {dag_result.trajectory_id or '(none)'}")
     print(f"{_dim('Receipts:  ')} {dag_result.receipt_count}")
+    # One-line summary surface so an operator gets the headline without
+    # paging through per-receipt detail. Mirrors what --json carries
+    # under "summary".
+    by_kind = aggregate.get("per_step_kind") or {}
+    if by_kind:
+        kinds_str = ", ".join(f"{n} {k}" for k, n in sorted(by_kind.items()))
+        print(f"{_dim('Steps:     ')} {kinds_str}")
+    chunk_total = aggregate.get("total_chunks", 0)
+    if chunk_total:
+        print(
+            f"{_dim('Chunks:    ')} {chunk_total} "
+            f"({aggregate.get('verified', 0)} verified)"
+        )
+    if "total_actions" in aggregate:
+        print(
+            f"{_dim('Actions:   ')} {aggregate['total_actions']} "
+            f"({aggregate.get('actions_allowed', 0)} allowed, "
+            f"{aggregate.get('actions_denied', 0)} denied)"
+        )
     print()
     for r in per_receipt_results:
         mark = _green("OK") if r["ok"] else _red("FAIL")
