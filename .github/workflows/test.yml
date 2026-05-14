@@ -15,12 +15,35 @@ jobs:
   test:
     name: pytest (py${{ matrix.python }})
     runs-on: ubuntu-latest
+    # Spin up a Postgres 16 service so tests/test_postgres_index.py and
+    # tests/test_merkle_postgres_index.py exercise a real backend instead
+    # of skipping. The healthcheck makes the runner wait until pg_isready
+    # passes before the test step kicks off.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     strategy:
       fail-fast: false
       matrix:
         # The versions pyproject.toml says we support. If a row fails we
         # either fix it or drop the version from the support list.
         python: ["3.10", "3.11", "3.12"]
+    env:
+      # Points the Postgres test suites at the service above. If unset,
+      # those tests skip — fine for local dev, but in CI we want them to
+      # run against a real backend.
+      PROVENEX_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +55,8 @@ jobs:
 
       - name: Install package + test dependencies
         # The langchain extra is needed by tests/test_langchain_integration.py.
-        # Everything else is stdlib-only.
+        # The dev extra pulls in psycopg + psycopg-pool for the Postgres
+        # backend tests. Everything else is stdlib-only.
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[langchain,dev]"
