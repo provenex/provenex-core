@@ -182,7 +182,7 @@ Compared to OPA alone, Provenex adds the **cryptographic enforcement record**, t
 
 See [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md) for the full DSL reference, supported operators, and worked examples.
 
-## Five-line integration
+## Easy integration
 
 ```python
 from provenex import (
