@@ -13,7 +13,7 @@ Provenex is the policy enforcement layer for AI data access. You declare your se
 
 > **Scope of this repo.** `provenex-core` is the retrieval primitive — Phase 1 of the broader vision: enforce policy on what an AI system *reads*. Agentic tool-call enforcement (the "can this agent access Jira / Salesforce / this connector" question, anchored on the MCP ecosystem) is Phase 2 and lives in a separate Provenex repository on the same policy-and-proof spine. Provenex is always **decision and proof, not execution** — an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
 
-This repository contains the open source core: fingerprinting, local SQLite index, the native YAML policy DSL, receipt generation, and integrations for LangChain / LangGraph / LlamaIndex / CrewAI. The algorithm is open so it can be audited. Hosted infrastructure, the Rego adapter, the OPA service adapter, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise policy interoperability are available separately at [provenex.ai](https://provenex.ai).
+This repository contains the open source core: fingerprinting, a Postgres-backed production index (SQLite for development), the native YAML policy DSL, receipt generation, and integrations for LangChain / LangGraph / LlamaIndex / CrewAI. The algorithm is open so it can be audited. Hosted infrastructure, the Rego adapter, the OPA service adapter, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise policy interoperability are available separately at [provenex.ai](https://provenex.ai).
 
 ## What you declare. What you get back.
 
@@ -129,7 +129,7 @@ Same pipeline with Provenex:
 
 | Piece | What it does |
 | --- | --- |
-| **Provenex index** | A separate database (SQLite locally, hosted in production) that stores **cryptographic fingerprints** of every chunk you ingested, plus metadata: document ID, version, ingestion timestamp, authorization state, residency / classification / PII tags supplied by upstream tools. Not the embeddings. Not the chunk text. SHA-256 hashes and metadata only. |
+| **Provenex index** | A separate database that stores **cryptographic fingerprints** of every chunk you ingested, plus metadata: document ID, version, ingestion timestamp, authorization state, residency / classification / PII tags supplied by upstream tools. Not the embeddings. Not the chunk text. SHA-256 hashes and metadata only. Ships with two backends: **Postgres** for multi-node production deployments (point at your own RDS / Aurora / Cloud SQL / on-prem cluster), and **SQLite** for single-node development. Same `ProvenanceIndex` interface, identical canonical signing payload — receipts produced against one backend verify bit-identically against the other. |
 | **Ingester** | At document-write time, alongside the code that writes embeddings to your vector DB, this writes fingerprints to the Provenex index. Two writes, both committed before "ingest" is done. |
 | **Policy evaluator** | At query time, after your retriever pulls chunks from the vector DB, Provenex re-fingerprints each chunk and runs it through both gates: the verification policy (origin, freshness, tampering) and the access-control policy (jurisdiction, classification, PII tags, freshness windows, caller role). |
 | **Receipt** | A signed JSON record of the whole transaction: chunks, verification outcomes, the unified policy, per-chunk decisions, the rules that fired, a hash of the LLM output, and a signature over the whole thing. |
@@ -184,13 +184,17 @@ See [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/
 
 ## Easy integration
 
+### Production (Postgres, multi-node)
+
 ```python
 from provenex import (
     verify_chunks, Policy, RequestContext,
-    HmacSha256Signer, SQLiteProvenanceIndex,
+    HmacSha256Signer, PostgresProvenanceIndex,
 )
 
-index = SQLiteProvenanceIndex("provenance.db")
+index = PostgresProvenanceIndex(
+    dsn="postgresql://provenex:secret@db.internal:5432/provenex",
+)
 policy = Policy.from_yaml("hr_policy.yaml")
 request = RequestContext(
     caller={"role": "hr_admin"}, jurisdiction="EU",
@@ -205,6 +209,18 @@ result = verify_chunks(
 feed_to_llm(result.kept)            # only chunks that cleared BOTH gates
 save_receipt(result.receipt)        # signed, verifiable offline
 ```
+
+Many verify pods plus one ingester pod is the recommended deployment shape — bulk ingest is a batch job; verify is per-request and scales horizontally via Postgres read replicas. Multi-writer ingest into the same index is supported and serialized at the document-row level. Bring your own Postgres (RDS, Aurora, Cloud SQL, Crunchy, Supabase, or self-managed) — Provenex doesn't host it.
+
+### Development (SQLite, single-node)
+
+```python
+from provenex import SQLiteProvenanceIndex
+index = SQLiteProvenanceIndex("provenance.db")
+# ... rest is identical to the Postgres example
+```
+
+Stdlib-only, no service to stand up. Same interface, same canonical signing payload, same receipt format — a receipt produced against SQLite verifies identically against Postgres and vice versa.
 
 Your existing vector store is untouched. Provenex runs alongside as a parallel signed index plus a policy gate. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care.
 
@@ -274,7 +290,8 @@ Provenex works the same way against all of them, because it never talks to the v
 ## Install
 
 ```bash
-pip install provenex-core                  # core only (pure stdlib)
+pip install provenex-core                  # core only (pure stdlib, SQLite backend)
+pip install "provenex-core[postgres]"      # + Postgres backend for production
 pip install "provenex-core[policy]"        # + native YAML policy DSL (PyYAML)
 pip install "provenex-core[langchain]"     # + LangChain integration
 pip install "provenex-core[langgraph]"     # + LangGraph integration
@@ -283,7 +300,7 @@ pip install "provenex-core[crewai]"        # + CrewAI integration
 pip install "provenex-core[ed25519]"       # + Ed25519 asymmetric signing
 ```
 
-Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. Framework integrations, the native YAML DSL, and the Ed25519 signer are optional extras.
+Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. The Postgres backend, framework integrations, the native YAML DSL, and the Ed25519 signer are optional extras.
 
 ### Try it in 30 seconds
 
@@ -320,8 +337,9 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 ### Open source (this repo, MIT)
 
 - Fingerprinting engine (normalizer + Rabin-Karp + SHA-256)
-- Local SQLite provenance index with HMAC-signed rows
-- RFC 6962 Merkle transparency log (optional, on top of the SQLite index)
+- **Postgres** provenance index for multi-node production (HMAC-signed rows, row-locked concurrent ingest)
+- **SQLite** provenance index for single-node development (HMAC-signed rows, stdlib-only)
+- RFC 6962 Merkle transparency log (optional, on top of either index)
 - Receipt generation, HMAC + Ed25519 signing, offline inclusion-proof verification
 - **Unified policy** (schema 2.1.0): single top-level `policy` block with `verification` and `access_control` halves
 - **Native YAML data-access policy DSL**: pluggable `PolicyEvaluator` protocol with the YAML evaluator as the reference backend

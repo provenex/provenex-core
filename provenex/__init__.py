@@ -9,7 +9,7 @@ compliance-grade exports, and cross-enterprise provenance graphs are
 available separately — see https://provenex.ai.
 """
 
-from .core.fingerprinter import Fingerprinter, FingerprinterConfig, Fingerprint
+from .core.fingerprinter import Fingerprint, Fingerprinter, FingerprinterConfig
 from .core.hasher import sha256_fingerprint
 from .core.normalizer import NormalizationOptions, TextNormalizer
 from .core.receipt import (
@@ -34,6 +34,7 @@ from .core.trajectory import (
 from .core.verify import VerifiedChunks, verify_chunks
 from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
 from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
+from .index.postgres_index import PostgresProvenanceIndex
 from .index.sqlite_index import SQLiteProvenanceIndex
 from .policy.evaluator import (
     DECISION_ALLOW,
@@ -59,7 +60,7 @@ from .policy.policy import VerificationPolicy, overall_status
 from .policy.unified import Policy
 from .policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     # Core
@@ -73,6 +74,7 @@ __all__ = [
     "IndexEntry",
     "ProvenanceIndex",
     "SQLiteProvenanceIndex",
+    "PostgresProvenanceIndex",
     "VerificationOutcome",
     # Bloom acceleration interface (stub in OSS; real impl is commercial)
     "BloomFilterIndex",

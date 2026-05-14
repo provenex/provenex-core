@@ -373,18 +373,74 @@ scale bench.
 
 ---
 
-## What this doc does not yet cover
+## Multi-node deployment shape (Postgres backend)
 
-- **Multi-process ingest scaling.** See the parallelism caveat above.
-  Coming once the workload supports it natively.
+The benchmarks above were run against `MerkleSQLiteProvenanceIndex` —
+single process, single file, the simplest possible deployment. Real
+enterprise deployments run multiple application pods across multiple
+clusters and need a backend that handles concurrent ingest and
+horizontally-scaling reads. For that, point Provenex at Postgres:
+
+```python
+from provenex import PostgresProvenanceIndex
+
+index = PostgresProvenanceIndex(
+    dsn="postgresql://provenex:secret@db.internal:5432/provenex",
+)
+```
+
+Same `ProvenanceIndex` interface as the SQLite backend, same canonical
+HMAC payload, same receipt schema. A receipt produced against one
+backend verifies identically against the other — so you can develop on
+SQLite locally and run on Postgres in production without any signing
+or audit-trail discontinuity.
+
+### Recommended topology
+
+| Tier | Backend | Pods | Reason |
+|---|---|---|---|
+| **Verify** (per-request, latency-critical) | Postgres read replicas | Many | Verify is a point-lookup on the indexed `fingerprint` column. Scales horizontally across replicas. |
+| **Ingest** (batch, throughput-oriented) | Postgres primary | One ingester pod recommended | Postgres handles multi-writer ingest correctly (row-locked supersession), but the Merkle-augmented index keeps an in-process tree that is per-process. Single ingester avoids tree-divergence under multi-writer until that becomes a multi-process tree (commercial roadmap). |
+
+For deployments that only need the non-Merkle properties — verification,
+five outcomes, signed rows, no transparency log — multiple ingester pods
+are fully supported on `PostgresProvenanceIndex`. The single-ingester
+recommendation only applies to `MerklePostgresProvenanceIndex`.
+
+### What we expect on Postgres
+
+We have not yet published Postgres-specific benchmarks. Two things to
+keep in mind when sizing:
+
+1. **Verify latency** is dominated by a single B-tree point-lookup on
+   `fingerprint`. On a warm Postgres with the index resident in shared
+   buffers, expect **p50 sub-millisecond, p99 < 5 ms** including network
+   round-trip from the application pod. The previous SQLite numbers
+   (verify p50 371 µs) are a useful floor; Postgres adds RTT but parallelises
+   across pods.
+2. **Ingest throughput** on a single primary is bounded by
+   transaction commit and WAL flush — typically **5–15k commits/sec**
+   on managed Postgres with the write cache enabled. Batching ingest
+   across documents (multiple chunks per transaction) is the right
+   tuning lever; we'll add a batched `add_many` to the interface in a
+   subsequent release.
+
+### What this doc does not yet cover
+
+- **Postgres benchmarks** at 1M and 10M chunks against managed
+  Postgres (RDS, Aurora, Cloud SQL). Coming once we have a stable
+  production reference deployment to publish numbers from.
+- **Multi-process ingest scaling on the SQLite backend.** See the
+  parallelism caveat above. Use the Postgres backend if you need this.
 - **Hot-cache vs cold-cache verify.** Current verify numbers are
   steady-state with the index hot in the OS page cache. A cold-start
-  verify (first lookup after boot) would be slower; bench doesn't
-  isolate that yet.
-- **Concurrent reader-writer.** What verify p99 looks like while
-  ingest is running into the same index. Not currently measured.
-- **Network-attached storage.** All measurements are on a local SSD.
-  EBS, GP3, and managed-disk performance will differ.
+  verify would be slower; bench doesn't isolate that yet.
+- **Concurrent reader-writer p99 under load.** What verify p99 looks
+  like while ingest is running into the same index — measured against
+  Postgres, will be the more useful number than the current SQLite
+  single-process figure.
+- **Network-attached storage.** All current measurements are on a
+  local SSD. EBS, GP3, and managed-disk performance will differ.
 
 Each of these is the right question to ask before shipping a production
 deployment.

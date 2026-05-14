@@ -1,0 +1,46 @@
+# Provenex production-deployment example: Postgres provenance index.
+#
+# This compose file stands up a single Postgres instance suitable for
+# running examples/production_postgres/deployment.py and the Postgres
+# test suite (tests/test_postgres_index.py, tests/test_merkle_postgres_index.py).
+#
+# Host port 5433 is used so this won't collide with a system Postgres
+# on the default 5432. Adjust if 5433 is also taken in your environment.
+#
+# Bring it up:
+#     docker compose -f examples/production_postgres/docker-compose.yml up -d
+#
+# Connection string:
+#     postgresql://provenex:provenex_dev_only@localhost:5433/provenex
+#
+# Tear it down (preserves data volume):
+#     docker compose -f examples/production_postgres/docker-compose.yml down
+#
+# Tear it down AND delete the data volume:
+#     docker compose -f examples/production_postgres/docker-compose.yml down -v
+#
+# This config is for local development. The password is in plaintext on
+# purpose — do not adapt this file for production without rotating secrets
+# into your secret manager, narrowing pg_hba.conf, and removing the
+# host-port mapping.
+
+services:
+  provenex-postgres:
+    image: postgres:16
+    container_name: provenex_postgres_example
+    environment:
+      POSTGRES_USER: provenex
+      POSTGRES_PASSWORD: provenex_dev_only
+      POSTGRES_DB: provenex
+    ports:
+      - "5433:5432"
+    volumes:
+      - provenex_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U provenex -d provenex"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  provenex_postgres_data:
