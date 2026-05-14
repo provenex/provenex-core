@@ -25,6 +25,7 @@ from typing import Any, List, Optional
 
 from ...core.fingerprinter import Fingerprinter, FingerprinterConfig
 from ...core.receipt import ProvenanceReceipt, ReceiptBuilder, ReceiptSigner
+from ...core.trajectory import TrajectoryContext
 from ...index.base import ProvenanceIndex
 from ...policy.policy import VerificationPolicy
 
@@ -132,6 +133,7 @@ class ProvenexRetriever:
         self,
         query: str,
         output_text: str = "",
+        trajectory: Optional[TrajectoryContext] = None,
     ) -> RetrievalResult:
         """Retrieve documents, verify them, apply policy, and produce a receipt.
 
@@ -143,6 +145,12 @@ class ProvenexRetriever:
                 being generated before inference (the hash field will still
                 be filled — a hash of the empty string — and can be updated
                 later by regenerating the receipt with the actual output).
+            trajectory: Optional :class:`TrajectoryContext` linking this
+                retrieval call into a multi-step agent trajectory. Use
+                :func:`provenex.core.trajectory.start_trajectory` to allocate
+                a fresh trajectory; chain successive calls via
+                ``trajectory.next_step(parent_receipts=[prev])``. See
+                RFC-0003 for the trajectory schema.
 
         Returns:
             A :class:`RetrievalResult` containing kept documents, blocked
@@ -174,7 +182,9 @@ class ProvenexRetriever:
             else:
                 kept.append(doc)
 
-        receipt = builder.finalize(output_text=output_text, signer=self._signer)
+        receipt = builder.finalize(
+            output_text=output_text, signer=self._signer, trajectory=trajectory
+        )
         return RetrievalResult(documents=kept, blocked=blocked, receipt=receipt)
 
     # Convenience alias matching the classic LangChain retriever API. Returns

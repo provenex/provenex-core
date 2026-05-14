@@ -101,7 +101,28 @@ result = retriever.get_relevant_documents_with_receipt(query)
 print(result.receipt.to_json())
 ```
 
-Your existing vector store is untouched. Provenex runs alongside as a parallel signed index. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care. The integration surface is the retriever (drop-in wrappers ship for both LangChain and LlamaIndex), not the database. `your_existing_retriever` keeps doing semantic similarity; Provenex adds cryptographic identity.
+Your existing vector store is untouched. Provenex runs alongside as a parallel signed index. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care. The integration surface is the chunk text the retriever returns — not the database, and not the orchestration framework on top. `your_existing_retriever` keeps doing semantic similarity; Provenex adds cryptographic identity.
+
+## Agentic and multi-step flows
+
+Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve, reflect, retrieve again. Multiple agents collaborate. Tools fetch live data. Provenex is built for these flows alongside the simple one-shot case:
+
+| Framework | Integration |
+| --- | --- |
+| **LangChain** | `ProvenexRetriever` wraps any retriever. Accepts an optional `trajectory=` for multi-step chains. |
+| **LangGraph** | `provenex_retrieval_node(...)` factory + state helpers. Drops into any state-graph DAG; the trajectory threads through the shared state. |
+| **CrewAI** | `ProvenexCrewSession` owns a per-crew trajectory; `session.wrap_tool(tool)` wraps any retrieval / tool / memory callable. |
+| **LlamaIndex** | `ProvenexRetriever` middleware (same pattern as LangChain). |
+| **Anything else** | `provenex.verify_chunks(chunks, index=..., trajectory=...)` — framework-agnostic one-liner. |
+
+Every retrieval step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. One audit pass, the whole run.
+
+Receipts also carry two optional per-chunk fields useful in agent flows:
+
+- **`claims[]`** — self-attribution claims from the agent ("I used this chunk", "this supports the answer", "this is relevant"). Cryptographically bound to the receipt so the agent cannot deny what it asserted. Provenex does not verify the claim itself — that is the agent operator's compliance burden, made auditable by the signature.
+- **`content_source`** — origin classifier (`indexed_corpus`, `live_tool_output`, `memory_store`, `compiled_artifact`). Lets an auditor reading an `UNVERIFIED` outcome distinguish "this chunk was supposed to be in the index and wasn't" (alarm) from "this came from a live web search" (expected).
+
+See [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md) for a runnable agentic example.
 
 ## What a provenance receipt looks like
 
@@ -110,9 +131,9 @@ Every retrieval produces a JSON receipt that records exactly what went into the 
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "1.1.0",
+  "schema_version": "1.4.0",
   "issued_at": "2026-05-08T14:32:07.441Z",
-  "issuer": "provenex-core/0.2.0",
+  "issuer": "provenex-core/0.3.0",
   "output": {
     "hash": "sha256:6e9052525c80e43fb3612dce5edd025d350c8f0a1318097988ab4b0750c2f388",
     "hash_algorithm": "sha256"
@@ -191,11 +212,13 @@ The technical reason this works: Provenex's integration surface is the retriever
 ```bash
 pip install provenex-core                  # core only (pure stdlib)
 pip install "provenex-core[langchain]"     # + LangChain integration
+pip install "provenex-core[langgraph]"     # + LangGraph integration
 pip install "provenex-core[llamaindex]"    # + LlamaIndex integration
+pip install "provenex-core[crewai]"        # + CrewAI integration
 pip install "provenex-core[ed25519]"       # + Ed25519 asymmetric signing
 ```
 
-`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. LangChain, LlamaIndex, and the Ed25519 signer are optional extras.
+`pip install provenex` is also live as a convenience alias that pulls in `provenex-core`. Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. Framework integrations and the Ed25519 signer are optional extras.
 
 ### Try it in 30 seconds
 
@@ -239,9 +262,15 @@ What's in this repo:
 - Local SQLite provenance index with HMAC-signed rows
 - RFC 6962 Merkle transparency log (optional, on top of the SQLite index)
 - Receipt generation, HMAC + Ed25519 signing, offline inclusion-proof verification
-- LangChain integration (retriever middleware + ingestor)
+- Trajectory receipts (schema 1.3.0): per-step receipts linked into a DAG for agentic / multi-step flows
+- Self-attribution claims (schema 1.4.0): signed but unverified records of what the agent said it used
+- Content-source classifier (schema 1.4.0): distinguish indexed-corpus chunks from live-tool / memory-store chunks
+- LangChain integration (retriever middleware + ingestor, trajectory-aware)
+- LangGraph integration (retrieval-node factory + state helpers)
 - LlamaIndex integration (retriever middleware + ingestor)
-- CLI: `provenex ingest / verify / receipt / audit`
+- CrewAI integration (session-scoped trajectory + tool wrapper)
+- Framework-agnostic `provenex.verify_chunks(...)` for everything else
+- CLI: `provenex ingest / verify / receipt / audit` (with `audit --trajectory` for multi-step flows)
 - Python SDK: `pip install provenex-core`
 
 What's not in this repo (commercial features at provenex.ai):

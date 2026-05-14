@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenex-core"
-version = "0.2.0"
+version = "0.3.0"
 description = "Cryptographic provenance verification for enterprise RAG pipelines"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,14 @@ dependencies = []
 [project.optional-dependencies]
 langchain = ["langchain-core>=0.3,<0.4"]
 llamaindex = ["llama-index-core>=0.10,<0.13"]
+# LangGraph users get trajectory-aware retrieval nodes plus state helpers.
+# The integration itself imports nothing from langgraph (LangGraph nodes
+# are just callables); this extra exists for discoverability.
+langgraph = ["langgraph>=0.2,<0.3"]
+# CrewAI users get a session-scoped trajectory + a tool wrapper that emits
+# trajectory-linked receipts on every tool call. As with langgraph, the
+# integration imports nothing from crewai — this extra is for discovery.
+crewai = ["crewai>=0.55"]
 # Adds Ed25519 asymmetric signing so auditors can verify receipts without
 # holding the signing key. The core remains pure-stdlib without this extra.
 ed25519 = ["cryptography>=42.0"]

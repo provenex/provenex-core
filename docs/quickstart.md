@@ -1,14 +1,14 @@
 # Quickstart
 
-Get a working provenance receipt in five minutes. Two paths below: one for an existing LangChain RAG pipeline, one for standalone use without LangChain.
+Get a working provenance receipt in five minutes. Several paths below — drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, or thread receipts through an agentic / multi-step flow.
 
 ## Install
 
 ```bash
-pip install "provenex-core[langchain]"
+pip install "provenex-core[langchain]"   # or [langgraph] / [crewai] / [llamaindex] / [ed25519]
 ```
 
-For the core SDK without LangChain, drop the `[langchain]` extra. Pure stdlib core; LangChain is an optional extra. Python 3.10+.
+For the core SDK with no framework integration, drop the extras. Pure stdlib core; everything else is opt-in. Python 3.10+.
 
 ## Set a signing secret
 
@@ -198,6 +198,56 @@ From the command line:
 
 ```bash
 provenex audit receipt.json --public-key audit.pub
+```
+
+## Path E: agentic / multi-step flows
+
+When an agent retrieves more than once per answer — Self-RAG, RAT, LangGraph DAGs, CrewAI multi-agent crews — each retrieval emits its own receipt, and Provenex links them into a verifiable trajectory. Pick whichever fits your stack:
+
+**Framework-agnostic** (works anywhere):
+
+```python
+import provenex
+
+traj = provenex.start_trajectory(agent_id="research_agent")
+r1 = provenex.verify_chunks(chunks_step_a, index=index, trajectory=traj)
+r2 = provenex.verify_chunks(chunks_step_b, index=index, trajectory=r1.next_trajectory)
+r3 = provenex.verify_chunks(
+    chunks_step_c, index=index, trajectory=r2.next_trajectory, output_text=llm_answer
+)
+
+# After the flow, audit the whole trajectory:
+audit = provenex.audit_trajectory_dag([r.receipt.to_dict() for r in (r1, r2, r3)])
+assert audit.ok
+```
+
+**LangGraph** (drop-in node):
+
+```python
+from provenex.integrations.langgraph import provenex_retrieval_node, start_trajectory_state
+
+retrieve = provenex_retrieval_node(base_retriever=your_retriever, index=index)
+
+# Initialise state once at the start of the graph:
+initial_state = {**start_trajectory_state(agent_id="my_agent"), "query": "..."}
+# Then add `retrieve` as a node; LangGraph calls it like any other.
+```
+
+**CrewAI** (session wraps tools):
+
+```python
+from provenex.integrations.crewai import ProvenexCrewSession
+
+session = ProvenexCrewSession(index=index, signer=HmacSha256Signer(), agent_id="research_agent")
+search_tool = session.wrap_tool(your_search_callable, step_kind="retrieval")
+memory_read = session.wrap_tool(your_memory_callable, step_kind="memory_read")
+# ... pass these to your CrewAI Agents as tools; receipts accumulate in session.receipts ...
+```
+
+End-to-end audit from the shell:
+
+```bash
+provenex audit --trajectory ./receipts/   # validates the whole DAG
 ```
 
 ## Verify a receipt independently

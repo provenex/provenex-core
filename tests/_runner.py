@@ -56,9 +56,37 @@ def _pytest_fixture(*args, **kwargs):
     return decorator
 
 
+class _SkippedModule(Exception):
+    """Raised by the shimmed ``pytest.importorskip`` when the requested module
+    is unavailable. The runner catches this at module import time and reports
+    the file as skipped rather than failed — matching real pytest semantics
+    when optional dependencies aren't installed.
+    """
+
+    def __init__(self, modname: str, reason: str) -> None:
+        super().__init__(f"could not import {modname!r}: {reason}")
+        self.modname = modname
+        self.reason = reason
+
+
+def _pytest_importorskip(modname, minversion=None, reason=None):
+    """Stdlib-runner equivalent of ``pytest.importorskip``.
+
+    Real pytest skips the calling module if the requested package can't be
+    imported. We can't suspend a module mid-import, so we raise
+    ``_SkippedModule`` and let the runner treat that as a clean skip.
+    """
+    import importlib
+    try:
+        return importlib.import_module(modname)
+    except ImportError as exc:
+        raise _SkippedModule(modname, reason or str(exc)) from exc
+
+
 pytest_mod = types.ModuleType("pytest")
 pytest_mod.raises = _pytest_raises
 pytest_mod.fixture = _pytest_fixture
+pytest_mod.importorskip = _pytest_importorskip
 sys.modules["pytest"] = pytest_mod
 
 
@@ -110,12 +138,17 @@ def run():
     test_files = sorted(root.glob("test_*.py"))
 
     passed = 0
+    skipped: list[tuple[str, str]] = []
     failed = []
 
     for tf in test_files:
         print(f"\n=== {tf.name} ===")
         try:
             mod = load_module(tf)
+        except _SkippedModule as exc:
+            print(f"  SKIPPED: {exc}")
+            skipped.append((tf.name, str(exc)))
+            continue
         except Exception as exc:
             print(f"  IMPORT FAILED: {exc}")
             traceback.print_exc()
@@ -145,7 +178,14 @@ def run():
                     mp.undo()
 
     print(f"\n{'=' * 60}")
-    print(f"{passed} passed, {len(failed)} failed")
+    summary = f"{passed} passed, {len(failed)} failed"
+    if skipped:
+        summary += f", {len(skipped)} skipped"
+    print(summary)
+    if skipped:
+        print("\nSkipped:")
+        for fname, reason in skipped:
+            print(f"  {fname}: {reason}")
     if failed:
         print("\nFailures:")
         for fname, tname, exc in failed:

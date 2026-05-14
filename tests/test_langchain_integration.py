@@ -143,3 +143,74 @@ def test_string_documents_accepted():
     retriever = ProvenexRetriever(base_retriever=StringRetriever(), index=index)
     res = retriever.get_relevant_documents_with_receipt("q")
     assert len(res.documents) == 1
+
+
+def test_retriever_threads_trajectory_into_receipt():
+    """A trajectory passed to the retriever surfaces on the emitted receipt."""
+    from provenex.core.trajectory import start_trajectory
+
+    index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
+    ingestor = ProvenexIngestor(index=index)
+    chunks = [StubDoc(page_content="some authorized policy text here.")]
+    ingestor.ingest(chunks, doc_id="d1", authorized=True)
+
+    retriever = ProvenexRetriever(
+        base_retriever=StubRetriever(chunks),
+        index=index,
+        signer=HmacSha256Signer(secret=SECRET),
+    )
+
+    trajectory = start_trajectory(agent_id="research_agent", step_kind="retrieval")
+    res = retriever.get_relevant_documents_with_receipt(
+        "q", output_text="answer", trajectory=trajectory
+    )
+    d = res.receipt.to_dict()
+    assert "trajectory" in d
+    assert d["trajectory"]["trajectory_id"] == trajectory.trajectory_id
+    assert d["trajectory"]["agent_id"] == "research_agent"
+    assert d["trajectory"]["step_kind"] == "retrieval"
+    assert d["trajectory"]["step_index"] == 0
+
+
+def test_retriever_chains_trajectory_across_calls():
+    """Two sequential retrievals share trajectory_id and increment step_index."""
+    from provenex.core.trajectory import start_trajectory
+
+    index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
+    ingestor = ProvenexIngestor(index=index)
+    chunks = [StubDoc(page_content="document A.")]
+    ingestor.ingest(chunks, doc_id="d1", authorized=True)
+
+    retriever = ProvenexRetriever(
+        base_retriever=StubRetriever(chunks),
+        index=index,
+        signer=HmacSha256Signer(secret=SECRET),
+    )
+
+    traj = start_trajectory(agent_id="agent")
+    r1 = retriever.get_relevant_documents_with_receipt("q1", trajectory=traj)
+    traj2 = traj.next_step(parent_receipts=[r1.receipt], step_kind="retrieval")
+    r2 = retriever.get_relevant_documents_with_receipt("q2", trajectory=traj2)
+
+    d1 = r1.receipt.to_dict()
+    d2 = r2.receipt.to_dict()
+    assert d1["trajectory"]["trajectory_id"] == d2["trajectory"]["trajectory_id"]
+    assert d1["trajectory"]["step_index"] == 0
+    assert d2["trajectory"]["step_index"] == 1
+    assert d2["trajectory"]["parent_step_ids"] == [r1.receipt.receipt_id]
+
+
+def test_retriever_without_trajectory_emits_no_block():
+    """Backward compatibility: omitting trajectory leaves the block absent."""
+    index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
+    ingestor = ProvenexIngestor(index=index)
+    chunks = [StubDoc(page_content="hello world")]
+    ingestor.ingest(chunks, doc_id="d1", authorized=True)
+
+    retriever = ProvenexRetriever(
+        base_retriever=StubRetriever(chunks),
+        index=index,
+        signer=HmacSha256Signer(secret=SECRET),
+    )
+    res = retriever.get_relevant_documents_with_receipt("q")
+    assert "trajectory" not in res.receipt.to_dict()

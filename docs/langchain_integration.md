@@ -100,6 +100,21 @@ result = retriever.get_relevant_documents_with_receipt(
 | `blocked` | list | Chunks the policy removed. Surfaced so you can log or display them. |
 | `receipt` | `ProvenanceReceipt` | The signed receipt covering ALL chunks (kept and blocked). |
 
+### Multi-step / agentic flows
+
+For pipelines that retrieve more than once per answer (Self-RAG, RAT, multi-hop), pass a `TrajectoryContext` to thread per-step receipts into a verifiable DAG:
+
+```python
+from provenex import start_trajectory
+
+traj = start_trajectory(agent_id="research_agent")
+r1 = retriever.get_relevant_documents_with_receipt(q1, trajectory=traj)
+next_ctx = traj.next_step(parent_receipts=[r1.receipt], step_kind="retrieval")
+r2 = retriever.get_relevant_documents_with_receipt(q2, trajectory=next_ctx)
+```
+
+Each receipt records its position in the trajectory. After the run, `provenex audit --trajectory <dir>` validates the entire DAG end-to-end. For LangGraph DAGs or CrewAI multi-agent crews, use the framework-specific wrappers in `provenex.integrations.langgraph` and `provenex.integrations.crewai` — they thread the trajectory through framework state automatically.
+
 ### LangChain retriever versions
 
 The middleware supports both:

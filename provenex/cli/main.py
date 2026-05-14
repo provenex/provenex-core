@@ -29,6 +29,7 @@ directly.
 from __future__ import annotations
 
 import argparse
+import glob as _glob
 import json
 import os
 import sys
@@ -38,6 +39,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..core.fingerprinter import Fingerprinter
 from ..core.merkle import verify_inclusion_proof
 from ..core.receipt import HmacSha256Signer, ReceiptBuilder, verify_receipt_signature
+from ..core.trajectory import audit_trajectory_dag
 from ..index.base import VerificationOutcome
 from ..index.sqlite_index import SQLiteProvenanceIndex
 from ..policy.policy import VerificationPolicy
@@ -316,7 +318,142 @@ def _audit_inclusion_proofs(
     return out
 
 
+def _collect_trajectory_receipts(path_or_glob: str) -> List[Path]:
+    """Resolve --trajectory's argument to a list of receipt file paths.
+
+    Acceptable inputs:
+        * A directory: every ``*.json`` file in it (non-recursive).
+        * A glob pattern (anything containing ``*``, ``?``, or ``[``):
+          expanded via ``glob.glob``.
+        * A single file: returned as a one-element list (useful for testing).
+
+    The list is sorted for deterministic audit output across platforms.
+    """
+    p = Path(path_or_glob)
+    if p.is_dir():
+        return sorted(p.glob("*.json"))
+    if any(ch in path_or_glob for ch in "*?["):
+        return sorted(Path(m) for m in _glob.glob(path_or_glob))
+    if p.is_file():
+        return [p]
+    return []
+
+
+def _cmd_audit_trajectory(args: argparse.Namespace) -> int:
+    """Audit a set of receipts as a trajectory DAG.
+
+    Performs per-receipt audits (signature + inclusion proofs) on each
+    receipt in the set, then validates the trajectory-level DAG invariants
+    via ``audit_trajectory_dag``. Overall PASS requires every per-receipt
+    audit and every DAG check to pass.
+    """
+    paths = _collect_trajectory_receipts(args.trajectory)
+    if not paths:
+        print(
+            f"error: no receipt files found at {args.trajectory!r}",
+            file=sys.stderr,
+        )
+        return 2
+
+    parsed: List[Tuple[Path, Dict[str, Any]]] = []
+    for p in paths:
+        try:
+            parsed.append((p, json.loads(p.read_text(encoding="utf-8"))))
+        except json.JSONDecodeError as exc:
+            print(
+                f"error: {p} is not valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+
+    # Per-receipt audits.
+    per_receipt_results: List[Dict[str, Any]] = []
+    all_per_receipt_ok = True
+    for path, receipt in parsed:
+        sig_ok, sig_msg = _audit_signature(receipt, public_key_path=args.public_key)
+        proof_results = _audit_inclusion_proofs(receipt)
+        proofs_ok = all(ok for _, ok, _ in proof_results)
+        receipt_ok = sig_ok and proofs_ok
+        all_per_receipt_ok = all_per_receipt_ok and receipt_ok
+        per_receipt_results.append(
+            {
+                "path": str(path),
+                "receipt_id": receipt.get("receipt_id"),
+                "step_index": (receipt.get("trajectory") or {}).get("step_index"),
+                "signature": {"ok": sig_ok, "message": sig_msg},
+                "inclusion_proofs": [
+                    {"source_index": i, "ok": ok, "message": msg}
+                    for i, ok, msg in proof_results
+                ],
+                "ok": receipt_ok,
+            }
+        )
+
+    # Trajectory-level DAG checks.
+    dag_result = audit_trajectory_dag(r for _, r in parsed)
+    all_ok = all_per_receipt_ok and dag_result.ok
+
+    if args.json:
+        report = {
+            "trajectory_id": dag_result.trajectory_id,
+            "receipt_count": dag_result.receipt_count,
+            "receipts": per_receipt_results,
+            "trajectory_checks": [c.to_dict() for c in dag_result.checks],
+            "overall": "PASS" if all_ok else "FAIL",
+        }
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0 if all_ok else 1
+
+    if args.quiet:
+        print("PASS" if all_ok else "FAIL")
+        return 0 if all_ok else 1
+
+    # Human-readable.
+    print(f"{_dim('Trajectory:')} {dag_result.trajectory_id or '(none)'}")
+    print(f"{_dim('Receipts:  ')} {dag_result.receipt_count}")
+    print()
+    for r in per_receipt_results:
+        mark = _green("OK") if r["ok"] else _red("FAIL")
+        step = r["step_index"]
+        step_str = f"step #{step}" if step is not None else "(no step)"
+        print(f"  [{mark}] {step_str:<10} {r['receipt_id']}")
+        if not r["signature"]["ok"]:
+            print(f"        {_red('signature:')} {r['signature']['message']}")
+        for ip in r["inclusion_proofs"]:
+            if not ip["ok"]:
+                print(
+                    f"        {_red('proof #' + str(ip['source_index']) + ':')} "
+                    f"{ip['message']}"
+                )
+    print()
+    print(f"  {_dim('Trajectory DAG checks:')}")
+    for c in dag_result.checks:
+        mark = _green("OK") if c.ok else _red("FAIL")
+        print(f"    [{mark}] {c.name}: {c.message}")
+    print()
+    print(f"  Overall: {_green('PASS') if all_ok else _red('FAIL')}")
+    return 0 if all_ok else 1
+
+
 def _cmd_audit(args: argparse.Namespace) -> int:
+    # Dispatch to trajectory mode when --trajectory is provided.
+    if getattr(args, "trajectory", None):
+        if args.receipt_file:
+            print(
+                "error: --trajectory and a positional receipt file are mutually "
+                "exclusive",
+                file=sys.stderr,
+            )
+            return 2
+        return _cmd_audit_trajectory(args)
+
+    if not args.receipt_file:
+        print(
+            "error: provide a receipt file or use --trajectory <dir_or_glob>",
+            file=sys.stderr,
+        )
+        return 2
+
     raw = _read_text(args.receipt_file)
     try:
         receipt = json.loads(raw)
@@ -443,7 +580,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_audit.add_argument(
         "receipt_file",
-        help="Receipt JSON file to audit (or - for stdin)",
+        nargs="?",
+        default=None,
+        help="Receipt JSON file to audit (or - for stdin). Omit when --trajectory is used.",
+    )
+    p_audit.add_argument(
+        "--trajectory",
+        default=None,
+        metavar="DIR_OR_GLOB",
+        help=(
+            "Trajectory audit mode: validate that a set of receipts (directory "
+            "or glob pattern) form a consistent trajectory DAG. Mutually "
+            "exclusive with the positional receipt file."
+        ),
     )
     p_audit.add_argument(
         "--public-key",

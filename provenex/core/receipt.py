@@ -38,10 +38,19 @@ from typing import Any, Dict, List, Optional
 
 from ..index.base import VerificationOutcome
 from ..policy.policy import VerificationPolicy, overall_status
+from .trajectory import TrajectoryContext
 
 
-SCHEMA_VERSION = "1.1.0"
-ISSUER = "provenex-core/0.2.0"
+# Schema version history:
+#   1.0.0 — original receipt
+#   1.1.0 — transparency_log block + per-source leaf_index/inclusion_proof
+#   1.2.0 — RESERVED for RFC-0001 (coverage block; not yet shipped)
+#   1.3.0 — trajectory block (RFC-0003)
+#   1.4.0 — per-source claims[] (self-attribution) + content_source field
+# Minor-version bumps are additive: receipts at a lower revision remain
+# valid subsets of higher revisions. Verifiers ignore unknown fields.
+SCHEMA_VERSION = "1.4.0"
+ISSUER = "provenex-core/0.3.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -122,6 +131,61 @@ class HmacSha256Signer(ReceiptSigner):
 # --------------------------------------------------------------------------- #
 
 
+@dataclass(frozen=True)
+class Claim:
+    """A self-attribution claim about a source chunk (schema 1.4.0+).
+
+    Agents — especially Self-RAG-style models that emit reflective tokens
+    ([Relevant], [Supported], [No Support]) — produce assertions *about*
+    retrieved chunks: "I used this", "this supports the answer", "this is
+    relevant to the query". Those assertions are valuable signal, but they
+    are the agent's word, not a property Provenex can independently verify.
+
+    A ``Claim`` is the cryptographically-bound record of that assertion.
+    The signature on the receipt covers every claim verbatim, so an agent
+    cannot deny what it said. Provenex does **not** verify the claim's
+    correctness — that is the agent operator's compliance burden.
+
+    Provenex-defined ``type`` strings (callers can use any string for
+    forward compatibility):
+
+        * ``"model_used_in_answer"`` — the model asserts it used this chunk.
+        * ``"supports_answer"`` — the model asserts the chunk grounds the output.
+        * ``"relevant"`` — the model asserts the chunk is relevant to the query.
+
+    Attributes:
+        type: Free-form classifier (see above for Provenex-defined values).
+        asserted_by: Who emitted the claim. Typically an agent_id, model
+            name, or operator identifier. Opaque; do not encode PII.
+        value: Optional value the assertion carries. Booleans, strings
+            (e.g. ``"partial"``), or ``None``.
+        reason: Optional short rationale string supplied by the agent.
+    """
+
+    type: str
+    asserted_by: str
+    value: Optional[Any] = None
+    reason: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"type": self.type, "asserted_by": self.asserted_by}
+        if self.value is not None:
+            d["value"] = self.value
+        if self.reason is not None:
+            d["reason"] = self.reason
+        return d
+
+
+# Provenex-recognised ``content_source`` values. These describe the
+# *origin* of a chunk's bytes — useful for an auditor reading a receipt
+# that contains an UNVERIFIED outcome. Unknown values are valid for
+# forward compatibility.
+CONTENT_SOURCE_INDEXED_CORPUS = "indexed_corpus"
+CONTENT_SOURCE_LIVE_TOOL_OUTPUT = "live_tool_output"
+CONTENT_SOURCE_MEMORY_STORE = "memory_store"
+CONTENT_SOURCE_COMPILED_ARTIFACT = "compiled_artifact"
+
+
 @dataclass
 class SourceRecord:
     """A single source chunk's entry on the receipt.
@@ -133,6 +197,13 @@ class SourceRecord:
     index that maintains an RFC 6962 transparency log (added in schema
     version 1.1.0). When present, ``inclusion_proof`` can be verified
     offline against the receipt's ``transparency_log.tree_root``.
+
+    Schema 1.4.0 added two optional fields:
+
+        * ``claims`` — list of self-attribution :class:`Claim`s (item 5).
+        * ``content_source`` — origin classifier, e.g.
+          ``"live_tool_output"`` (item 6). Absent means
+          ``"indexed_corpus"`` implicitly.
     """
 
     chunk_index: int
@@ -147,6 +218,8 @@ class SourceRecord:
     normalization_applied: List[str] = field(default_factory=list)
     leaf_index: Optional[int] = None
     inclusion_proof: Optional[List[str]] = None
+    claims: Optional[List[Claim]] = None
+    content_source: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize this source record to a plain dict (JSON-ready)."""
@@ -166,6 +239,10 @@ class SourceRecord:
             d["leaf_index"] = self.leaf_index
         if self.inclusion_proof is not None:
             d["inclusion_proof"] = list(self.inclusion_proof)
+        if self.claims:
+            d["claims"] = [c.to_dict() for c in self.claims]
+        if self.content_source is not None:
+            d["content_source"] = self.content_source
         return d
 
 
@@ -190,6 +267,7 @@ class ProvenanceReceipt:
     schema_version: str = SCHEMA_VERSION
     issuer: str = ISSUER
     transparency_log: Optional[Dict[str, Any]] = None
+    trajectory: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -217,6 +295,8 @@ class ProvenanceReceipt:
         }
         if self.transparency_log is not None:
             d["transparency_log"] = dict(self.transparency_log)
+        if self.trajectory is not None:
+            d["trajectory"] = dict(self.trajectory)
         if self.signature_algorithm is not None:
             d["signature"] = {
                 "algorithm": self.signature_algorithm,
@@ -301,6 +381,8 @@ class ReceiptBuilder:
         normalization_applied: Optional[List[str]] = None,
         leaf_index: Optional[int] = None,
         inclusion_proof: Optional[List[str]] = None,
+        claims: Optional[List[Claim]] = None,
+        content_source: Optional[str] = None,
     ) -> None:
         """Add one source chunk to the receipt under construction.
 
@@ -318,6 +400,17 @@ class ReceiptBuilder:
             inclusion_proof: RFC 6962 audit path for ``leaf_index`` as a
                 list of ``sha256:<hex>`` strings. Verifiable offline against
                 the receipt's ``transparency_log.tree_root``.
+            claims: Optional list of :class:`Claim` self-attributions
+                from the calling agent about this chunk (schema 1.4.0+).
+                Claims are cryptographically bound to the receipt but
+                NOT verified by Provenex. See :class:`Claim`.
+            content_source: Optional origin classifier (schema 1.4.0+).
+                One of the ``CONTENT_SOURCE_*`` constants, or any
+                forward-compatible string. Absent means the implicit
+                default ``"indexed_corpus"`` — set explicitly for
+                ``"live_tool_output"``, ``"memory_store"``, etc., so an
+                auditor reading an UNVERIFIED outcome knows whether to
+                expect the chunk in the index.
         """
         record = SourceRecord(
             chunk_index=len(self._sources),
@@ -332,6 +425,8 @@ class ReceiptBuilder:
             normalization_applied=list(normalization_applied or []),
             leaf_index=leaf_index,
             inclusion_proof=inclusion_proof,
+            claims=list(claims) if claims else None,
+            content_source=content_source,
         )
         self._sources.append(record)
 
@@ -356,6 +451,7 @@ class ReceiptBuilder:
         output_text: str,
         signer: Optional[ReceiptSigner] = None,
         transparency_log: Optional[Dict[str, Any]] = None,
+        trajectory: Optional[TrajectoryContext] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -373,6 +469,10 @@ class ReceiptBuilder:
                 ``leaf_index`` / ``inclusion_proof`` fields. Recorded under
                 the receipt's ``transparency_log`` key and covered by the
                 signature.
+            trajectory: Optional :class:`TrajectoryContext` linking this
+                receipt into a multi-step agentic trajectory. When supplied,
+                the trajectory block is emitted on the receipt and covered
+                by the signature. See :mod:`provenex.core.trajectory`.
 
         Returns:
             The completed :class:`ProvenanceReceipt`.
@@ -385,6 +485,7 @@ class ReceiptBuilder:
             policy=self._policy,
             summary=self._summary(),
             transparency_log=dict(transparency_log) if transparency_log else None,
+            trajectory=trajectory.to_dict() if trajectory is not None else None,
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

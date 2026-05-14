@@ -2,7 +2,17 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`1.1.0`**.
+This document specifies the schema. The current schema version is **`1.4.0`**.
+
+Schema history (every minor bump is additive — earlier-version receipts remain valid subsets of later versions):
+
+| Version | What it added |
+| --- | --- |
+| `1.0.0` | Original receipt format. |
+| `1.1.0` | `transparency_log` block + per-source `leaf_index` / `inclusion_proof`. |
+| `1.2.0` | *Reserved* for a future coverage block (chunk-identity-under-drift). |
+| `1.3.0` | Optional `trajectory` block (multi-step agentic linkage). |
+| `1.4.0` | Per-source `claims[]` (self-attribution) + per-source `content_source` (origin classifier). |
 
 ## Design properties
 
@@ -18,7 +28,7 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "1.1.0",
+  "schema_version": "1.4.0",
   "issued_at": "2026-05-08T14:32:07.441Z",
   "issuer": "provenex-core/0.2.0",
   "output": { ... },
@@ -26,6 +36,7 @@ The schema is intentionally:
   "policy": { ... },
   "summary": { ... },
   "transparency_log": { ... },
+  "trajectory": { ... },
   "signature": { ... }
 }
 ```
@@ -33,7 +44,7 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. `1.1.0` for this revision. |
+| `schema_version` | string | Semver. `1.4.0` for this revision. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
 | `issuer` | string | Software identifier, e.g. `provenex-core/0.2.0`. |
 | `output` | object | See below. |
@@ -41,6 +52,7 @@ The schema is intentionally:
 | `policy` | object | The verification policy in effect. See below. |
 | `summary` | object | Aggregate counts and overall status. See below. |
 | `transparency_log` | object | Optional. Present iff the receipt was produced against a Merkle transparency log (1.1.0+). See below. |
+| `trajectory` | object | Optional. Present iff the receipt is part of a multi-step agent trajectory (1.3.0+). See below. |
 | `signature` | object | Optional. Present iff the receipt was signed. See below. |
 
 ## `output`
@@ -96,6 +108,8 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
 | `normalization_applied` | array of string | Ordered list of normalization steps applied. Used to reproduce the pipeline byte-for-byte. |
 | `leaf_index` | integer | Optional (1.1.0+). Position of this fingerprint in the transparency log. Omitted on receipts produced without a log. |
 | `inclusion_proof` | array of string | Optional (1.1.0+). RFC 6962 audit path as `sha256:<hex>` strings. Verifiable offline against `transparency_log.tree_root`. |
+| `claims` | array of object | Optional (1.4.0+). Self-attribution claims from the calling agent about this chunk. See **`claims[]`** below. |
+| `content_source` | string | Optional (1.4.0+). Origin classifier. See **`content_source`** below. |
 
 ### Verification outcomes
 
@@ -106,6 +120,56 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
 | `UNAUTHORIZED` | Fingerprint in index, signature OK, but document is not currently authorized. |
 | `UNVERIFIED` | Fingerprint not in index. The chunk was not ingested through Provenex. |
 | `TAMPERED` | Fingerprint in index but the stored row's HMAC signature failed verification. |
+
+### `claims[]`
+
+Optional (schema 1.4.0+). A list of self-attribution claims from the calling agent or model about this specific source chunk. Designed for Self-RAG-style architectures where the model emits reflective tokens (`[Relevant]`, `[Supported]`, `[No Support]`) that classify retrieved content, and for any flow where the agent asserts something about the chunks (used / supported / relevant / cited).
+
+```json
+{
+  "claims": [
+    {
+      "type": "model_used_in_answer",
+      "asserted_by": "self_rag_agent",
+      "value": true
+    },
+    {
+      "type": "supports_answer",
+      "asserted_by": "self_rag_agent",
+      "value": "partial",
+      "reason": "supports the first sub-claim, not the second"
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `claims[].type` | string | Free-form classifier. Provenex-defined values: `"model_used_in_answer"`, `"supports_answer"`, `"relevant"`. Unknown values are valid for forward compatibility. |
+| `claims[].asserted_by` | string | Caller-chosen opaque identifier for the agent / model that emitted the claim. Do not encode PII. |
+| `claims[].value` | boolean \| string \| null | Optional value the assertion carries (e.g. `true`, `"partial"`). |
+| `claims[].reason` | string | Optional short rationale supplied by the agent. |
+
+**Trust model — load-bearing:** Provenex binds claims into the receipt's signature so the asserting agent cannot deny what it said, but **does not verify** that a claim is correct. A claim is **signed evidence of what was asserted**, not a verified fact. The trust root for the *content* of a claim is the agent operator; the trust root for the *integrity* of the record is Provenex's signature. Compliance teams reading a receipt should treat claims as the agent's word, not a Provenex attestation.
+
+### `content_source`
+
+Optional (schema 1.4.0+). Classifies the *origin* of this chunk's bytes. Useful when an `UNVERIFIED` outcome is present: an auditor reading the receipt needs to know whether to alarm (chunk was *supposed* to be in the indexed corpus and wasn't) or to expect the outcome (chunk was a live tool output that the corpus never claimed to cover).
+
+```json
+{ "content_source": "live_tool_output" }
+```
+
+Provenex-defined values (callers can use any string for forward compatibility):
+
+| Value | Meaning |
+| --- | --- |
+| `"indexed_corpus"` | Default semantic. Chunk is expected to be in the Provenex index. Implicit when the field is absent. |
+| `"live_tool_output"` | Chunk came from a live tool (web search, live DB query) and was never ingested. `UNVERIFIED` for this kind of chunk is expected, not an alarm. |
+| `"memory_store"` | Chunk came from an agent's memory store (CrewAI memory, LangGraph state, custom store). |
+| `"compiled_artifact"` | Chunk is a derived artifact from a compilation pipeline. Reserved for future use with the compilation-manifest model. |
+
+Combined with `verification_outcome`, this lets auditors distinguish "expected miss" from "alarm condition" without needing application-level context. The field is covered by the receipt signature so an attacker cannot retroactively change the origin classifier to dampen an alarm.
 
 ## `policy`
 
@@ -199,6 +263,42 @@ ok = verify_inclusion_proof(
     root=root,
 )
 ```
+
+## `trajectory`
+
+Optional. Present iff the receipt is part of a multi-step agent trajectory (schema 1.3.0+). Links per-step receipts into a verifiable DAG so an auditor handed the full receipt set can reconstruct an iterative agent's retrieval trail. Designed for Agentic RAG, Self-RAG, RAT, multi-hop retrieval, LangGraph DAGs, CrewAI multi-agent flows, and any future iterative pattern.
+
+```json
+{
+  "trajectory": {
+    "trajectory_id": "trj_a3f1c0d2e419bf48a8b7d54f9c01ea73",
+    "step_index": 2,
+    "parent_step_ids": ["prx_c5d8e1f203a497bd5a6e0c2b48f7d519"],
+    "step_kind": "retrieval",
+    "agent_id": "research_agent",
+    "trajectory_started_at": "2026-05-13T10:00:00.000Z"
+  }
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `trajectory.trajectory_id` | string | Globally unique. Prefix `trj_` plus 32 hex characters (16 random bytes). Shared by every receipt in the trajectory. |
+| `trajectory.step_index` | integer | 0-based ordinal within the trajectory. In DAG shapes, sibling branches may share an index; uniqueness is along the parent chain. |
+| `trajectory.parent_step_ids` | array of string | `receipt_id` values of parent steps. Empty array for the root step. **List** (not scalar) so DAG shapes round-trip (LangGraph branches, CrewAI parallel agents). |
+| `trajectory.step_kind` | string | Optional. Free-form classifier. Provenex-defined values: `retrieval`, `tool_call`, `memory_read`, `memory_write`, `compilation`. Unknown values are valid for forward compatibility. |
+| `trajectory.agent_id` | string | Optional. Caller-chosen opaque identifier for the emitting agent. Useful in multi-agent flows. Do not encode PII here. |
+| `trajectory.trajectory_started_at` | string | ISO-8601 UTC with millisecond precision. Same value across every step in the trajectory; lets a single step locate itself in time without the whole set. |
+
+The trajectory block is covered by the receipt signature using the same canonical-JSON rule as every other field. Tampering with any trajectory field invalidates the signature.
+
+Verification semantics:
+
+- **Per-step verification** is unchanged — each receipt verifies its own signature, sources, and inclusion proofs exactly as a single-step receipt would.
+- **Trajectory verification** is additional. `provenex audit --trajectory <dir_or_glob>` takes a set of receipt files and validates: all share the same `trajectory_id`; the DAG formed by `parent_step_ids` is acyclic; every referenced parent resolves to a receipt in the set; at least one root step exists.
+- **Trust model.** Provenex binds parent-step claims cryptographically (the signature) but does not verify that the agent's claim about parent steps is causally correct — that is a verifiable-claim property, not a verifiable-computation property. The signature ensures the claim is non-repudiable.
+
+Backward compatibility: receipts without a `trajectory` block behave identically to schema 1.1.0 / 1.2.0 receipts. Verifiers that do not understand 1.3.0 should ignore unknown fields per the minor-version additive rule.
 
 ## `signature`
 

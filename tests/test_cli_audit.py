@@ -125,7 +125,7 @@ def test_audit_json_output_has_required_keys(monkeypatch):
     assert report["overall"] == "PASS"
     assert report["signature"]["ok"] is True
     assert report["receipt_id"].startswith("prx_")
-    assert report["schema_version"] == "1.1.0"
+    assert report["schema_version"] == "1.4.0"
     assert len(report["inclusion_proofs"]) == 1
     assert report["inclusion_proofs"][0]["ok"] is True
 
@@ -145,6 +145,187 @@ def test_audit_invalid_json_returns_two():
     code, _, stderr = _run_audit(str(bad))
     assert code == 2
     assert "not valid JSON" in stderr
+
+
+# --------------------------------------------------------------------------- #
+# Trajectory audit (--trajectory mode, RFC-0003)                              #
+# --------------------------------------------------------------------------- #
+
+
+def _write_trajectory_chain(workdir: Path, n: int) -> list[Path]:
+    """Write n linearly-chained, signed, Merkle-backed receipts to disk."""
+    from provenex.core.trajectory import start_trajectory
+
+    index = MerkleSQLiteProvenanceIndex(str(workdir / "p.db"))
+    fp = Fingerprinter()
+    result = fp.fingerprint(_DEMO_TEXT)
+    for f in result.fingerprints:
+        index.add(
+            fingerprint=f.fingerprint,
+            document_id="policy_v1",
+            document_version=result.document_version,
+            chunk_offset=f.offset,
+            chunk_length=f.length,
+            authorized=True,
+        )
+    target_fp = result.fingerprints[0].fingerprint
+    leaf_bytes, leaf_index, proof = index.inclusion_proof(target_fp)
+    signer = HmacSha256Signer()
+
+    paths: list[Path] = []
+    traj = start_trajectory(agent_id="test_agent")
+    last_receipt = None
+    for i in range(n):
+        if last_receipt is not None:
+            traj = traj.next_step(parent_receipts=[last_receipt])
+        b = ReceiptBuilder(policy=VerificationPolicy())
+        b.add_source(
+            fingerprint=target_fp,
+            outcome=index.verify(target_fp),
+            entry=index.lookup(target_fp),
+            leaf_index=leaf_index,
+            inclusion_proof=proof,
+        )
+        r = b.finalize(
+            output_text=f"step {i}",
+            signer=signer,
+            transparency_log={
+                "tree_size": index.tree_size(),
+                "tree_root": index.tree_root(),
+            },
+            trajectory=traj,
+        )
+        path = workdir / f"step_{i:03d}.json"
+        path.write_text(r.to_json())
+        paths.append(path)
+        last_receipt = r
+    index.close()
+    return paths
+
+
+def test_audit_trajectory_passes_on_valid_chain(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    _write_trajectory_chain(workdir, n=3)
+    code, stdout, _ = _run_audit("--trajectory", str(workdir))
+    assert code == 0
+    assert "PASS" in stdout
+    assert "FAIL" not in stdout
+
+
+def test_audit_trajectory_accepts_glob(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    _write_trajectory_chain(workdir, n=2)
+    code, stdout, _ = _run_audit(
+        "--trajectory", str(workdir / "step_*.json")
+    )
+    assert code == 0
+    assert "PASS" in stdout
+
+
+def test_audit_trajectory_fails_on_mixed_trajectory_ids(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    # Two separate trajectories of two steps each, all in the same directory.
+    _write_trajectory_chain(workdir, n=2)
+    workdir2 = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    second = _write_trajectory_chain(workdir2, n=2)
+    # Move the second trajectory's receipts into the first directory.
+    for src in second:
+        dest = workdir / ("other_" + src.name)
+        dest.write_text(src.read_text())
+    code, stdout, _ = _run_audit("--trajectory", str(workdir))
+    assert code == 1
+    assert "FAIL" in stdout
+    assert "shared_trajectory_id" in stdout
+
+
+def test_audit_trajectory_fails_on_tampered_receipt(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    paths = _write_trajectory_chain(workdir, n=3)
+    # Tamper with one receipt's trajectory.step_index — signature must fail.
+    data = json.loads(paths[1].read_text())
+    data["trajectory"]["step_index"] = 99
+    paths[1].write_text(json.dumps(data))
+    code, stdout, _ = _run_audit("--trajectory", str(workdir))
+    assert code == 1
+    assert "FAIL" in stdout
+
+
+def test_audit_trajectory_json_output(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    _write_trajectory_chain(workdir, n=3)
+    code, stdout, _ = _run_audit("--trajectory", str(workdir), "--json")
+    assert code == 0
+    report = json.loads(stdout)
+    assert report["overall"] == "PASS"
+    assert report["trajectory_id"].startswith("trj_")
+    assert report["receipt_count"] == 3
+    assert len(report["receipts"]) == 3
+    # Every per-receipt entry has the expected shape.
+    for r in report["receipts"]:
+        assert r["ok"] is True
+        assert r["receipt_id"].startswith("prx_")
+        assert r["step_index"] in {0, 1, 2}
+    # DAG checks are listed.
+    check_names = {c["name"] for c in report["trajectory_checks"]}
+    assert "has_trajectory_block" in check_names
+    assert "shared_trajectory_id" in check_names
+    assert "dag_acyclic" in check_names
+    assert "has_root_step" in check_names
+    assert "no_dangling_parents" in check_names
+
+
+def test_audit_trajectory_quiet_emits_only_pass(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    _write_trajectory_chain(workdir, n=2)
+    code, stdout, _ = _run_audit("--trajectory", str(workdir), "--quiet")
+    assert code == 0
+    assert stdout.strip() == "PASS"
+
+
+def test_audit_trajectory_empty_directory_returns_two():
+    empty = Path(tempfile.mkdtemp())
+    code, _, stderr = _run_audit("--trajectory", str(empty))
+    assert code == 2
+    assert "no receipt files" in stderr.lower()
+
+
+def test_audit_trajectory_mutually_exclusive_with_positional(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path, _ = _write_receipt(workdir)
+    code, _, stderr = _run_audit(
+        "--trajectory", str(workdir), str(receipt_path)
+    )
+    assert code == 2
+    assert "mutually exclusive" in stderr
+
+
+def test_audit_with_no_arguments_returns_two():
+    code, _, stderr = _run_audit()
+    # argparse may handle the missing-required-arg internally with exit 2
+    # before we reach our error message. Either way, exit code 2.
+    assert code == 2
+
+
+def test_audit_trajectory_fails_when_one_signature_breaks(monkeypatch):
+    """Per-receipt audit catches a broken signature even if the DAG is valid."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    paths = _write_trajectory_chain(workdir, n=2)
+    # Forge the signature on receipt[0].
+    data = json.loads(paths[0].read_text())
+    data["signature"]["value"] = "00" * 32
+    paths[0].write_text(json.dumps(data))
+    code, stdout, _ = _run_audit("--trajectory", str(workdir))
+    assert code == 1
+    assert "FAIL" in stdout
 
 
 def test_audit_receipt_without_transparency_log_still_works(monkeypatch):

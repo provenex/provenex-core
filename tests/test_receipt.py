@@ -42,7 +42,11 @@ def test_receipt_basic_schema():
     d = receipt.to_dict()
     # Required top-level fields per the schema.
     assert "receipt_id" in d
-    assert d["schema_version"] == "1.1.0"
+    # Bumped to 1.4.0 to add per-source claims[] and content_source.
+    # History: 1.1.0 (transparency log) → 1.2.0 (RESERVED, RFC-0001
+    # coverage block) → 1.3.0 (trajectory) → 1.4.0 (claims +
+    # content_source). All prior receipts remain valid as a subset.
+    assert d["schema_version"] == "1.4.0"
     assert d["issuer"].startswith("provenex-core/")
     assert "issued_at" in d
     assert d["output"]["hash"].startswith("sha256:")
