@@ -293,10 +293,26 @@ def provenex_retrieval_node(
             else:
                 kept.append(doc)
 
+        # Stamp the factory-configured step_kind / agent_id onto the
+        # emitted trajectory block. Previously the factory's step_kind
+        # parameter only fired on a freshly-created trajectory; if the
+        # caller seeded the cursor elsewhere (the common case in
+        # multi-node graphs), the emitted receipt's step_kind was
+        # whatever was on the cursor — usually None. Per-emission
+        # override mirrors what ``verify_chunks(step_kind=...)`` does
+        # and is what the factory's API contract has always implied.
+        emit_trajectory = TrajectoryContext(
+            trajectory_id=trajectory_ctx.trajectory_id,
+            step_index=trajectory_ctx.step_index,
+            trajectory_started_at=trajectory_ctx.trajectory_started_at,
+            parent_step_ids=trajectory_ctx.parent_step_ids,
+            step_kind=step_kind,
+            agent_id=agent_id if agent_id is not None else trajectory_ctx.agent_id,
+        )
         receipt = builder.finalize(
             output_text="",
             signer=signer,
-            trajectory=trajectory_ctx,
+            trajectory=emit_trajectory,
         )
 
         # Advance trajectory cursor for the next step in the graph.

@@ -134,6 +134,8 @@ class ProvenexRetriever:
         query: str,
         output_text: str = "",
         trajectory: Optional[TrajectoryContext] = None,
+        step_kind: str = "retrieval",
+        agent_id: Optional[str] = None,
     ) -> RetrievalResult:
         """Retrieve documents, verify them, apply policy, and produce a receipt.
 
@@ -151,6 +153,14 @@ class ProvenexRetriever:
                 a fresh trajectory; chain successive calls via
                 ``trajectory.next_step(parent_receipts=[prev])``. See
                 RFC-0003 for the trajectory schema.
+            step_kind: Trajectory ``step_kind`` recorded on the emitted
+                receipt. Defaults to ``"retrieval"`` — a retriever's
+                receipts are retrieval steps, by definition. Override
+                per-call when the same retriever is reused for a
+                different trajectory shape (e.g. ``"memory_read"``).
+            agent_id: Optional agent identifier override for this call.
+                When supplied, overrides whatever ``trajectory.agent_id``
+                was on the cursor.
 
         Returns:
             A :class:`RetrievalResult` containing kept documents, blocked
@@ -182,8 +192,25 @@ class ProvenexRetriever:
             else:
                 kept.append(doc)
 
+        # When a trajectory is supplied, stamp step_kind / agent_id onto
+        # it for this emission. Mirrors ``verify_chunks(step_kind=...)``.
+        # Without a trajectory there is no trajectory block on the
+        # receipt to label; step_kind is a per-trajectory-step concept.
+        emit_trajectory: Optional[TrajectoryContext] = trajectory
+        if trajectory is not None:
+            emit_trajectory = TrajectoryContext(
+                trajectory_id=trajectory.trajectory_id,
+                step_index=trajectory.step_index,
+                trajectory_started_at=trajectory.trajectory_started_at,
+                parent_step_ids=trajectory.parent_step_ids,
+                step_kind=step_kind,
+                agent_id=agent_id if agent_id is not None else trajectory.agent_id,
+            )
+
         receipt = builder.finalize(
-            output_text=output_text, signer=self._signer, trajectory=trajectory
+            output_text=output_text,
+            signer=self._signer,
+            trajectory=emit_trajectory,
         )
         return RetrievalResult(documents=kept, blocked=blocked, receipt=receipt)
 

@@ -300,9 +300,7 @@ def test_retrieve_then_admit_threads_trajectory_into_one_dag():
 
 def test_admission_node_emits_step_kind_tool_call():
     """The Phase 2 admission node propagates step_kind="tool_call" onto
-    the emitted receipt's trajectory block. (The retrieval node has a
-    pre-existing wrinkle here — see issue #N — so we test the Phase 2
-    half in isolation.)
+    the emitted receipt's trajectory block.
     """
     node = provenex_admission_node(
         name="web_search",
@@ -315,6 +313,39 @@ def test_admission_node_emits_step_kind_tool_call():
     delta = node({"tool_parameters": {"q": "x"}})
     receipt_d = delta["receipts"][0].to_dict()
     assert receipt_d["trajectory"]["step_kind"] == "tool_call"
+
+
+def test_retrieve_then_admit_yields_correct_step_kinds():
+    """Mixed trajectory now records distinct step_kinds for each
+    emission — ``retrieval`` for the retrieval node, ``tool_call`` for
+    the admission node. This drives the trajectory audit's
+    ``per_step_kind`` aggregate correctly.
+    """
+    index = _seeded_index()
+    retrieve = provenex_retrieval_node(
+        base_retriever=StubRetriever([
+            StubDoc(page_content="seeded chunk for trajectory tests"),
+        ]),
+        index=index,
+        signer=_signer(),
+    )
+    admit = provenex_admission_node(
+        name="web_search",
+        policy=_policy(),
+        signer=_signer(),
+        request_factory=_request_factory,
+        operation="query",
+        target_system="google_custom_search",
+    )
+    state: Dict[str, Any] = {
+        **start_trajectory_state(agent_id="lg_agent"),
+        "query": "what",
+    }
+    state.update(retrieve(state))
+    state["tool_parameters"] = {"q": "x"}
+    state.update(admit(state))
+    kinds = [r.to_dict()["trajectory"]["step_kind"] for r in state["receipts"]]
+    assert kinds == ["retrieval", "tool_call"]
 
 
 # --------------------------------------------------------------------------- #
