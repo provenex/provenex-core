@@ -7,7 +7,7 @@
 
 **Policy enforcement for AI data access, with cryptographic proof.**
 
-> **Buyer framing.** Platform engineering champions Provenex (a runtime guardrail they don't have to build). Security signs off (cryptographic enforcement, not promises). Compliance consumes the output (a queryable, exportable, regulator-ready record). Three reinforcing budget lines, faster close than a compliance-only sale.
+Platform engineering champions Provenex (a runtime guardrail they don't have to build). Security signs off (cryptographic enforcement, not promises). Compliance consumes the output (a queryable, exportable, regulator-ready record). 
 
 Provenex is the policy enforcement layer for AI data access. You declare your security policy once — in our native YAML config (or OPA/Rego, commercial) — and Provenex enforces it on every retrieval, then emits a cryptographically signed receipt that proves which chunks were allowed, which were blocked, and under what policy.
 
