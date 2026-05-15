@@ -154,6 +154,7 @@ def wrap_mcp_request(
     trajectory: Optional[TrajectoryContext] = None,
     default_target_system: Optional[str] = None,
     redact_parameters: bool = False,
+    sink: Any = None,
 ) -> AdmissionResult:
     """Admission-check one MCP ``tools/call`` request.
 
@@ -195,6 +196,7 @@ def wrap_mcp_request(
         signer=signer,
         trajectory=trajectory,
         redact_parameters=redact_parameters,
+        sink=sink,
     )
 
 
@@ -207,6 +209,7 @@ def provenex_mcp_admission(
     redact_parameters: bool = False,
     on_deny: Optional[Callable[[AdmissionResult, Any], Any]] = None,
     receipts_sink: Optional[List[Any]] = None,
+    sink: Any = None,
 ) -> Callable[[Callable[[Any], Any]], Callable[[Any], Any]]:
     """Decorator for an MCP ``tools/call`` handler.
 
@@ -254,6 +257,7 @@ def provenex_mcp_admission(
                 request_factory=request_factory,
                 default_target_system=default_target_system,
                 redact_parameters=redact_parameters,
+                sink=sink,
             )
             if receipts_sink is not None:
                 receipts_sink.append(result.receipt)

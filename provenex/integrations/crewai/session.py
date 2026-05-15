@@ -72,6 +72,7 @@ class ProvenexCrewSession:
         policy: Any = None,  # Policy | VerificationPolicy | None
         fingerprinter: Optional[Fingerprinter] = None,
         agent_id: Optional[str] = None,
+        sink: Any = None,
     ) -> None:
         self._index = index
         self._signer = signer
@@ -85,6 +86,37 @@ class ProvenexCrewSession:
         self._agent_id = agent_id
         self._trajectory: TrajectoryContext = start_trajectory(agent_id=agent_id)
         self._receipts: List[ProvenanceReceipt] = []
+        # 0.6.6+: per-session sinks. Sinks are accumulated so callers
+        # can ``session.add_sink(...)`` after construction. A None or
+        # empty list means no streaming export.
+        self._sinks: List[Any] = []
+        if sink is not None:
+            if isinstance(sink, list):
+                self._sinks.extend(sink)
+            else:
+                self._sinks.append(sink)
+
+    def add_sink(self, sink: Any) -> None:
+        """Add a downstream sink to this session.
+
+        Every receipt emitted by ``verify_chunks`` / ``admission_check``
+        / ``wrap_tool*`` after this call is also published to ``sink``.
+        Sinks already on the session continue to receive receipts —
+        :meth:`add_sink` is additive.
+
+        Failures in any sink are swallowed and logged via
+        :mod:`warnings`; the agent's hot path is never broken by
+        export degradation.
+        """
+        self._sinks.append(sink)
+
+    def _session_sink(self) -> Any:
+        """Return the effective sink for this emission (None / single / list)."""
+        if not self._sinks:
+            return None
+        if len(self._sinks) == 1:
+            return self._sinks[0]
+        return list(self._sinks)
 
     # ----------------------------------------------------------------- state
 
@@ -149,6 +181,7 @@ class ProvenexCrewSession:
             step_kind=step_kind,
             agent_id=agent_id if agent_id is not None else self._agent_id,
             output_text=output_text,
+            sink=self._session_sink(),
         )
 
         # Thread the new cursor back into session state.
@@ -266,6 +299,7 @@ class ProvenexCrewSession:
             output_text=output_text,
             redact_parameters=redact_parameters,
             redact_inputs=redact_inputs,
+            sink=self._session_sink(),
         )
         # Thread the new cursor back into session state. ``next_trajectory``
         # is non-None because we passed a trajectory in.

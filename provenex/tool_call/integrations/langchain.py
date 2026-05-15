@@ -104,6 +104,7 @@ class ProvenexToolWrapper:
         target_system: Optional[str] = None,
         redact_parameters: bool = False,
         on_deny: Optional[Callable[[AdmissionResult], Any]] = None,
+        sink: Any = None,
     ) -> None:
         if not hasattr(base_tool, "name"):
             raise TypeError(
@@ -122,6 +123,7 @@ class ProvenexToolWrapper:
         self._target_system = target_system
         self._redact_parameters = redact_parameters
         self._on_deny = on_deny
+        self._sink = sink
         # Receipt log surfaced for the application to drain after each
         # agent step. The wrapper does not assume the framework knows
         # about Provenex receipts; the caller is responsible for reading
@@ -194,6 +196,7 @@ class ProvenexToolWrapper:
             signer=self._signer,
             trajectory=trajectory,
             redact_parameters=self._redact_parameters,
+            sink=self._sink,
         )
         self._receipts.append(result.receipt)
 

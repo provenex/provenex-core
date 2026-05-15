@@ -31,6 +31,7 @@ from ..core.receipt import (
     compute_caller_hash,
     compute_value_hash,
 )
+from ..export.streaming import _safe_publish
 from ..core.trajectory import TrajectoryContext
 from ..policy.evaluator import (
     BINDING_AT_EVALUATE,
@@ -116,6 +117,7 @@ def admission_check(
     redact_parameters: bool = False,
     redact_inputs: bool = False,
     caller_hash_salt: Optional[bytes] = None,
+    sink: Any = None,
 ) -> AdmissionResult:
     """Evaluate one tool-call attempt against policy and emit a signed receipt.
 
@@ -295,6 +297,10 @@ def admission_check(
         tool_call_control=tool_call_control_block,
         caller_hash=emit_caller_hash,
     )
+
+    # Schema 2.3.0 / 0.6.6+: ship to downstream sink if supplied.
+    # Failures swallowed (warnings.warn); agent hot path never broken.
+    _safe_publish(sink, receipt)
 
     next_trajectory: Optional[TrajectoryContext] = None
     if trajectory is not None:

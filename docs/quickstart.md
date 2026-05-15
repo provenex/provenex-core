@@ -568,6 +568,36 @@ provenex audit --trajectory ./receipts/   # one CLI pass; mixed kinds
 
 See [`../examples/memory_and_model_inference_demo.py`](../examples/memory_and_model_inference_demo.py) for a runnable end-to-end demo.
 
+## Streaming receipts to a SIEM / firehose (0.6.6+)
+
+Every receipt-emitting entrypoint accepts an optional `sink=` parameter. Provenex publishes after the receipt is finalised. The hot path is unchanged; the firehose runs alongside.
+
+```python
+from provenex import (
+    HmacSha256Signer, RequestContext, ToolCallContext,
+    admission_check, MultiSink, FileJSONLSink, StdoutJSONLSink,
+)
+from provenex.export.kafka import KafkaSink   # extra: [export-kafka]
+
+# Three destinations: real-time firehose + local archive + dev stdout.
+sink = MultiSink([
+    KafkaSink(bootstrap_servers="kafka.internal:9092", topic="provenex-receipts"),
+    FileJSONLSink("/var/log/provenex"),
+    StdoutJSONLSink(),
+])
+
+result = admission_check(
+    tool=ToolCallContext(name="jira", operation="create_issue", parameters={...}),
+    request=RequestContext(...),
+    signer=HmacSha256Signer(),
+    sink=sink,
+)
+```
+
+**Error semantics.** Sink failures are swallowed and logged via `warnings.warn` — the agent's hot path is never broken by export degradation. Wrap with `RetryQueueSink(downstream, maxlen=...)` to buffer through transient broker hiccups.
+
+**Reference sinks.** `StdoutJSONLSink`, `FileJSONLSink` (daily-rotated), `MultiSink` (fan-out), `RetryQueueSink` (bounded retry) in the stdlib core. `KafkaSink`, `SQSSink`, `S3AppendSink` (date-hour-partitioned), `PubSubSink` behind optional extras. Define your own via the `ReceiptSink` Protocol. See [`streaming_export.md`](streaming_export.md) for the full reference; see [`../examples/streaming_export_demo.py`](../examples/streaming_export_demo.py) for a runnable end-to-end demo.
+
 ## Verify a receipt independently
 
 Anyone with the receipt JSON and the signing secret can confirm the receipt hasn't been altered:

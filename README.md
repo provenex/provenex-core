@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.5)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.5)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.6)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.6)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -95,7 +95,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.6.5",
+  "issuer": "provenex-core/0.6.6",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
@@ -346,6 +346,32 @@ r3 = admit_model_inference(model_name="claude-opus-4-7",
 
 All three reuse the existing receipt schema unchanged (still 2.3.0). They produce admission-shaped receipts (`actions[]` + `policy.tool_call_control`) for `memory_write` / `model_inference`, and retrieval-shaped receipts (`sources[]` + `policy.access_control`) for `memory_read`. The unified YAML policy gates all of them the same way — a tool-call rule like `when: { tool.name: "memory.write", tool.operation: "user_profile" }` enforces per-key gates; a rule like `when: { tool.name: "claude-opus-4-7" }` gates model usage by provider/allowlist.
 
+### Streaming receipts to a SIEM / firehose (0.6.6+)
+
+Every receipt-emitting entrypoint accepts an optional `sink=` parameter. Provenex publishes to the sink after the receipt is finalised — your hot path stays the same; the firehose runs alongside.
+
+```python
+from provenex import (
+    HmacSha256Signer, RequestContext, ToolCallContext,
+    admission_check, MultiSink, FileJSONLSink,
+)
+from provenex.export.kafka import KafkaSink   # extra: [export-kafka]
+from provenex.export.aws import S3AppendSink  # extra: [export-aws]
+
+# Real-time firehose for the detector + long-term archive for compliance.
+sink = MultiSink([
+    KafkaSink(bootstrap_servers="kafka.internal:9092", topic="provenex-receipts"),
+    S3AppendSink(bucket="audit-archive", prefix="provenex"),
+    FileJSONLSink("/var/log/provenex"),
+])
+
+result = admission_check(..., sink=sink)   # the only line that changes
+```
+
+**Reference sinks shipped:** `StdoutJSONLSink`, `FileJSONLSink` (date-rotated), `MultiSink` (fan-out), `RetryQueueSink` (bounded in-process retry queue) in the stdlib core; `KafkaSink`, `SQSSink`, `S3AppendSink` (date-hour-partitioned), `PubSubSink` behind optional extras. Define-your-own via the `ReceiptSink` Protocol.
+
+**Error semantics — load-bearing.** Sink failures are swallowed and logged via `warnings.warn`. **Provenex never breaks the agent's hot path because export is degraded.** A misconfigured Kafka cluster writes a warning to stderr; the receipt is still returned through the function value; the agent keeps running. See [`docs/streaming_export.md`](https://github.com/provenex/provenex-core/blob/main/docs/streaming_export.md) for the full reference including retry queue semantics and custom-sink implementation.
+
 ### Per-deployment unlinkability for `caller_hash` (0.6.5+)
 
 By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sha256:<hex>` prefix) — anyone with the verbatim caller dict can reproduce the hash. For multi-tenant deployments that want two of their customers' detectors to NOT be able to cross-correlate users via shared `caller_hash` buckets, pass `caller_hash_salt=b"..."` to `verify_chunks` / `admission_check` / `verify_memory` / `admit_memory_write` / `admit_model_inference`. The hash becomes HMAC-SHA256 keyed by the salt (`hmac-sha256:<hex>` prefix); two deployments with different salts produce different `caller_hash` for the same caller. Same algorithm family (SHA-256), same wire format — the prefix tells consumers which mode produced the hash. Salting is **opt-in**; no caller-side migration needed for the bare-SHA-256 default.
@@ -425,6 +451,9 @@ pip install "provenex-core[langgraph]"     # + LangGraph integration
 pip install "provenex-core[llamaindex]"    # + LlamaIndex integration
 pip install "provenex-core[crewai]"        # + CrewAI integration
 pip install "provenex-core[ed25519]"       # + Ed25519 asymmetric signing
+pip install "provenex-core[export-kafka]"  # + KafkaSink (kafka-python)
+pip install "provenex-core[export-aws]"    # + SQSSink / S3AppendSink (boto3)
+pip install "provenex-core[export-gcp]"    # + PubSubSink (google-cloud-pubsub)
 ```
 
 Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. The Postgres backend, framework integrations, the native YAML DSL, and the Ed25519 signer are optional extras.
@@ -477,6 +506,7 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **Tool-call admission primitive** (Phase 2, schema 2.2.0+): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
 - **Source-of-record correlation fields** (schema 2.3.0): top-level `caller_hash` (SHA-256 over the canonical caller dict; or HMAC-SHA256 with an opt-in deployment salt for per-deployment unlinkability) and optional `trajectory.session_id` (multi-trajectory correlation key). Decision-and-proof artifacts — they don't influence policy decisions, just make receipts joinable downstream by a SIEM / anomaly detector.
 - **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` — convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
+- **Streaming export sinks** (0.6.6+): `ReceiptSink` Protocol + reference sinks for `StdoutJSONLSink` / `FileJSONLSink` (date-rotated) / `MultiSink` (fan-out) / `RetryQueueSink` (bounded in-process retry) in the stdlib core. `KafkaSink` / `SQSSink` / `S3AppendSink` (date-hour-partitioned) / `PubSubSink` behind optional `[export-kafka]` / `[export-aws]` / `[export-gcp]` extras. Every emission entrypoint accepts `sink=`; failures are swallowed-and-logged so the agent's hot path is never broken by export degradation.
 - Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval, tool-call, memory, and model-inference steps
 - Self-attribution claims (schema 1.4.0+): signed but unverified records of what the agent said it used
 - Content-source classifier (schema 1.4.0+): distinguish indexed-corpus chunks from live-tool / memory-store chunks

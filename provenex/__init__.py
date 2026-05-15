@@ -34,6 +34,14 @@ from .core.trajectory import (
     start_trajectory,
 )
 from .core.verify import VerifiedChunks, verify_chunks, verify_memory
+from .export import (
+    FileJSONLSink,
+    MultiSink,
+    ReceiptSink,
+    RetryQueueSink,
+    SinkClosedError,
+    StdoutJSONLSink,
+)
 from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
 from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
 from .index.postgres_index import PostgresProvenanceIndex
@@ -74,7 +82,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.6.5"
+__version__ = "0.6.6"
 
 __all__ = [
     # Core
@@ -143,6 +151,13 @@ __all__ = [
     "VerifiedChunks",
     "verify_chunks",
     "verify_memory",
+    # Streaming export sinks (0.6.6+)
+    "ReceiptSink",
+    "StdoutJSONLSink",
+    "FileJSONLSink",
+    "MultiSink",
+    "RetryQueueSink",
+    "SinkClosedError",
     # Tool-call admission (Phase 2, schema 2.2.0)
     "ToolCallContext",
     "ToolCallPolicyEvaluator",

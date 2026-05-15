@@ -205,6 +205,7 @@ def provenex_retrieval_node(
     step_kind: str = "retrieval",
     agent_id: Optional[str] = None,
     state_keys: Optional[Mapping[str, str]] = None,
+    sink: Any = None,
 ) -> Callable[[Mapping[str, Any]], Dict[str, Any]]:
     """Build a LangGraph retrieval node that emits trajectory-linked receipts.
 
@@ -315,6 +316,11 @@ def provenex_retrieval_node(
             trajectory=emit_trajectory,
         )
 
+        # 0.6.6+: ship to downstream sink; swallow + log on failure.
+        from ...export.streaming import _safe_publish
+
+        _safe_publish(sink, receipt)
+
         # Advance trajectory cursor for the next step in the graph.
         next_ctx = trajectory_ctx.next_step(
             parent_receipts=[receipt],
@@ -359,6 +365,7 @@ def provenex_admission_node(
     agent_id: Optional[str] = None,
     redact_parameters: bool = False,
     state_keys: Optional[Mapping[str, str]] = None,
+    sink: Any = None,
 ) -> Callable[[Mapping[str, Any]], Dict[str, Any]]:
     """Build a LangGraph tool-call admission node.
 
@@ -472,6 +479,7 @@ def provenex_admission_node(
             step_kind=step_kind,
             agent_id=agent_id,
             redact_parameters=redact_parameters,
+            sink=sink,
         )
 
         previous_receipts = list(state.get(keys["receipts"], []))

@@ -44,6 +44,7 @@ from .receipt import (
     compute_caller_hash,
 )
 from .trajectory import TrajectoryContext
+from ..export.streaming import _safe_publish
 from ..index.base import IndexEntry, ProvenanceIndex
 from ..policy.evaluator import (
     BINDING_AT_EVALUATE,
@@ -164,6 +165,7 @@ def verify_chunks(
     chunk_metadata_binding: str = BINDING_AT_EVALUATE,
     caller_hash_salt: Optional[bytes] = None,
     content_source: Optional[str] = None,
+    sink: Any = None,
 ) -> VerifiedChunks:
     """Verify a set of chunks against the index and emit a signed receipt.
 
@@ -362,6 +364,11 @@ def verify_chunks(
         access_control=access_control_block,
         caller_hash=emit_caller_hash,
     )
+
+    # Schema 2.3.0 / 0.6.6+: ship to downstream sink if supplied.
+    # Failures are swallowed (warnings.warn); the agent's hot path
+    # is never broken by export degradation.
+    _safe_publish(sink, receipt)
 
     next_trajectory: Optional[TrajectoryContext] = None
     if trajectory is not None:

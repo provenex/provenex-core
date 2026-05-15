@@ -86,12 +86,14 @@ class ProvenexRetriever:
         policy: Optional[VerificationPolicy] = None,
         signer: Optional[ReceiptSigner] = None,
         fingerprinter: Optional[Fingerprinter] = None,
+        sink: Any = None,
     ) -> None:
         self._base_retriever = base_retriever
         self._index = index
         self._policy = policy or VerificationPolicy()
         self._signer = signer
         self._fingerprinter = fingerprinter or Fingerprinter(FingerprinterConfig())
+        self._sink = sink
 
     @property
     def base_retriever(self) -> Any:
@@ -187,6 +189,9 @@ class ProvenexRetriever:
                 kept.append(item)
 
         receipt = builder.finalize(output_text=output_text, signer=self._signer)
+        from ...export.streaming import _safe_publish
+
+        _safe_publish(self._sink, receipt)
         return RetrievalResult(nodes=kept, blocked=blocked, receipt=receipt)
 
     def retrieve(self, query: str) -> List[Any]:

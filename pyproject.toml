@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenex-core"
-version = "0.6.5"
+version = "0.6.6"
 description = "Policy enforcement for AI data access, with cryptographic proof"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,12 @@ policy = ["PyYAML>=6.0"]
 # Imports psycopg lazily; the SQLite backend (and the core) remain pure
 # stdlib without this extra.
 postgres = ["psycopg[binary]>=3.1", "psycopg-pool>=3.2"]
+# Streaming export sinks (0.6.6+). The core sinks (StdoutJSONLSink,
+# FileJSONLSink, MultiSink, RetryQueueSink) ship in the stdlib core;
+# these extras add the network-bound sinks.
+export-kafka = ["kafka-python>=2.0"]
+export-aws = ["boto3>=1.34"]
+export-gcp = ["google-cloud-pubsub>=2.20"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
