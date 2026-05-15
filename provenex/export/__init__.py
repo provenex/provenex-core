@@ -16,6 +16,15 @@ Sink failures are swallowed and logged via :mod:`warnings` — Provenex
 never breaks the agent's hot path because export is degraded.
 """
 
+from .ocsf import (
+    OCSF_CATEGORY_APPLICATION_ACTIVITY,
+    OCSF_CATEGORY_FINDINGS,
+    OCSF_CLASS_API_ACTIVITY,
+    OCSF_CLASS_APPLICATION_ACTIVITY,
+    OCSF_CLASS_DETECTION_FINDING,
+    OCSFAdapter,
+    receipt_to_ocsf,
+)
 from .streaming import (
     FileJSONLSink,
     MultiSink,
@@ -32,4 +41,12 @@ __all__ = [
     "MultiSink",
     "RetryQueueSink",
     "SinkClosedError",
+    # OCSF export (0.6.7+)
+    "OCSFAdapter",
+    "receipt_to_ocsf",
+    "OCSF_CLASS_APPLICATION_ACTIVITY",
+    "OCSF_CLASS_API_ACTIVITY",
+    "OCSF_CLASS_DETECTION_FINDING",
+    "OCSF_CATEGORY_APPLICATION_ACTIVITY",
+    "OCSF_CATEGORY_FINDINGS",
 ]

@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.6)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.6)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.7)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.7)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -95,7 +95,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.6.6",
+  "issuer": "provenex-core/0.6.7",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
@@ -372,6 +372,38 @@ result = admission_check(..., sink=sink)   # the only line that changes
 
 **Error semantics — load-bearing.** Sink failures are swallowed and logged via `warnings.warn`. **Provenex never breaks the agent's hot path because export is degraded.** A misconfigured Kafka cluster writes a warning to stderr; the receipt is still returned through the function value; the agent keeps running. See [`docs/streaming_export.md`](https://github.com/provenex/provenex-core/blob/main/docs/streaming_export.md) for the full reference including retry queue semantics and custom-sink implementation.
 
+### OCSF export — receipts as cross-vendor security events (0.6.7+)
+
+Provenex maps signed receipts to **OCSF v1.3** events — the emerging cross-vendor schema (Splunk, Datadog, Elastic, Microsoft Sentinel) for security events. One function transforms; one adapter streams.
+
+```python
+from provenex import OCSFAdapter, MultiSink, FileJSONLSink, receipt_to_ocsf
+from provenex.export.kafka import KafkaSink
+
+# Stream-and-fan-out: OCSF events to the SIEM, raw receipts to archive.
+sink = MultiSink([
+    OCSFAdapter(
+        downstream=KafkaSink(bootstrap_servers="...", topic="ocsf-security-events"),
+        extra_metadata={"organization_uid": "acme-corp", "environment": "prod"},
+    ),
+    FileJSONLSink("/var/log/provenex/raw"),
+])
+result = admission_check(..., sink=sink)
+
+# Or convert ad-hoc:
+events = receipt_to_ocsf(result.receipt.to_dict())
+# → [{class_uid: 6003, ...}]  (API Activity for allowed admissions)
+```
+
+| Provenex event | OCSF class | UID | Severity |
+|---|---|---|---|
+| Allowed retrieval / memory_read | Application Activity | **6005** | Informational |
+| Allowed tool_call / memory_write / model_inference | API Activity | **6003** | Informational |
+| Verification block (TAMPERED, UNAUTHORIZED, etc.) | Detection Finding | **2004** | **Critical** |
+| Policy deny (access_control or tool_call_control) | Detection Finding | **2004** | **High** |
+
+Correlation fields land where SIEMs expect them: `caller_hash` → `actor.user.uid`, `trajectory_id` → `metadata.correlation_uid`, `session_id` → `metadata.session_uid`, `step_kind` → `metadata.labels[]`. The full field-by-field spec is in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md) — the public artifact for SIEM vendors and enterprise security architects.
+
 ### Per-deployment unlinkability for `caller_hash` (0.6.5+)
 
 By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sha256:<hex>` prefix) — anyone with the verbatim caller dict can reproduce the hash. For multi-tenant deployments that want two of their customers' detectors to NOT be able to cross-correlate users via shared `caller_hash` buckets, pass `caller_hash_salt=b"..."` to `verify_chunks` / `admission_check` / `verify_memory` / `admit_memory_write` / `admit_model_inference`. The hash becomes HMAC-SHA256 keyed by the salt (`hmac-sha256:<hex>` prefix); two deployments with different salts produce different `caller_hash` for the same caller. Same algorithm family (SHA-256), same wire format — the prefix tells consumers which mode produced the hash. Salting is **opt-in**; no caller-side migration needed for the bare-SHA-256 default.
@@ -507,6 +539,7 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **Source-of-record correlation fields** (schema 2.3.0): top-level `caller_hash` (SHA-256 over the canonical caller dict; or HMAC-SHA256 with an opt-in deployment salt for per-deployment unlinkability) and optional `trajectory.session_id` (multi-trajectory correlation key). Decision-and-proof artifacts — they don't influence policy decisions, just make receipts joinable downstream by a SIEM / anomaly detector.
 - **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` — convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
 - **Streaming export sinks** (0.6.6+): `ReceiptSink` Protocol + reference sinks for `StdoutJSONLSink` / `FileJSONLSink` (date-rotated) / `MultiSink` (fan-out) / `RetryQueueSink` (bounded in-process retry) in the stdlib core. `KafkaSink` / `SQSSink` / `S3AppendSink` (date-hour-partitioned) / `PubSubSink` behind optional `[export-kafka]` / `[export-aws]` / `[export-gcp]` extras. Every emission entrypoint accepts `sink=`; failures are swallowed-and-logged so the agent's hot path is never broken by export degradation.
+- **OCSF v1.3 mapping** (0.6.7+, stdlib core): `provenex.receipt_to_ocsf(receipt_dict)` transforms one signed receipt into one or more OCSF events (Application Activity / API Activity / Detection Finding). `OCSFAdapter` wraps any `ReceiptSink` so the stream emits OCSF events instead of raw receipts — instantly compatible with Splunk / Datadog / Elastic / Microsoft Sentinel. Full mapping spec in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md).
 - Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval, tool-call, memory, and model-inference steps
 - Self-attribution claims (schema 1.4.0+): signed but unverified records of what the agent said it used
 - Content-source classifier (schema 1.4.0+): distinguish indexed-corpus chunks from live-tool / memory-store chunks

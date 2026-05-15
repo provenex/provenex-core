@@ -598,6 +598,42 @@ result = admission_check(
 
 **Reference sinks.** `StdoutJSONLSink`, `FileJSONLSink` (daily-rotated), `MultiSink` (fan-out), `RetryQueueSink` (bounded retry) in the stdlib core. `KafkaSink`, `SQSSink`, `S3AppendSink` (date-hour-partitioned), `PubSubSink` behind optional extras. Define your own via the `ReceiptSink` Protocol. See [`streaming_export.md`](streaming_export.md) for the full reference; see [`../examples/streaming_export_demo.py`](../examples/streaming_export_demo.py) for a runnable end-to-end demo.
 
+## OCSF export — feeding receipts into your SIEM (0.6.7+)
+
+Provenex maps receipts to OCSF v1.3 events so they're instantly readable by Splunk / Datadog / Elastic / Microsoft Sentinel. Two surfaces — a pure transformation function and a streaming-sink adapter.
+
+```python
+# Pure transformation: convert a receipt to OCSF events for batch pipelines
+from provenex import receipt_to_ocsf
+
+events = receipt_to_ocsf(result.receipt.to_dict())
+# → [{"class_uid": 6003, "class_name": "API Activity", ...}]
+
+# Streaming adapter: wraps any ReceiptSink so it ships OCSF events instead
+from provenex import OCSFAdapter, MultiSink, FileJSONLSink
+from provenex.export.kafka import KafkaSink
+
+sink = MultiSink([
+    OCSFAdapter(
+        downstream=KafkaSink(bootstrap_servers="kafka:9092", topic="security-events"),
+        extra_metadata={"organization_uid": "acme-corp", "environment": "prod"},
+    ),
+    FileJSONLSink("/var/log/provenex/raw"),   # raw archive in parallel
+])
+admission_check(..., sink=sink)
+```
+
+The OCSF event classes Provenex emits:
+
+| Provenex condition | OCSF class | UID | Severity |
+| --- | --- | --- | --- |
+| Allowed retrieval / `memory_read` | Application Activity | 6005 | Informational |
+| Allowed `tool_call` / `memory_write` / `model_inference` | API Activity | 6003 | Informational |
+| Verification block (TAMPERED, UNAUTHORIZED, etc.) | Detection Finding | 2004 | Critical |
+| Policy deny | Detection Finding | 2004 | High |
+
+Correlation fields land where SIEMs expect them: `caller_hash` → `actor.user.uid`; `trajectory_id` → `metadata.correlation_uid`; `session_id` → `metadata.session_uid`; `step_kind` → `metadata.labels[]`. See [`ocsf_mapping.md`](ocsf_mapping.md) for the full field-by-field spec, and [`../examples/ocsf_export_demo.py`](../examples/ocsf_export_demo.py) for a runnable demo.
+
 ## Verify a receipt independently
 
 Anyone with the receipt JSON and the signing secret can confirm the receipt hasn't been altered:

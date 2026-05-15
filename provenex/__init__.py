@@ -37,10 +37,12 @@ from .core.verify import VerifiedChunks, verify_chunks, verify_memory
 from .export import (
     FileJSONLSink,
     MultiSink,
+    OCSFAdapter,
     ReceiptSink,
     RetryQueueSink,
     SinkClosedError,
     StdoutJSONLSink,
+    receipt_to_ocsf,
 )
 from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
 from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
@@ -82,7 +84,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.6.6"
+__version__ = "0.6.7"
 
 __all__ = [
     # Core
@@ -158,6 +160,9 @@ __all__ = [
     "MultiSink",
     "RetryQueueSink",
     "SinkClosedError",
+    # OCSF export (0.6.7+)
+    "OCSFAdapter",
+    "receipt_to_ocsf",
     # Tool-call admission (Phase 2, schema 2.2.0)
     "ToolCallContext",
     "ToolCallPolicyEvaluator",
