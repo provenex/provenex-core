@@ -54,9 +54,8 @@ class AdmissionResult:
     """Result of an :func:`admission_check` call.
 
     Attributes:
-        decision: ``"allow"`` or ``"deny"`` (``"allow_with_conditions"``
-            reserved for v1). Mirror of the same field on the underlying
-            :class:`PolicyDecision`.
+        decision: ``"allow"`` or ``"deny"``. Mirror of the same field on
+            the underlying :class:`PolicyDecision`.
         rules_fired: Names of the policy rules whose ``when`` clauses
             matched. Empty when no tool-call policy was configured.
         receipt: The signed (if a signer was supplied) receipt covering
@@ -77,13 +76,8 @@ class AdmissionResult:
 
     @property
     def allowed(self) -> bool:
-        """Convenience for ``decision == "allow"``.
-
-        ``allow_with_conditions`` (reserved) also returns True here; the
-        caller is expected to inspect ``rules_fired`` if it cares about
-        the conditional case.
-        """
-        return self.decision != DECISION_DENY
+        """Convenience for ``decision == "allow"``."""
+        return self.decision == DECISION_ALLOW
 
 
 class ToolCallDenied(Exception):

@@ -15,10 +15,10 @@ The DSL is intentionally small. The DSL supports:
       — both default to ``deny``.
 
 Anything else (``any_of``, ``all_of``, negation, nested rules, custom
-functions, external lookups, ``allow_with_conditions``) raises
-:class:`UnsupportedPolicyFeature`. The error names the feature so the
-operator knows what to remove. This matters: a silent "policy file
-typo opens a gate" is the worst possible failure mode.
+functions, external lookups) raises :class:`UnsupportedPolicyFeature`.
+The error names the feature so the operator knows what to remove.
+This matters: a silent "policy file typo opens a gate" is the worst
+possible failure mode.
 
 PyYAML is imported lazily so the core remains pure-stdlib installable.
 Operators who use the YAML DSL install the extra:
@@ -334,11 +334,6 @@ def _validate_rule(
                     )
 
     on_violation = rule.get("on_violation", "deny")
-    if on_violation == "allow_with_conditions":
-        raise UnsupportedPolicyFeature(
-            f"{source}: rule '{name}': 'allow_with_conditions' is reserved "
-            f"for a future release. Only on_violation: deny is supported."
-        )
     if on_violation != "deny":
         raise PolicyParseError(
             f"{source}: rule '{name}': on_violation must be 'deny' "

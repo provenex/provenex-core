@@ -82,7 +82,7 @@ from .trajectory import TrajectoryContext
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
 SCHEMA_VERSION = "2.3.0"
-ISSUER = "provenex-core/0.7.1"
+ISSUER = "provenex-core/0.7.2"
 
 
 # --------------------------------------------------------------------------- #
@@ -851,10 +851,6 @@ class ReceiptBuilder:
                     if d.get("decision") == "deny":
                         counts["actions_denied"] += 1
                     else:
-                        # ``allow`` and the reserved
-                        # ``allow_with_conditions`` both count as
-                        # admitted for summary purposes; we may want a
-                        # third bucket if conditions ever ship.
                         counts["actions_allowed"] += 1
             else:
                 # No tool-call policy was configured — actions default

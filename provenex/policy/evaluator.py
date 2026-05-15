@@ -39,11 +39,9 @@ EVALUATOR_OPA_SERVICE = "opa_service"
 EVALUATOR_CUSTOM = "custom"
 EVALUATOR_NONE = "none"
 
-# Decision enum values. ``allow_with_conditions`` is reserved and not yet
-# emitted by any shipped evaluator.
+# Decision enum values.
 DECISION_ALLOW = "allow"
 DECISION_DENY = "deny"
-DECISION_ALLOW_WITH_CONDITIONS = "allow_with_conditions"
 
 # The policy_id recorded when no evaluator is configured. Chosen so an
 # auditor reading a receipt can tell at a glance that the operator opted
@@ -91,9 +89,9 @@ class UnsupportedPolicyFeature(PolicyError):
     """Raised when a policy file uses a feature not implemented in v0.4.
 
     Reserved features include boolean composition (``any_of`` / ``all_of``),
-    negation, nested rules, custom functions, external lookups, and
-    ``allow_with_conditions``. The error names the offending feature so the
-    operator knows what to remove (or upgrade to wait for).
+    negation, nested rules, custom functions, and external lookups. The
+    error names the offending feature so the operator knows what to
+    remove (or upgrade to wait for).
     """
 
 
@@ -176,7 +174,6 @@ class PolicyDecision:
 
     Attributes:
         decision: One of :data:`DECISION_ALLOW` or :data:`DECISION_DENY`.
-            ``allow_with_conditions`` is reserved for a future release.
         rules_fired: Names of the rules whose ``when`` clause matched.
             This is the trace of rules that participated in the decision
             (regardless of whether each one passed or failed its

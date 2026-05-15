@@ -338,7 +338,7 @@ The data-access policy decision record. Optional — present iff a `PolicyEvalua
 | `policy_in_transparency_log` | boolean | Whether `policy_version_hash` is recorded in the transparency log. Always `false` in the open-source core; the commercial transparency-log integration lights this up. |
 | `decisions` | array | Per-chunk decisions in retrieval order. One entry per chunk in `sources[]`. |
 | `decisions[].chunk_fingerprint` | string | The chunk's fingerprint. Matches `sources[i].fingerprint`. |
-| `decisions[].decision` | string | Enum: `allow`, `deny`, `allow_with_conditions`. v0.4 emits `allow` and `deny`; `allow_with_conditions` is reserved. |
+| `decisions[].decision` | string | Enum: `allow` or `deny`. |
 | `decisions[].rules_fired` | array of string | Names of the rules whose `when` clause matched. The trace of rules that participated in the decision (regardless of pass / fail). Empty when no rules fired. |
 | `decisions[].inputs_hash` | string | SHA-256 over the canonical `inputs` object. Always present — even when `inputs` is redacted, the hash lets an auditor with the original inputs independently verify. |
 | `decisions[].inputs` | object \| null | The canonical inputs the evaluator looked at, or `null` if the operator chose to redact. Shape: `{"chunk_metadata": {...}, "request_context": {...}}`. |
@@ -392,7 +392,7 @@ The tool-call admission decision record. Optional — present iff a `ToolCallPol
 | `policy_in_transparency_log` | boolean | Always `false` in the open-source core; lit up by the commercial transparency-log integration. |
 | `decisions` | array | Per-action decisions in `actions[]` order. One entry per action in `actions[]`. |
 | `decisions[].action_index` | integer | References `actions[action_index]`. Parallel to `access_control.decisions[i].chunk_fingerprint`. |
-| `decisions[].decision` | string | Enum: `allow`, `deny`, `allow_with_conditions`. v0.6 emits `allow` and `deny`; `allow_with_conditions` is reserved for v1. |
+| `decisions[].decision` | string | Enum: `allow` or `deny`. |
 | `decisions[].rules_fired` | array of string | Names of the rules whose `when` clauses matched. |
 | `decisions[].inputs_hash` | string | SHA-256 over the canonical inputs object. Always present, even when `inputs` is redacted. |
 | `decisions[].inputs` | object \| null | The canonical inputs the evaluator looked at, or `null` if redacted. Shape: `{"tool_parameters": {...}, "request_context": {...}}`. |

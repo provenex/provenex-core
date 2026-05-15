@@ -50,7 +50,6 @@ from .index.postgres_index import PostgresProvenanceIndex
 from .index.sqlite_index import SQLiteProvenanceIndex
 from .policy.evaluator import (
     DECISION_ALLOW,
-    DECISION_ALLOW_WITH_CONDITIONS,
     DECISION_DENY,
     EVALUATOR_CUSTOM,
     EVALUATOR_NATIVE_YAML,
@@ -84,7 +83,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 __all__ = [
     # Core
@@ -124,7 +123,6 @@ __all__ = [
     "compute_inputs_hash",
     "DECISION_ALLOW",
     "DECISION_DENY",
-    "DECISION_ALLOW_WITH_CONDITIONS",
     "EVALUATOR_NATIVE_YAML",
     "EVALUATOR_REGO",
     "EVALUATOR_OPA_SERVICE",

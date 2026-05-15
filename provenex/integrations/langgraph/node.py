@@ -39,7 +39,7 @@ The admission node adds:
       (input; can be remapped or supplied via ``params_extractor``).
     * ``"tool_admitted"`` — bool, True iff the decision was allow.
     * ``"tool_decision"`` — the verbatim decision string
-      (``"allow"`` / ``"deny"`` / reserved ``"allow_with_conditions"``).
+      (``"allow"`` or ``"deny"``).
     * ``"tool_rules_fired"`` — list of rule names that fired.
 
 Any of these can be remapped per-node by passing a ``state_keys`` mapping

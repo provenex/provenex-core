@@ -19,7 +19,6 @@ records both verdicts so an auditor can reason about them independently.
 
 from .evaluator import (
     DECISION_ALLOW,
-    DECISION_ALLOW_WITH_CONDITIONS,
     DECISION_DENY,
     EVALUATOR_CUSTOM,
     EVALUATOR_NATIVE_YAML,
@@ -65,7 +64,6 @@ __all__ = [
     "compute_inputs_hash",
     "DECISION_ALLOW",
     "DECISION_DENY",
-    "DECISION_ALLOW_WITH_CONDITIONS",
     "EVALUATOR_NATIVE_YAML",
     "EVALUATOR_REGO",
     "EVALUATOR_OPA_SERVICE",

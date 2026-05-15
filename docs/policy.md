@@ -193,7 +193,7 @@ The native DSL is intentionally small. Each rule:
 | `name` | yes | Non-empty string. Appears in `rules_fired` on the receipt. |
 | `when` | no | Flat key/value map; rule applies iff every entry matches by direct equality. Omitting `when` makes the rule fire for every chunk. |
 | `require` | no | Flat key/value map of constraints. Operators below. |
-| `on_violation` | yes | `deny` only. `allow_with_conditions` is reserved. |
+| `on_violation` | yes | `deny` only. |
 
 #### Path roots
 
@@ -269,7 +269,6 @@ The following raise `UnsupportedPolicyFeature` at load time:
 
 - `any_of`, `all_of`, `not` — boolean composition.
 - `nested` — nested rules.
-- `on_violation: allow_with_conditions`.
 - Custom functions and external data lookups.
 - Unknown `require` operators.
 - **Trajectory-level rules** — see [What the native DSL deliberately doesn't do](#what-the-native-dsl-deliberately-doesnt-do-and-why) below. The native DSL is per-decision-pure by design; cross-decision rules live in the commercial Rego adapter or in the downstream anomaly detector reading receipts.

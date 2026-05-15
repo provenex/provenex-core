@@ -441,20 +441,6 @@ rules:
         NativeYamlEvaluator.from_text(bad)
 
 
-def test_allow_with_conditions_raises_unsupported_feature():
-    bad = """
-version: 1
-policy_id: p
-rules:
-  - name: r
-    require:
-      chunk.metadata.x: y
-    on_violation: allow_with_conditions
-"""
-    with pytest.raises(UnsupportedPolicyFeature, match="allow_with_conditions"):
-        NativeYamlEvaluator.from_text(bad)
-
-
 # --------------------------------------------------------------------------- #
 # validate_policy_file CLI helper                                             #
 # --------------------------------------------------------------------------- #
