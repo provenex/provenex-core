@@ -504,6 +504,70 @@ For the headline demo — a four-step `retrieve → call_tool(allowed) → call_
 
 See [`docs/policy.md`](policy.md) for the full DSL reference including the new `matches_pattern` / `not_matches_pattern` / `length_at_most` operators and the `tool.*` path roots; see [`docs/receipt_format.md`](receipt_format.md) for the schema 2.2.0 `actions[]` and `policy.tool_call_control` field reference.
 
+## Path H: memory reads, memory writes, and model-inference (0.6.5+)
+
+When you want every action class an agent takes — not just retrieve and tool-call — to land on a signed receipt under the right `step_kind`. Three thin convenience entrypoints over the existing primitives.
+
+```python
+from provenex import (
+    HmacSha256Signer, Policy, RequestContext, SQLiteProvenanceIndex,
+    admit_memory_write, admit_model_inference, start_trajectory,
+    verify_memory,
+)
+
+index = SQLiteProvenanceIndex("memory.db")    # the memory store as a ProvenanceIndex
+signer = HmacSha256Signer()
+trj = start_trajectory(agent_id="incident_agent",
+                       session_id="incident-2026-05-14-001")
+request = RequestContext(
+    caller={"id": "u_42", "role": "engineer"}, jurisdiction="US",
+    purpose="incident_response", timestamp="2026-05-14T11:30:00Z",
+    session_id="incident-2026-05-14-001",
+)
+
+# Memory read — same five outcomes as retrieval. Source records carry
+# content_source="memory_store" so an UNVERIFIED outcome reads as
+# "memory miss" rather than "corpus miss" to an auditor.
+r1 = verify_memory(["last user msg: where is the runbook?"], index=index,
+                   signer=signer, request_context=request, trajectory=trj)
+
+# Memory write — admission-shaped. name="memory.write",
+# operation=<memory_key>. value_hash always recorded; verbatim value
+# REDACTED by default (memory values often contain PII).
+r2 = admit_memory_write(
+    memory_key="user_profile",
+    value={"prefers": "dark_mode", "tz": "America/Los_Angeles"},
+    request=request, store_id="crewai_memory",
+    signer=signer, trajectory=r1.next_trajectory,
+)
+
+# Model inference — admission-shaped. name=<model>, operation="complete"
+# (or "stream" / "embed" / "chat"), target_system=<provider>.
+# prompt_hash always recorded; verbatim prompt REDACTED by default.
+r3 = admit_model_inference(
+    model_name="claude-opus-4-7",
+    prompt=[{"role": "user", "content": "Summarize INC-2026-05-001"}],
+    request=request, target_provider="anthropic",
+    extra_parameters={"max_tokens": 4000, "temperature": 0.2},
+    signer=signer, trajectory=r2.next_trajectory,
+)
+
+# All three are linked under one trajectory. End-of-flow audit shows
+# the mixed-step-kind distribution.
+```
+
+```bash
+provenex audit --trajectory ./receipts/   # one CLI pass; mixed kinds
+```
+
+**Why this matters.** Every class of agent action — read corpus, read memory, write memory, call a model, call a tool — produces one signed receipt under one trajectory. A downstream anomaly detector / SIEM sees the full event stream classified by `step_kind`, not a hodgepodge of "tool_call" entries it has to disambiguate. `caller_hash` and `session_id` (schema 2.3.0+) make per-caller / per-session grouping trivial without crawling per-decision input blobs.
+
+**Redaction defaults.** Memory values and LLM prompts are recorded as **hashes only** by default (`value_hash`, `prompt_hash`) — both fields often contain PII or customer data, and Provenex stays decision-and-proof, never on the data path. The hash anchor stays on the receipt for audit; an operator who needs verbatim recording for debugging passes `redact_value=False` or `redact_prompt=False`.
+
+**Per-deployment unlinkability.** Pass `caller_hash_salt=b"..."` on any of the entrypoints above (or on `verify_chunks` / `admission_check`) to switch `caller_hash` from bare SHA-256 to HMAC-SHA256 keyed by the salt. Two deployments with different salts produce different `caller_hash` values for the same caller — useful when you don't want third-party detectors to cross-correlate users across your tenants. Same algorithm family, same wire format; the prefix (`sha256:` vs `hmac-sha256:`) tells consumers which mode was used.
+
+See [`../examples/memory_and_model_inference_demo.py`](../examples/memory_and_model_inference_demo.py) for a runnable end-to-end demo.
+
 ## Verify a receipt independently
 
 Anyone with the receipt JSON and the signing secret can confirm the receipt hasn't been altered:

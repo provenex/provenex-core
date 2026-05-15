@@ -51,7 +51,7 @@ The schema is intentionally:
   "receipt_id": "prx_<32 hex chars>",
   "schema_version": "2.3.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
-  "issuer": "provenex-core/0.6.4",
+  "issuer": "provenex-core/0.6.5",
   "caller_hash": "sha256:<64 hex chars>",   // optional (schema 2.3.0+)
   "output": { ... },
   "sources": [ ... ],
@@ -73,7 +73,7 @@ The schema is intentionally:
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
 | `schema_version` | string | Semver. Always `2.3.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/0.6.4`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/0.6.5`. |
 | `caller_hash` | string | Optional (2.3.0+). `"sha256:<hex>"` over the canonical JSON of `request_context.caller`. Present on every receipt produced from a `RequestContext`; absent on the standalone-builder path. See **Top-level `caller_hash`** below. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
@@ -112,19 +112,28 @@ The output text itself is **never** stored on the receipt. Only its hash.
 
 ## Top-level `caller_hash` *(schema 2.3.0+)*
 
-A SHA-256 over the canonical JSON of `request_context.caller`. Lets a downstream anomaly detector / SIEM `GROUP BY caller_hash` without crawling per-decision `inputs.request_context.caller` blobs. Always emitted on receipts produced via `verify_chunks(request_context=...)`, `admission_check(...)`, or any framework wrapper that ultimately delegates to one of those. Omitted on receipts produced via the pure `ReceiptBuilder` path (no request context in scope).
+A hash over the canonical JSON of `request_context.caller`. Lets a downstream anomaly detector / SIEM `GROUP BY caller_hash` without crawling per-decision `inputs.request_context.caller` blobs. Always emitted on receipts produced via `verify_chunks(request_context=...)`, `admission_check(...)`, or any framework wrapper that ultimately delegates to one of those. Omitted on receipts produced via the pure `ReceiptBuilder` path (no request context in scope).
 
 ```json
 { "caller_hash": "sha256:7a2bf01571c43f..." }
 ```
 
-**Canonicalisation.** Identical to the rule used elsewhere in the receipt:
+**Two modes.** The prefix is the algorithm identifier — a consumer dispatches on it the same way it does for `signature.algorithm`:
+
+| Prefix | Algorithm | When | Reproducibility |
+| --- | --- | --- | --- |
+| `sha256:<hex>` | Bare SHA-256 over canonical caller JSON | Default. No salt configured. | Anyone holding the verbatim caller dict can re-derive. |
+| `hmac-sha256:<hex>` | HMAC-SHA256 keyed by a deployment-chosen salt | Opt-in via `caller_hash_salt=b"..."` (0.6.5+). | Only the salt-holder can re-derive — two deployments with different salts produce different hashes for the same caller. |
+
+**Canonicalisation (same for both modes).** Identical to the rule used elsewhere in the receipt:
 
 ```python
 json.dumps(caller, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 ```
 
-Then SHA-256, hex-prefixed with `sha256:`. Use `provenex.compute_caller_hash(caller)` to recompute from raw caller JSON — useful for a downstream consumer that wants to verify the receipt is self-consistent (`compute_caller_hash(receipt.policy.access_control.decisions[0].inputs.request_context.caller) == receipt.caller_hash`).
+Then SHA-256 (or HMAC-SHA256 with the salt as the key), hex-prefixed with the appropriate algorithm tag. Use `provenex.compute_caller_hash(caller)` for the bare mode or `compute_caller_hash(caller, salt=b"...")` for the salted mode — useful for a downstream consumer that wants to verify the receipt is self-consistent (`compute_caller_hash(receipt.policy.access_control.decisions[0].inputs.request_context.caller) == receipt.caller_hash` in the unsalted case; or compute with the deployment salt and compare).
+
+**When to use salting.** Multi-tenant deployments where two of your customers' detectors should NOT be able to cross-correlate users via shared `caller_hash` buckets — different per-deployment salts produce different hashes for the same identity. The trade-off: only the salt-holder can verify caller_hash, so cross-org provenance hand-off loses this group key. The signature still verifies — only the verify-don't-trust property on `caller_hash` itself is restricted.
 
 **Verbatim — by design.** The hash covers the caller dict exactly as supplied. A caller who adds a new key splits a previously-grouped caller into two buckets from a detector's perspective. That's the right signal in practice (added fields are behavior changes), but operators who want stability across upstream churn should follow this convention:
 
@@ -486,7 +495,7 @@ Optional. Present iff the receipt is part of a multi-step agent trajectory (sche
 | `trajectory.trajectory_id` | string | Globally unique. Prefix `trj_` plus 32 hex characters (16 random bytes). Shared by every receipt in the trajectory. |
 | `trajectory.step_index` | integer | 0-based ordinal within the trajectory. In DAG shapes, sibling branches may share an index; uniqueness is along the parent chain. |
 | `trajectory.parent_step_ids` | array of string | `receipt_id` values of parent steps. Empty array for the root step. **List** (not scalar) so DAG shapes round-trip (LangGraph branches, CrewAI parallel agents). |
-| `trajectory.step_kind` | string | Optional. Free-form classifier. Provenex-defined values: `retrieval`, `tool_call`, `memory_read`, `memory_write`, `compilation`. Unknown values are valid for forward compatibility. |
+| `trajectory.step_kind` | string | Optional. Free-form classifier. Provenex-defined values: `retrieval`, `tool_call`, `memory_read`, `memory_write`, `model_inference`, `compilation`. Unknown values are valid for forward compatibility. The 0.6.5 release added first-class convenience entrypoints (`verify_memory`, `admit_memory_write`, `admit_model_inference`) that stamp the right classifier automatically. |
 | `trajectory.agent_id` | string | Optional. Caller-chosen opaque identifier for the emitting agent. Useful in multi-agent flows. Do not encode PII here. |
 | `trajectory.trajectory_started_at` | string | ISO-8601 UTC with millisecond precision. Same value across every step in the trajectory; lets a single step locate itself in time without the whole set. |
 | `trajectory.session_id` | string | Optional (2.3.0+). Caller-chosen opaque multi-trajectory correlation key. Set via `start_trajectory(session_id=...)` or `RequestContext.session_id`. Where `trajectory_id` correlates receipts within one DAG, `session_id` correlates receipts *across* trajectories that belong to one logical session — a user's chat session, an incident-response engagement, a multi-day investigation. **Not** a policy input (not readable under `request.*` in a rule); a correlation tag for downstream consumers. Omitted from JSON when absent; passed on a request without a trajectory in scope, it is silently dropped (single-shot calls aren't sessions). |

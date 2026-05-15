@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.4)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.4)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.5)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.5)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -95,7 +95,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.6.4",
+  "issuer": "provenex-core/0.6.5",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
@@ -306,6 +306,50 @@ save_receipt(result.receipt)             # signed, verifiable offline — denies
 
 **Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call against the target system using its own credentials. Provenex never holds OAuth tokens, never proxies traffic, and never sits on the response-data path. Use [`ProvenexToolWrapper`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/langchain.py) to wrap any LangChain tool; use [`provenex_mcp_admission`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/mcp.py) to decorate any MCP `tools/call` handler.
 
+### Memory reads, memory writes, and model-inference (0.6.5+)
+
+Every class of action an agent takes lands on a receipt under the right `trajectory.step_kind` classifier — not just retrieval (`step_kind="retrieval"`) and tool calls (`step_kind="tool_call"`). Three convenience entrypoints close the loop so a downstream anomaly detector / SIEM gets a complete event stream:
+
+```python
+from provenex import (
+    HmacSha256Signer, RequestContext, SQLiteProvenanceIndex,
+    admit_memory_write, admit_model_inference, verify_memory,
+)
+
+index = SQLiteProvenanceIndex("memory.db")
+signer = HmacSha256Signer()
+request = RequestContext(caller={"id": "u_42", "role": "engineer"},
+                         jurisdiction="US", purpose="incident_response",
+                         timestamp="2026-05-14T11:30:00Z")
+
+# Memory read — emits a receipt with step_kind="memory_read" and
+# content_source="memory_store" on every source. Same five outcomes
+# (VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED) apply.
+r1 = verify_memory(["last user message: ..."], index=index, signer=signer,
+                   request_context=request)
+
+# Memory write — emits an admission receipt with name="memory.write",
+# operation=<memory_key>. By default the verbatim value is redacted
+# (memory values often contain PII); value_hash is always recorded.
+r2 = admit_memory_write(memory_key="user_profile", value={"prefers": "dark_mode"},
+                        request=request, store_id="crewai_memory", signer=signer)
+
+# Model inference — emits an admission receipt with name=<model_name>,
+# target_system=<provider>, parameters={prompt_hash, **extras}. Verbatim
+# prompt redacted by default. Enables detection on "this user is calling
+# claude-opus 100x baseline" or "prompts contain pattern X".
+r3 = admit_model_inference(model_name="claude-opus-4-7",
+                           prompt="Summarize INC-2026-05-001",
+                           request=request, target_provider="anthropic",
+                           extra_parameters={"max_tokens": 4000}, signer=signer)
+```
+
+All three reuse the existing receipt schema unchanged (still 2.3.0). They produce admission-shaped receipts (`actions[]` + `policy.tool_call_control`) for `memory_write` / `model_inference`, and retrieval-shaped receipts (`sources[]` + `policy.access_control`) for `memory_read`. The unified YAML policy gates all of them the same way — a tool-call rule like `when: { tool.name: "memory.write", tool.operation: "user_profile" }` enforces per-key gates; a rule like `when: { tool.name: "claude-opus-4-7" }` gates model usage by provider/allowlist.
+
+### Per-deployment unlinkability for `caller_hash` (0.6.5+)
+
+By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sha256:<hex>` prefix) — anyone with the verbatim caller dict can reproduce the hash. For multi-tenant deployments that want two of their customers' detectors to NOT be able to cross-correlate users via shared `caller_hash` buckets, pass `caller_hash_salt=b"..."` to `verify_chunks` / `admission_check` / `verify_memory` / `admit_memory_write` / `admit_model_inference`. The hash becomes HMAC-SHA256 keyed by the salt (`hmac-sha256:<hex>` prefix); two deployments with different salts produce different `caller_hash` for the same caller. Same algorithm family (SHA-256), same wire format — the prefix tells consumers which mode produced the hash. Salting is **opt-in**; no caller-side migration needed for the bare-SHA-256 default.
+
 ## Agentic and multi-step flows
 
 Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve, reflect, retrieve again. Multiple agents collaborate. Tools fetch live data. Provenex is built for these flows alongside the simple one-shot case:
@@ -319,7 +363,7 @@ Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve,
 | **MCP** | n/a (retrieval is upstream of MCP) | `provenex_mcp_admission(...)` decorator wraps a `tools/call` handler. Standard JSON-RPC error code on deny. |
 | **Anything else** | `provenex.verify_chunks(chunks, index=..., policy=..., request_context=..., trajectory=...)` | `provenex.admission_check(tool=..., request=..., policy=..., signer=..., trajectory=...)` |
 
-Every retrieval **and tool-call admission** step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. **Mixed step kinds (retrieval + tool_call) are first-class** — one CLI invocation covers the whole agent run.
+Every retrieval, tool-call admission, **memory read, memory write, and model-inference** step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. **Mixed step kinds — `retrieval` / `tool_call` / `memory_read` / `memory_write` / `model_inference` — are first-class** under one signed audit trail. One CLI invocation covers the whole agent run.
 
 Receipts also carry two optional per-chunk fields useful in agent flows:
 
@@ -426,16 +470,19 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **SQLite** provenance index for single-node development (HMAC-signed rows, stdlib-only)
 - RFC 6962 Merkle transparency log (optional, on top of either index)
 - Receipt generation, HMAC + Ed25519 signing, offline inclusion-proof verification
-- **Unified policy** (schema 2.2.0): single top-level `policy` block with `verification`, `access_control`, and `tool_call_control` halves
+- **Unified policy** (schema 2.3.0): single top-level `policy` block with `verification`, `access_control`, and `tool_call_control` halves
 - **Native YAML policy DSL** for both chunk decisions and tool-call admission: pluggable `PolicyEvaluator` and `ToolCallPolicyEvaluator` protocols with the YAML evaluators as the reference backends; operators include `in` / `not_in` / `not_older_than` / `matches_pattern` / `not_matches_pattern` / `length_at_most`
 - **`metadata_binding`** per decision: each `chunk_metadata` block on the receipt declares whether it was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Lets an auditor see the trust class of every input at a glance.
 - **Bloom-filter interface** (`BloomFilterIndex` ABC + `NoopBloomFilter` + `BloomAcceleratedIndex` wrapper). The interface is OSS so commercial deployments are drop-in; the actual high-throughput Bloom implementation ships commercially.
-- **Tool-call admission primitive** (Phase 2, schema 2.2.0): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
-- Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval and tool-call steps
+- **Tool-call admission primitive** (Phase 2, schema 2.2.0+): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
+- **Source-of-record correlation fields** (schema 2.3.0): top-level `caller_hash` (SHA-256 over the canonical caller dict; or HMAC-SHA256 with an opt-in deployment salt for per-deployment unlinkability) and optional `trajectory.session_id` (multi-trajectory correlation key). Decision-and-proof artifacts — they don't influence policy decisions, just make receipts joinable downstream by a SIEM / anomaly detector.
+- **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` — convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
+- Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval, tool-call, memory, and model-inference steps
 - Self-attribution claims (schema 1.4.0+): signed but unverified records of what the agent said it used
 - Content-source classifier (schema 1.4.0+): distinguish indexed-corpus chunks from live-tool / memory-store chunks
 - LangChain / LangGraph / LlamaIndex / CrewAI / MCP integrations
-- Framework-agnostic `provenex.verify_chunks(...)` and `provenex.admission_check(...)` for everything else
+- Framework-agnostic `verify_chunks` / `verify_memory` / `admission_check` / `admit_memory_write` / `admit_model_inference` for everything else
+- Public hash helpers: `compute_caller_hash(caller, salt=...)` and `compute_value_hash(value)` so downstream consumers can independently re-derive the hashes embedded on receipts
 - CLI: `provenex ingest / verify / receipt / audit / policy`
 - Python SDK: `pip install provenex-core`
 

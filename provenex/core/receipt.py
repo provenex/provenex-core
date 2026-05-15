@@ -81,7 +81,7 @@ from .trajectory import TrajectoryContext
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
 SCHEMA_VERSION = "2.3.0"
-ISSUER = "provenex-core/0.6.4"
+ISSUER = "provenex-core/0.6.5"
 
 
 # --------------------------------------------------------------------------- #
@@ -487,7 +487,9 @@ def _hash_output(output_text: str) -> str:
     return "sha256:" + hashlib.sha256(output_text.encode("utf-8")).hexdigest()
 
 
-def compute_caller_hash(caller: Dict[str, Any]) -> str:
+def compute_caller_hash(
+    caller: Dict[str, Any], salt: Optional[bytes] = None
+) -> str:
     """SHA-256 over the canonical JSON of a caller dict (schema 2.3.0+).
 
     The hash is emitted at the top level of every receipt produced with a
@@ -517,25 +519,81 @@ def compute_caller_hash(caller: Dict[str, Any]) -> str:
     [docs/receipt_format.md](../../docs/receipt_format.md) for the
     convention.
 
+    **Salting (schema 2.3.0+, opt-in via 0.6.5+).** When ``salt`` is
+    supplied, the hash becomes HMAC-SHA256(salt, canonical_caller_json)
+    instead of plain SHA-256. The receipt's ``caller_hash`` prefix
+    changes from ``"sha256:"`` to ``"hmac-sha256:"`` so a verifier can
+    dispatch on the prefix the same way it does for signatures. Two
+    deployments using different salts produce different
+    ``caller_hash`` values for the same caller — providing
+    per-deployment unlinkability for downstream consumers without
+    fragmenting the algorithm space (still SHA-256-based; only the key
+    differs). Without a salt the function is byte-identical to the
+    bare-SHA-256 behavior of 0.6.4 — additive, no migration needed.
+
     Args:
         caller: The caller dict — typically
             ``request_context.caller``. Any JSON-serializable structure.
+        salt: Optional secret bytes that turn the hash into
+            HMAC-SHA256. Same key per deployment; rotate alongside
+            signing-key rotation if cross-period unlinkability matters.
 
     Returns:
-        ``"sha256:<hex>"`` string suitable for direct insertion into the
-        receipt's top-level ``caller_hash`` field.
+        ``"sha256:<hex>"`` (no salt) or ``"hmac-sha256:<hex>"`` (with
+        salt). Suitable for direct insertion into the receipt's
+        top-level ``caller_hash`` field. The prefix is the algorithm
+        identifier; a downstream consumer dispatches on it the same
+        way it does for ``signature.algorithm``.
     """
-    return (
-        "sha256:"
-        + hashlib.sha256(
-            json.dumps(
-                caller,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-            ).encode("utf-8")
-        ).hexdigest()
-    )
+    payload = json.dumps(
+        caller,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    if salt is None:
+        return "sha256:" + hashlib.sha256(payload).hexdigest()
+    return "hmac-sha256:" + hmac.new(salt, payload, hashlib.sha256).hexdigest()
+
+
+def compute_value_hash(value: Any) -> str:
+    """SHA-256 over a value (string, bytes, or JSON-serializable structure).
+
+    The general-purpose content-hash helper used by the memory-write and
+    model-inference convenience entrypoints. Two shapes:
+
+        * **String / bytes**: SHA-256 over the UTF-8 bytes directly. This
+          matches the rule :func:`_hash_output` uses for LLM output text.
+        * **Anything else** (dicts, lists, etc.): canonical JSON
+          (``sort_keys=True, separators=(",", ":"), ensure_ascii=False``)
+          then SHA-256 — same canonicalisation rule as
+          :func:`compute_caller_hash` and
+          :func:`provenex.policy.evaluator.compute_inputs_hash`.
+
+    Always returns ``"sha256:<hex>"``. Suitable as a
+    ``prompt_hash`` (model-inference path) or ``value_hash``
+    (memory-write path) on a receipt's ``actions[i].parameters`` dict.
+    The verbatim value is the caller's choice to record or redact; the
+    hash is the audit anchor either way.
+
+    Args:
+        value: A string, bytes, or any JSON-serializable structure.
+
+    Returns:
+        ``"sha256:<hex>"`` string.
+    """
+    if isinstance(value, str):
+        payload = value.encode("utf-8")
+    elif isinstance(value, (bytes, bytearray)):
+        payload = bytes(value)
+    else:
+        payload = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 class ReceiptBuilder:

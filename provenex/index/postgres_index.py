@@ -138,10 +138,25 @@ class PostgresProvenanceIndex(ProvenanceIndex):
         ConnectionPool = _require_psycopg()
 
         if pool is None:
+            # Force UTF8 client_encoding on every new connection. On a
+            # SQL_ASCII cluster (macOS initdb default), psycopg3 returns
+            # text columns as bytes instead of str — _canonical_payload
+            # then blows up at HMAC time. UTF8 is the only safe choice
+            # for a backend that signs over text-typed rows.
+            def _configure_utf8(conn) -> None:
+                with conn.cursor() as cur:
+                    cur.execute("SET client_encoding = 'UTF8'")
+                # psycopg defaults to non-autocommit; the SET opens an
+                # implicit transaction the pool requires us to close
+                # before handing the connection out (otherwise it's
+                # discarded with a "left in status INTRANS" warning).
+                conn.commit()
+
             self._pool = ConnectionPool(
                 conninfo=dsn,
                 min_size=min_size,
                 max_size=max_size,
+                configure=_configure_utf8,
                 open=True,
             )
             self._owns_pool = True

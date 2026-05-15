@@ -214,10 +214,10 @@ Two domains use distinct roots; cross-domain references fail at parse time.
 
 | Path root | Resolves to |
 | --- | --- |
-| `tool.name` | Tool identifier (e.g. `"web_search"`, `"jira"`, `"jira/issues"` for MCP). |
-| `tool.operation` | The specific operation on the tool (e.g. `"create_issue"`, `"query"`). |
-| `tool.parameters.<key>` | The caller-supplied parameter value at `<key>`. |
-| `tool.target_system` | Logical target system the call would reach (e.g. `"google_custom_search"`, `"acme.atlassian.net"`). |
+| `tool.name` | Tool identifier (e.g. `"web_search"`, `"jira"`, `"jira/issues"` for MCP). For **memory writes** (0.6.5 `admit_memory_write`) this is the constant `"memory.write"`. For **model-inference calls** (0.6.5 `admit_model_inference`) this is the model identifier (e.g. `"claude-opus-4-7"`). |
+| `tool.operation` | The specific operation on the tool (e.g. `"create_issue"`, `"query"`). For memory writes, this is the **memory key being written** — the natural per-key gate axis (`when: { tool.name: "memory.write", tool.operation: "user_profile" }`). For model inference, the verb (`"complete"`, `"stream"`, `"embed"`, `"chat"`). |
+| `tool.parameters.<key>` | The caller-supplied parameter value at `<key>`. Memory writes always have `value_hash`; model inferences always have `prompt_hash`. Both classes default to redacting the verbatim value/prompt — write rules against the hash for content-shape gates, against extras like `tool.parameters.max_tokens` for parameter gates. |
+| `tool.target_system` | Logical target system the call would reach (e.g. `"google_custom_search"`, `"acme.atlassian.net"`, `"anthropic"`, `"openai"`, `"crewai_memory"`). |
 | `tool.invocation_id` | Caller-chosen correlation ID (not load-bearing for the decision). |
 
 **Both domains** see the shared request context:
@@ -479,7 +479,64 @@ tool_call_control:
     unknown_metadata: deny
 ```
 
-### Example 4 — Verification-only, no access control
+### Example 4 — Memory writes and model-inference gates *(0.6.5+)*
+
+The same `tool_call_control` DSL handles memory writes (admission shape with `name="memory.write"` and the memory key carried in `tool.operation`) and model-inference calls (admission shape with `name=<model_name>` and the provider in `tool.target_system`). Same grammar, same operators, same receipt shape — no new DSL surface to learn.
+
+```yaml
+version: 1
+policy_id: agent-memory-and-models-v1
+
+tool_call_control:
+  rules:
+    # Memory-write gate by key — only HR roles can write to user_profile.
+    - name: hr_only_for_user_profile_writes
+      when:
+        tool.name: memory.write
+        tool.operation: user_profile
+      require:
+        request.caller.role:
+          in: [hr_admin, payroll]
+      on_violation: deny
+
+    # Bound write size by checking the value_hash field shape. (Memory
+    # values themselves are redacted from the receipt by default; the
+    # hash is always present and policy can constrain other parameters
+    # like ``ttl`` or ``store_id``.)
+    - name: cache_writes_require_ttl
+      when:
+        tool.name: memory.write
+        tool.operation: cache
+      require:
+        tool.parameters.ttl:
+          in: [60, 300, 3600]
+      on_violation: deny
+
+    # Model-inference allowlist — only allow these two providers.
+    - name: model_provider_allowlist
+      when:
+        tool.operation: { in: [complete, stream, chat] }
+      require:
+        tool.target_system:
+          in: [anthropic, openai]
+      on_violation: deny
+
+    # Token-count cap on Claude Opus — protects budget.
+    - name: claude_opus_token_cap
+      when:
+        tool.name: claude-opus-4-7
+      require:
+        tool.parameters.max_tokens:
+          in: [1000, 2000, 4000, 8000]
+      on_violation: deny
+
+  defaults:
+    unknown_metadata: deny
+```
+
+Detectors can group by `caller_hash + tool.name="memory.write" + tool.operation=<key>` for per-key write rate baselines, and by `caller_hash + tool.name=<model>` for per-model usage baselines. Anomalies — a caller writing to a key 100× their normal rate, or calling Claude Opus 100× the baseline — fall out of standard SIEM aggregations.
+
+### Example 5 — Verification-only, no access control
 
 For early-stage deployments. The access_control section is omitted entirely; only the verification gate applies. This is `verify_chunks` behaviour from v0.1 through v0.3.
 

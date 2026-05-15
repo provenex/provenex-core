@@ -43,6 +43,8 @@ from .admission import (
     AdmissionResult,
     ToolCallDenied,
     admission_check,
+    admit_memory_write,
+    admit_model_inference,
     enforce_admission,
 )
 from .context import ToolCallContext
@@ -68,6 +70,8 @@ __all__ = [
     "AdmissionResult",
     "ToolCallDenied",
     "admission_check",
+    "admit_memory_write",
+    "admit_model_inference",
     "enforce_admission",
     "DECISION_ALLOW",
     "DECISION_DENY",

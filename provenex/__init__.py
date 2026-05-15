@@ -23,6 +23,7 @@ from .core.receipt import (
     ReceiptBuilder,
     ReceiptSigner,
     compute_caller_hash,
+    compute_value_hash,
     verify_receipt_signature,
 )
 from .core.trajectory import (
@@ -32,7 +33,7 @@ from .core.trajectory import (
     audit_trajectory_dag,
     start_trajectory,
 )
-from .core.verify import VerifiedChunks, verify_chunks
+from .core.verify import VerifiedChunks, verify_chunks, verify_memory
 from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
 from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
 from .index.postgres_index import PostgresProvenanceIndex
@@ -68,10 +69,12 @@ from .tool_call import (
     ToolCallDenied,
     ToolCallPolicyEvaluator,
     admission_check,
+    admit_memory_write,
+    admit_model_inference,
     enforce_admission,
 )
 
-__version__ = "0.6.4"
+__version__ = "0.6.5"
 
 __all__ = [
     # Core
@@ -124,6 +127,7 @@ __all__ = [
     "HmacSha256Signer",
     "verify_receipt_signature",
     "compute_caller_hash",
+    "compute_value_hash",
     "Claim",
     "CONTENT_SOURCE_INDEXED_CORPUS",
     "CONTENT_SOURCE_LIVE_TOOL_OUTPUT",
@@ -138,6 +142,7 @@ __all__ = [
     # Framework-agnostic verification
     "VerifiedChunks",
     "verify_chunks",
+    "verify_memory",
     # Tool-call admission (Phase 2, schema 2.2.0)
     "ToolCallContext",
     "ToolCallPolicyEvaluator",
@@ -146,6 +151,8 @@ __all__ = [
     "AdmissionResult",
     "ToolCallDenied",
     "admission_check",
+    "admit_memory_write",
+    "admit_model_inference",
     "enforce_admission",
     "__version__",
 ]

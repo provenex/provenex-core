@@ -162,6 +162,8 @@ def verify_chunks(
     request_context: Optional[RequestContext] = None,
     chunk_metadata: Optional[List[Dict[str, Any]]] = None,
     chunk_metadata_binding: str = BINDING_AT_EVALUATE,
+    caller_hash_salt: Optional[bytes] = None,
+    content_source: Optional[str] = None,
 ) -> VerifiedChunks:
     """Verify a set of chunks against the index and emit a signed receipt.
 
@@ -270,6 +272,7 @@ def verify_chunks(
             normalization_applied=list(
                 fp.fingerprint(text).normalization_applied
             ),
+            content_source=content_source,
         )
         block_by_verification = eff_policy.verification.should_block(outcome)
         block_by_policy = False
@@ -341,10 +344,16 @@ def verify_chunks(
     # Schema 2.3.0: compute caller_hash from the request context's
     # caller dict (when present). Top-level field on the emitted
     # receipt; lets downstream consumers GROUP BY caller without
-    # crawling per-decision inputs.
+    # crawling per-decision inputs. When ``caller_hash_salt`` is
+    # supplied (0.6.5+), the hash becomes HMAC-SHA256 with the salt
+    # as the key — same canonical-JSON payload, two deployments with
+    # different salts produce different caller_hash values for the
+    # same caller (per-deployment unlinkability).
     emit_caller_hash: Optional[str] = None
     if request_context is not None:
-        emit_caller_hash = compute_caller_hash(request_context.caller)
+        emit_caller_hash = compute_caller_hash(
+            request_context.caller, salt=caller_hash_salt
+        )
 
     receipt = builder.finalize(
         output_text=output_text,
@@ -372,3 +381,48 @@ def verify_chunks(
         receipt=receipt,
         next_trajectory=next_trajectory,
     )
+
+
+def verify_memory(
+    memory_chunks: Any,
+    index: ProvenanceIndex,
+    signer: Optional[ReceiptSigner] = None,
+    **kwargs: Any,
+) -> VerifiedChunks:
+    """Convenience: :func:`verify_chunks` with memory-read defaults (schema 2.3.0).
+
+    Thin wrapper that sets the receipt-side classifiers a memory-read step
+    SHOULD carry:
+
+        * ``step_kind="memory_read"`` on the trajectory block (if a
+          trajectory cursor is passed).
+        * ``content_source="memory_store"`` on every emitted source
+          record, so an auditor reading an UNVERIFIED outcome knows to
+          expect a memory miss rather than alarm.
+
+    Both defaults are overridable — pass ``step_kind=...`` or
+    ``content_source=...`` to ``kwargs`` and the explicit value wins.
+
+    Use this when the agent reads from a memory store you've also
+    indexed via Provenex (CrewAI memory, LangGraph state, a custom
+    store). The memory store SHOULD be a :class:`ProvenanceIndex`; for
+    ad-hoc memory not in any index, an ``UNVERIFIED`` outcome with
+    ``content_source="memory_store"`` is the right shape — an auditor
+    reading the receipt sees a memory miss, not a corpus miss.
+
+    Args:
+        memory_chunks: The memory entries to verify. Same shape as
+            :func:`verify_chunks`'s ``chunks`` argument.
+        index: The :class:`ProvenanceIndex` backing the memory store.
+        signer: Optional :class:`ReceiptSigner`.
+        **kwargs: Passed through verbatim to :func:`verify_chunks`.
+
+    Returns:
+        :class:`VerifiedChunks`. The emitted receipt carries
+        ``trajectory.step_kind="memory_read"`` (when a trajectory is
+        in scope) and every source has
+        ``content_source="memory_store"`` (when not overridden).
+    """
+    kwargs.setdefault("step_kind", "memory_read")
+    kwargs.setdefault("content_source", "memory_store")
+    return verify_chunks(memory_chunks, index, signer=signer, **kwargs)

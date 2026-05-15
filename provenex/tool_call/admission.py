@@ -29,6 +29,7 @@ from ..core.receipt import (
     ReceiptBuilder,
     ReceiptSigner,
     compute_caller_hash,
+    compute_value_hash,
 )
 from ..core.trajectory import TrajectoryContext
 from ..policy.evaluator import (
@@ -114,6 +115,7 @@ def admission_check(
     output_text: str = "",
     redact_parameters: bool = False,
     redact_inputs: bool = False,
+    caller_hash_salt: Optional[bytes] = None,
 ) -> AdmissionResult:
     """Evaluate one tool-call attempt against policy and emit a signed receipt.
 
@@ -278,8 +280,13 @@ def admission_check(
 
     # Schema 2.3.0: compute caller_hash from the request's caller dict.
     # admission_check always requires a request, so this is always
-    # emitted on tool-call receipts.
-    emit_caller_hash = compute_caller_hash(request.caller)
+    # emitted on tool-call receipts. When ``caller_hash_salt`` is
+    # supplied (0.6.5+), the hash becomes HMAC-SHA256 — same payload,
+    # different deployment-keyed digest for per-deployment
+    # unlinkability.
+    emit_caller_hash = compute_caller_hash(
+        request.caller, salt=caller_hash_salt
+    )
 
     receipt = builder.finalize(
         output_text=output_text,
@@ -326,3 +333,210 @@ def enforce_admission(*args: Any, **kwargs: Any) -> AdmissionResult:
     if not result.allowed:
         raise ToolCallDenied(result)
     return result
+
+
+def admit_memory_write(
+    memory_key: str,
+    value: Any,
+    request: RequestContext,
+    *,
+    store_id: Optional[str] = None,
+    ttl: Optional[int] = None,
+    extra_parameters: Optional[Dict[str, Any]] = None,
+    policy: Any = None,
+    signer: Optional[ReceiptSigner] = None,
+    trajectory: Optional[TrajectoryContext] = None,
+    redact_value: bool = True,
+    caller_hash_salt: Optional[bytes] = None,
+    **admission_kwargs: Any,
+) -> AdmissionResult:
+    """Convenience: :func:`admission_check` shaped for a memory write (schema 2.3.0).
+
+    Builds a :class:`ToolCallContext` with:
+
+        * ``name="memory.write"`` — the rule axis a tool-call policy
+          author writes against (``when: { tool.name: "memory.write" }``).
+        * ``operation=<memory_key>`` — the policy-rule axis for per-key
+          gating. A rule like ``when: { tool.operation: user_profile }``
+          fires for writes to the ``user_profile`` key only.
+        * ``parameters={value_hash, store_id?, ttl?, **extra_parameters}``
+          — the verbatim value's hash is always present;
+          ``store_id`` and ``ttl`` are included only when supplied;
+          ``extra_parameters`` is merged in for callers who want
+          additional auditable parameters on the receipt.
+        * ``target_system=store_id`` — same as ``parameters.store_id``;
+          duplicated so rules that read ``tool.target_system`` work
+          uniformly across all admission entrypoints.
+
+    Then runs :func:`admission_check(..., step_kind="memory_write")`.
+
+    By default the **verbatim value is NOT recorded** — only its hash
+    via :func:`compute_value_hash`. Memory values commonly contain PII
+    (chat history, user state, intermediate reasoning), so the safer
+    default is to record the hash anchor and let the operator opt in
+    to recording the verbatim value via ``redact_value=False``. The
+    hash is independently verifiable by anyone holding the original
+    value either way.
+
+    Args:
+        memory_key: The key being written. Lands as
+            ``actions[0].operation`` so it's the natural policy-rule
+            axis. Detectors group by
+            ``caller_hash + tool.name="memory.write" + tool.operation=<key>``.
+        value: The value being written. Hashed via
+            :func:`compute_value_hash`; verbatim recorded only if
+            ``redact_value=False``.
+        request: The :class:`RequestContext` carrying caller identity.
+        store_id: Optional logical store identifier (e.g.
+            ``"crewai_memory"``, ``"redis_sessions"``). Recorded as
+            ``target_system`` and as ``parameters.store_id``.
+        ttl: Optional TTL in seconds. Recorded under ``parameters.ttl``
+            when supplied.
+        extra_parameters: Additional caller-supplied parameters to
+            merge onto the action record's ``parameters`` dict.
+        policy: Optional unified :class:`Policy`. The
+            ``tool_call_control`` half of the policy gates the write.
+        signer: Optional :class:`ReceiptSigner`.
+        trajectory: Optional :class:`TrajectoryContext`.
+        redact_value: When True (default), the verbatim value is not
+            recorded on the receipt. ``value_hash`` is always
+            recorded. Set False to record the verbatim value when
+            the value is non-sensitive and you want full audit detail.
+        caller_hash_salt: Optional bytes; passed through to
+            :func:`admission_check` for per-deployment unlinkability.
+        **admission_kwargs: Passed verbatim to :func:`admission_check`.
+
+    Returns:
+        :class:`AdmissionResult`. The receipt carries an ``actions[]``
+        entry with ``name="memory.write"`` and the trajectory step
+        kind ``"memory_write"`` (when a trajectory is in scope).
+    """
+    parameters: Dict[str, Any] = {"value_hash": compute_value_hash(value)}
+    if store_id is not None:
+        parameters["store_id"] = store_id
+    if ttl is not None:
+        parameters["ttl"] = ttl
+    if not redact_value:
+        parameters["value"] = value
+    if extra_parameters:
+        parameters.update(extra_parameters)
+
+    return admission_check(
+        tool=ToolCallContext(
+            name="memory.write",
+            operation=memory_key,
+            parameters=parameters,
+            target_system=store_id,
+        ),
+        request=request,
+        policy=policy,
+        signer=signer,
+        trajectory=trajectory,
+        step_kind=admission_kwargs.pop("step_kind", "memory_write"),
+        caller_hash_salt=caller_hash_salt,
+        **admission_kwargs,
+    )
+
+
+def admit_model_inference(
+    model_name: str,
+    prompt: Any,
+    request: RequestContext,
+    *,
+    target_provider: Optional[str] = None,
+    operation: str = "complete",
+    extra_parameters: Optional[Dict[str, Any]] = None,
+    policy: Any = None,
+    signer: Optional[ReceiptSigner] = None,
+    trajectory: Optional[TrajectoryContext] = None,
+    redact_prompt: bool = True,
+    caller_hash_salt: Optional[bytes] = None,
+    **admission_kwargs: Any,
+) -> AdmissionResult:
+    """Convenience: :func:`admission_check` shaped for a model-inference call (schema 2.3.0).
+
+    Builds a :class:`ToolCallContext` with:
+
+        * ``name=<model_name>`` — e.g. ``"claude-opus-4-7"``,
+          ``"gpt-4o"``. The rule axis a tool-call policy author writes
+          against (``when: { tool.name: claude-opus-4-7 }``).
+        * ``operation=<operation>`` — ``"complete"`` by default; pass
+          ``"stream"``, ``"embed"``, ``"chat"`` etc. Free-form string,
+          no enum.
+        * ``parameters={prompt_hash, **extra_parameters}`` — the
+          prompt's hash via :func:`compute_value_hash`;
+          ``extra_parameters`` is merged in for things like
+          ``{"max_tokens": 4000, "temperature": 0.2}``.
+        * ``target_system=<target_provider>`` — e.g. ``"anthropic"``,
+          ``"openai"``. The natural axis for a "calls to provider X
+          allowed only for role Y" rule.
+
+    Then runs :func:`admission_check(..., step_kind="model_inference")`.
+
+    Enables anomaly-detector patterns like "this caller is calling
+    claude-opus 100x baseline", "this agent's prompt_hash distribution
+    shifted", "this caller is calling a model from a non-allowlisted
+    provider" — `model_inference` becomes a first-class step kind
+    alongside `retrieval` / `tool_call` / `memory_read` /
+    `memory_write`.
+
+    By default the **verbatim prompt is NOT recorded** — only its hash.
+    Prompts often contain PII / customer data; recording them by
+    default would put Provenex on the data path (against the
+    decision-and-proof discipline). Set ``redact_prompt=False`` to
+    record the verbatim prompt.
+
+    Args:
+        model_name: Model identifier (e.g. ``"claude-opus-4-7"``).
+            Lands as ``actions[0].name``. Detectors group by
+            ``caller_hash + tool.name=<model_name>``.
+        prompt: The prompt. String, bytes, or any JSON-serializable
+            structure (e.g. list of ``{role, content}`` chat messages).
+            Hashed via :func:`compute_value_hash`; verbatim recorded
+            only if ``redact_prompt=False``.
+        request: The :class:`RequestContext` carrying caller identity.
+        target_provider: Optional provider identifier (e.g.
+            ``"anthropic"``, ``"openai"``). Recorded as
+            ``target_system``.
+        operation: Operation classifier on the model
+            (``"complete"`` default, ``"stream"``, ``"embed"``,
+            ``"chat"``).
+        extra_parameters: Additional caller-supplied parameters to
+            merge onto the action record (e.g. ``max_tokens``,
+            ``temperature``).
+        policy: Optional unified :class:`Policy`.
+        signer: Optional :class:`ReceiptSigner`.
+        trajectory: Optional :class:`TrajectoryContext`.
+        redact_prompt: When True (default), the verbatim prompt is
+            not recorded on the receipt. ``prompt_hash`` is always
+            recorded. Set False to record the verbatim prompt.
+        caller_hash_salt: Optional bytes; passed through for
+            per-deployment unlinkability.
+        **admission_kwargs: Passed verbatim to :func:`admission_check`.
+
+    Returns:
+        :class:`AdmissionResult`. The receipt carries an ``actions[]``
+        entry with ``name=<model_name>`` and trajectory step kind
+        ``"model_inference"``.
+    """
+    parameters: Dict[str, Any] = {"prompt_hash": compute_value_hash(prompt)}
+    if not redact_prompt:
+        parameters["prompt"] = prompt
+    if extra_parameters:
+        parameters.update(extra_parameters)
+
+    return admission_check(
+        tool=ToolCallContext(
+            name=model_name,
+            operation=operation,
+            parameters=parameters,
+            target_system=target_provider,
+        ),
+        request=request,
+        policy=policy,
+        signer=signer,
+        trajectory=trajectory,
+        step_kind=admission_kwargs.pop("step_kind", "model_inference"),
+        caller_hash_salt=caller_hash_salt,
+        **admission_kwargs,
+    )
