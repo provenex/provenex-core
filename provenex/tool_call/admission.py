@@ -24,7 +24,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from ..core.receipt import ProvenanceReceipt, ReceiptBuilder, ReceiptSigner
+from ..core.receipt import (
+    ProvenanceReceipt,
+    ReceiptBuilder,
+    ReceiptSigner,
+    compute_caller_hash,
+)
 from ..core.trajectory import TrajectoryContext
 from ..policy.evaluator import (
     BINDING_AT_EVALUATE,
@@ -237,9 +242,12 @@ def admission_check(
             decisions=[decision_dict],
         )
 
-    # Per-emission step_kind override. Default to "tool_call" when no
-    # explicit step_kind is on the cursor — this is the canonical
-    # value reserved in trajectory schema 1.3.0 for exactly this case.
+    # Per-emission step_kind / agent_id / session_id overrides. Default
+    # step_kind to "tool_call" when no explicit one is on the cursor —
+    # this is the canonical value reserved in trajectory schema 1.3.0
+    # for exactly this case. session_id (schema 2.3.0) is pulled from
+    # the request: the request is the source-of-truth per emission, and
+    # the per-step value propagates forward via next_step.
     emit_trajectory: Optional[TrajectoryContext] = trajectory
     if trajectory is not None:
         emit_step_kind = (
@@ -248,9 +256,15 @@ def admission_check(
             else (trajectory.step_kind or "tool_call")
         )
         emit_agent_id = agent_id if agent_id is not None else trajectory.agent_id
+        emit_session_id = (
+            request.session_id
+            if request.session_id is not None
+            else trajectory.session_id
+        )
         if (
             emit_step_kind != trajectory.step_kind
             or emit_agent_id != trajectory.agent_id
+            or emit_session_id != trajectory.session_id
         ):
             emit_trajectory = TrajectoryContext(
                 trajectory_id=trajectory.trajectory_id,
@@ -259,13 +273,20 @@ def admission_check(
                 parent_step_ids=trajectory.parent_step_ids,
                 step_kind=emit_step_kind,
                 agent_id=emit_agent_id,
+                session_id=emit_session_id,
             )
+
+    # Schema 2.3.0: compute caller_hash from the request's caller dict.
+    # admission_check always requires a request, so this is always
+    # emitted on tool-call receipts.
+    emit_caller_hash = compute_caller_hash(request.caller)
 
     receipt = builder.finalize(
         output_text=output_text,
         signer=signer,
         trajectory=emit_trajectory,
         tool_call_control=tool_call_control_block,
+        caller_hash=emit_caller_hash,
     )
 
     next_trajectory: Optional[TrajectoryContext] = None
@@ -273,6 +294,11 @@ def admission_check(
         next_trajectory = trajectory.next_step(
             parent_receipts=[receipt],
             agent_id=agent_id if agent_id is not None else trajectory.agent_id,
+            session_id=(
+                request.session_id
+                if request.session_id is not None
+                else trajectory.session_id
+            ),
         )
 
     return AdmissionResult(

@@ -79,6 +79,16 @@ class TrajectoryContext:
         trajectory_started_at: ISO-8601 UTC timestamp at which the
             trajectory began. Same value across every step in the
             trajectory.
+        session_id: Optional caller-chosen multi-trajectory correlation
+            key (schema 2.3.0+). A user's chat session, an
+            incident-response engagement, a multi-day investigation —
+            anything that spans more than one trajectory in the same
+            logical session. Propagates across :meth:`next_step` by
+            default; per-emission overrides are flowed in by
+            :func:`provenex.core.verify.verify_chunks` and
+            :func:`provenex.tool_call.admission_check` from
+            ``RequestContext.session_id`` so the request is the
+            source-of-truth per step.
     """
 
     trajectory_id: str
@@ -87,6 +97,7 @@ class TrajectoryContext:
     parent_step_ids: Tuple[str, ...] = field(default_factory=tuple)
     step_kind: Optional[str] = None
     agent_id: Optional[str] = None
+    session_id: Optional[str] = None
 
     def next_step(
         self,
@@ -94,6 +105,7 @@ class TrajectoryContext:
         parent_step_ids: Optional[Iterable[str]] = None,
         step_kind: Optional[str] = None,
         agent_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> "TrajectoryContext":
         """Build a successor step.
 
@@ -110,6 +122,11 @@ class TrajectoryContext:
             agent_id: Optional agent identifier. Inherits from the current
                 step's ``agent_id`` if not specified. Override for
                 multi-agent handoffs.
+            session_id: Optional multi-trajectory correlation key. Inherits
+                from the current step's ``session_id`` if not specified.
+                Override to start a new session within the same trajectory
+                (unusual — sessions usually span trajectories rather than
+                the reverse).
 
         Returns:
             A new :class:`TrajectoryContext` with ``step_index`` incremented
@@ -135,14 +152,17 @@ class TrajectoryContext:
             parent_step_ids=tuple(parents),
             step_kind=step_kind,
             agent_id=agent_id if agent_id is not None else self.agent_id,
+            session_id=(
+                session_id if session_id is not None else self.session_id
+            ),
         )
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the trajectory block in canonical schema order.
 
-        Optional fields (``step_kind``, ``agent_id``) are omitted when
-        ``None`` rather than emitted as JSON ``null``. This matches the
-        receipt's existing convention for ``transparency_log``.
+        Optional fields (``step_kind``, ``agent_id``, ``session_id``) are
+        omitted when ``None`` rather than emitted as JSON ``null``. This
+        matches the receipt's existing convention for ``transparency_log``.
         """
         d: Dict[str, Any] = {
             "trajectory_id": self.trajectory_id,
@@ -154,12 +174,15 @@ class TrajectoryContext:
             d["step_kind"] = self.step_kind
         if self.agent_id is not None:
             d["agent_id"] = self.agent_id
+        if self.session_id is not None:
+            d["session_id"] = self.session_id
         return d
 
 
 def start_trajectory(
     agent_id: Optional[str] = None,
     step_kind: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> TrajectoryContext:
     """Begin a new trajectory at step 0.
 
@@ -167,6 +190,16 @@ def start_trajectory(
         agent_id: Optional identifier for the agent starting the trajectory.
             Inherited by subsequent steps unless overridden.
         step_kind: Optional classifier for the first step.
+        session_id: Optional multi-trajectory correlation key (schema
+            2.3.0+). Set once at trajectory start to tag every receipt
+            in the trajectory with a stable session identifier. A
+            downstream anomaly detector GROUP BYs ``session_id`` to
+            correlate trajectories that share a logical session
+            boundary (a chat session, an incident-response engagement).
+            Propagates via :meth:`TrajectoryContext.next_step` unless
+            overridden per-emission by a
+            :class:`provenex.policy.evaluator.RequestContext` that
+            carries its own ``session_id``.
 
     Returns:
         A root :class:`TrajectoryContext` with a fresh ``trajectory_id``,
@@ -186,6 +219,7 @@ def start_trajectory(
         parent_step_ids=(),
         step_kind=step_kind,
         agent_id=agent_id,
+        session_id=session_id,
     )
 
 

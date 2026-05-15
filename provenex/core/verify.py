@@ -37,7 +37,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .fingerprinter import Fingerprinter, FingerprinterConfig
-from .receipt import ProvenanceReceipt, ReceiptBuilder, ReceiptSigner
+from .receipt import (
+    ProvenanceReceipt,
+    ReceiptBuilder,
+    ReceiptSigner,
+    compute_caller_hash,
+)
 from .trajectory import TrajectoryContext
 from ..index.base import IndexEntry, ProvenanceIndex
 from ..policy.evaluator import (
@@ -298,10 +303,20 @@ def verify_chunks(
             kept.append(text)
 
     # If trajectory is provided, allow per-call overrides of step_kind /
-    # agent_id without mutating the caller's cursor.
+    # agent_id / session_id without mutating the caller's cursor. The
+    # request-supplied session_id (schema 2.3.0) wins over whatever the
+    # cursor carries, then propagates forward via next_step. The request
+    # is the source-of-truth per emission; operators who want
+    # session immutability across a trajectory should set the session
+    # once at start_trajectory and not pass it on subsequent requests.
+    request_session_id = (
+        request_context.session_id if request_context is not None else None
+    )
     emit_trajectory: Optional[TrajectoryContext] = trajectory
     if trajectory is not None and (
-        step_kind is not None or agent_id is not None
+        step_kind is not None
+        or agent_id is not None
+        or request_session_id is not None
     ):
         emit_trajectory = TrajectoryContext(
             trajectory_id=trajectory.trajectory_id,
@@ -310,6 +325,11 @@ def verify_chunks(
             parent_step_ids=trajectory.parent_step_ids,
             step_kind=step_kind if step_kind is not None else trajectory.step_kind,
             agent_id=agent_id if agent_id is not None else trajectory.agent_id,
+            session_id=(
+                request_session_id
+                if request_session_id is not None
+                else trajectory.session_id
+            ),
         )
 
     access_control_block: Optional[Dict[str, Any]] = None
@@ -318,11 +338,20 @@ def verify_chunks(
             eff_policy.access_control, policy_decisions
         )
 
+    # Schema 2.3.0: compute caller_hash from the request context's
+    # caller dict (when present). Top-level field on the emitted
+    # receipt; lets downstream consumers GROUP BY caller without
+    # crawling per-decision inputs.
+    emit_caller_hash: Optional[str] = None
+    if request_context is not None:
+        emit_caller_hash = compute_caller_hash(request_context.caller)
+
     receipt = builder.finalize(
         output_text=output_text,
         signer=signer,
         trajectory=emit_trajectory,
         access_control=access_control_block,
+        caller_hash=emit_caller_hash,
     )
 
     next_trajectory: Optional[TrajectoryContext] = None
@@ -330,6 +359,11 @@ def verify_chunks(
         next_trajectory = trajectory.next_step(
             parent_receipts=[receipt],
             agent_id=agent_id if agent_id is not None else trajectory.agent_id,
+            session_id=(
+                request_session_id
+                if request_session_id is not None
+                else trajectory.session_id
+            ),
         )
 
     return VerifiedChunks(

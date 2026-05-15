@@ -222,8 +222,8 @@ def test_schema_version_is_current():
     1.2.0 remains reserved for RFC-0001's coverage block.
     """
     receipt = ReceiptBuilder().finalize(output_text="x")
-    assert receipt.schema_version == "2.2.0"
-    assert receipt.to_dict()["schema_version"] == "2.2.0"
+    assert receipt.schema_version == "2.3.0"
+    assert receipt.to_dict()["schema_version"] == "2.3.0"
 
 
 # --------------------------------------------------------------------------- #

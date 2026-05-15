@@ -66,11 +66,22 @@ from .trajectory import TrajectoryContext
 #           gains ``total_actions`` / ``actions_allowed`` /
 #           ``actions_denied`` when actions are present. Additive: a
 #           2.1.0 receipt with no actions is a valid 2.2.0 receipt.
+#   2.3.0 — Source-of-record fields for downstream anomaly detectors /
+#           SIEMs. Top-level ``caller_hash`` (SHA-256 over the canonical
+#           JSON of ``request_context.caller``) lets a consumer GROUP BY
+#           caller without crawling per-decision input blobs. Optional
+#           ``trajectory.session_id`` (caller-chosen opaque string) is a
+#           multi-trajectory correlation key. Additive: a 2.2.0 receipt
+#           remains a valid 2.3.0 receipt; a 2.2.0 verifier that ignores
+#           unknown fields validates a 2.3.0 receipt unchanged. The
+#           canonical signing payload covers both new fields via the
+#           existing sort_keys+tight-separators rule, so no signing-format
+#           change.
 # Minor-version bumps are additive: receipts at a lower revision remain
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
-SCHEMA_VERSION = "2.2.0"
-ISSUER = "provenex-core/0.6.0"
+SCHEMA_VERSION = "2.3.0"
+ISSUER = "provenex-core/0.6.4"
 
 
 # --------------------------------------------------------------------------- #
@@ -365,6 +376,12 @@ class ProvenanceReceipt:
     # admission pipeline. Pure-retrieval receipts leave both empty/None.
     actions: List[ActionRecord] = field(default_factory=list)
     tool_call_control: Optional[Dict[str, Any]] = None
+    # Schema 2.3.0: top-level SHA-256 over the canonical JSON of
+    # ``request_context.caller``. Computed once at emission so a
+    # downstream anomaly detector / SIEM can GROUP BY caller without
+    # crawling the per-decision inputs blob. Absent on receipts produced
+    # without a RequestContext (the standalone-demo path).
+    caller_hash: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -389,14 +406,24 @@ class ProvenanceReceipt:
             "schema_version": self.schema_version,
             "issued_at": self.issued_at,
             "issuer": self.issuer,
-            "output": {
-                "hash": self.output_hash,
-                "hash_algorithm": "sha256",
-            },
-            "sources": [s.to_dict() for s in self.sources],
-            "policy": policy_block,
-            "summary": dict(self.summary),
         }
+        # Schema 2.3.0: caller_hash sits at top level alongside the
+        # other identity / timing fields. Emitted only when present; a
+        # 2.2.0 receipt with no caller_hash remains a valid 2.3.0
+        # receipt under the additive-minor rule.
+        if self.caller_hash is not None:
+            d["caller_hash"] = self.caller_hash
+        d.update(
+            {
+                "output": {
+                    "hash": self.output_hash,
+                    "hash_algorithm": "sha256",
+                },
+                "sources": [s.to_dict() for s in self.sources],
+                "policy": policy_block,
+                "summary": dict(self.summary),
+            }
+        )
         # Schema 2.2.0: actions[] is emitted only when the receipt
         # actually carries tool-call records. An empty actions[] on a
         # pure-retrieval receipt would be a noisy addition to the JSON
@@ -458,6 +485,57 @@ def _new_receipt_id() -> str:
 def _hash_output(output_text: str) -> str:
     """Compute the SHA-256 hash of an LLM output string."""
     return "sha256:" + hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+
+
+def compute_caller_hash(caller: Dict[str, Any]) -> str:
+    """SHA-256 over the canonical JSON of a caller dict (schema 2.3.0+).
+
+    The hash is emitted at the top level of every receipt produced with a
+    :class:`provenex.policy.evaluator.RequestContext` in scope, so a
+    downstream anomaly detector or SIEM can ``GROUP BY caller_hash``
+    without crawling the per-decision ``inputs.request_context.caller``
+    subtree.
+
+    Canonicalisation rule (identical to
+    :func:`provenex.policy.evaluator.compute_inputs_hash` and
+    :func:`compute_policy_version_hash`):
+
+        * ``json.dumps(caller, sort_keys=True, separators=(",", ":"),
+          ensure_ascii=False)`` — dict key order in the input has no
+          effect on the output; tight separators leave no room for
+          encoder-whitespace drift; ``ensure_ascii=False`` preserves
+          non-ASCII characters (smart quotes survive).
+        * UTF-8 encode, SHA-256, hex-prefix with ``"sha256:"``.
+
+    Verbatim over ``caller``, by design. A caller who adds a new key
+    splits a previously-grouped caller into two from a detector's
+    perspective — that's the right signal in practice (added fields are
+    behavior changes), but operators who want stability across upstream
+    churn should put only the stable identity subset (subject ID, role,
+    tenant) in ``caller`` and route churn-prone fields elsewhere on
+    :class:`RequestContext`. See
+    [docs/receipt_format.md](../../docs/receipt_format.md) for the
+    convention.
+
+    Args:
+        caller: The caller dict — typically
+            ``request_context.caller``. Any JSON-serializable structure.
+
+    Returns:
+        ``"sha256:<hex>"`` string suitable for direct insertion into the
+        receipt's top-level ``caller_hash`` field.
+    """
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                caller,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+    )
 
 
 class ReceiptBuilder:
@@ -676,6 +754,7 @@ class ReceiptBuilder:
         trajectory: Optional[TrajectoryContext] = None,
         access_control: Optional[Dict[str, Any]] = None,
         tool_call_control: Optional[Dict[str, Any]] = None,
+        caller_hash: Optional[str] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -710,6 +789,13 @@ class ReceiptBuilder:
                 Callers normally do not assemble this by hand: see
                 :func:`provenex.tool_call.admission_check`, which builds
                 it from a configured :class:`Policy`.
+            caller_hash: Optional schema-2.3.0 top-level field — SHA-256
+                over the canonical JSON of ``request_context.caller``.
+                Callers normally do not pass this directly; the wiring
+                in :func:`provenex.core.verify.verify_chunks` and
+                :func:`provenex.tool_call.admission_check` computes it
+                from the request context. Use
+                :func:`compute_caller_hash` to build the string.
 
         Returns:
             The completed :class:`ProvenanceReceipt`.
@@ -728,6 +814,7 @@ class ReceiptBuilder:
             tool_call_control=(
                 dict(tool_call_control) if tool_call_control else None
             ),
+            caller_hash=caller_hash,
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

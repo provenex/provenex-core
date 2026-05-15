@@ -46,7 +46,7 @@ def test_receipt_basic_schema():
     # ``access_control`` subsections. History: 1.1.0 (transparency log)
     # → 1.2.0 (RESERVED, RFC-0001 coverage block) → 1.3.0 (trajectory)
     # → 1.4.0 (claims + content_source) → 2.0.0 (unified policy).
-    assert d["schema_version"] == "2.2.0"
+    assert d["schema_version"] == "2.3.0"
     assert d["issuer"].startswith("provenex-core/")
     assert "issued_at" in d
     assert d["output"]["hash"].startswith("sha256:")

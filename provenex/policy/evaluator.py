@@ -149,12 +149,25 @@ class RequestContext:
             "now" used for freshness comparisons (``not_older_than``).
             Sourcing freshness from the request timestamp (not wall
             clock) keeps decisions deterministic and auditable.
+        session_id: Optional caller-chosen opaque multi-trajectory
+            correlation key (schema 2.3.0+). NOT a policy input — never
+            resolves under ``request.*`` in a rule's ``when`` or
+            ``require`` clause, and is excluded from ``inputs_hash`` by
+            design (two requests differing only in ``session_id``
+            produce identical decisions and identical input hashes).
+            The wiring layer (:func:`provenex.core.verify.verify_chunks`,
+            :func:`provenex.tool_call.admission_check`) reads this and
+            stamps it onto the emitted receipt's ``trajectory.session_id``
+            field for downstream correlation. When passed on a request
+            without a trajectory in scope, the value is silently dropped
+            (single-shot calls aren't sessions).
     """
 
     caller: Dict[str, Any]
     jurisdiction: Optional[str]
     purpose: Optional[str]
     timestamp: str
+    session_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

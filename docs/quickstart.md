@@ -209,7 +209,13 @@ When an agent retrieves more than once per answer — Self-RAG, RAT, LangGraph D
 ```python
 import provenex
 
-traj = provenex.start_trajectory(agent_id="research_agent")
+# session_id (schema 2.3.0+) is a multi-trajectory correlation key for
+# downstream anomaly detectors / SIEMs. Set once at start_trajectory
+# and every receipt in the trajectory carries it.
+traj = provenex.start_trajectory(
+    agent_id="research_agent",
+    session_id="research-session-2026-05-14-001",
+)
 r1 = provenex.verify_chunks(chunks_step_a, index=index, trajectory=traj)
 r2 = provenex.verify_chunks(chunks_step_b, index=index, trajectory=r1.next_trajectory)
 r3 = provenex.verify_chunks(
@@ -395,6 +401,10 @@ request = RequestContext(
     jurisdiction="US",
     purpose="incident_response",
     timestamp="2026-05-14T11:30:00Z",
+    # Optional schema-2.3.0 correlation tag. Stamped onto the emitted
+    # receipt's trajectory.session_id field (when a trajectory is in
+    # scope); silently dropped on single-shot calls.
+    session_id="incident-2026-05-14-customer-success-001",
 )
 
 result = admission_check(
@@ -508,6 +518,33 @@ assert ok, "receipt signature invalid; receipt has been tampered with"
 ```
 
 For asymmetric verification (so an auditor can verify without holding the signing key), implement the `ReceiptSigner` interface with Ed25519 or similar and swap it in. The receipt structure does not change.
+
+## Reading receipts as an anomaly-detection event stream
+
+Schema 2.3.0 adds two correlation fields that make Provenex receipts the source-of-record an AI-agent anomaly detector or SIEM consumes:
+
+- **`caller_hash`** (top-level) — a stable SHA-256 over `request_context.caller`. `GROUP BY caller_hash` to baseline a single user's activity across all their receipts without crawling per-decision input blobs.
+- **`trajectory.session_id`** (optional) — a caller-chosen opaque string that correlates receipts across multiple trajectories under one logical session.
+
+```python
+# Read your receipts dir as a downstream consumer would. Bucket by
+# caller, then by session, to surface per-caller / per-session shape.
+import json
+from collections import Counter
+from pathlib import Path
+
+caller_actions = Counter()
+session_step_kinds = Counter()
+for path in Path("./receipts").glob("*.json"):
+    r = json.loads(path.read_text())
+    caller_actions[r.get("caller_hash", "anonymous")] += len(r.get("actions", []))
+    sess = r.get("trajectory", {}).get("session_id")
+    sk = r.get("trajectory", {}).get("step_kind")
+    if sess and sk:
+        session_step_kinds[(sess, sk)] += 1
+```
+
+Provenex emits the source-of-record. The detector / SIEM that reads it is the detector. We don't compete with the detector — we're the substrate that makes detection possible. See [`../examples/anomaly_correlation_demo.py`](../examples/anomaly_correlation_demo.py) for a runnable demo (stdlib only) and [`../examples/anomaly_correlation_with_policy_demo.py`](../examples/anomaly_correlation_with_policy_demo.py) for the same demo running against a unified YAML policy.
 
 ## Next steps
 

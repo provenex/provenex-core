@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.0)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.0)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.4)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.4)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -94,8 +94,9 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "2.2.0",
-  "issuer": "provenex-core/0.6.0",
+  "schema_version": "2.3.0",
+  "issuer": "provenex-core/0.6.4",
+  "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
     { "chunk_index": 0, "fingerprint": "sha256:1ebcde39...",
@@ -138,11 +139,17 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
   "summary": { "total_chunks": 3, "verified": 2, "unverified": 1,
                "total_actions": 1, "actions_allowed": 1, "actions_denied": 0,
                "overall_status": "PARTIAL" },
+  "trajectory": { "trajectory_id": "trj_a3f1c0d2...", "step_index": 1,
+                  "parent_step_ids": ["prx_c5d8e1f2..."], "step_kind": "tool_call",
+                  "agent_id": "incident_agent",
+                  "session_id": "incident-2026-05-14-customer-success-001" },
   "signature": { "algorithm": "hmac-sha256", "value": "fc5d40895ca2..." }
 }
 ```
 
 A chunk reaches the LLM only if it clears **both** gates: the verification policy AND the access-control policy. The receipt records both verdicts per chunk so an auditor can reason about them independently — and the signature covers everything.
+
+**Source-of-record fields for downstream anomaly detectors / SIEMs (schema 2.3.0).** `caller_hash` is the SHA-256 over the canonical JSON of `request_context.caller` — a stable group-by key so a detector can baseline a single user's activity across receipts without crawling per-decision input blobs. `trajectory.session_id` is a caller-chosen opaque string that correlates multiple trajectories under one logical session (a chat conversation, an incident-response engagement, a multi-day investigation). Both fields are decision-and-proof artifacts: they don't influence policy decisions (so `inputs_hash` stays deterministic), they just make receipts joinable downstream. Provenex emits the source-of-record; your detector / SIEM is the SIEM that reads it.
 
 ## Where Provenex fits in your stack
 

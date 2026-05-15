@@ -2,7 +2,7 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`2.2.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`.
+This document specifies the schema. The current schema version is **`2.3.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`.
 
 Schema history:
 
@@ -17,6 +17,7 @@ Schema history:
 | `2.0.0` | **Breaking.** Unified `policy` block with `verification` and optional `access_control` subsections. The 1.x top-level `policy` (which held only the verification config) is replaced by `policy.verification`. |
 | `2.1.0` | Per-decision `metadata_binding` field on `policy.access_control.decisions[]` recording whether `chunk_metadata` was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Additive: receipts without the field are valid 2.0.0 subsets. |
 | `2.2.0` | **Phase 2.** Optional top-level `actions[]` array (tool-call records, parallel to `sources[]`); optional `policy.tool_call_control` subsection (admission decision record, parallel to `policy.access_control`); `summary` gains `total_actions` / `actions_allowed` / `actions_denied` when actions are present. Additive: a 2.1.0 receipt with no actions is a valid 2.2.0 receipt; a 2.1.0 verifier that ignores unknown fields validates a 2.2.0 receipt with actions. |
+| `2.3.0` | **Source-of-record fields for downstream anomaly detectors / SIEMs.** Top-level `caller_hash` — SHA-256 over the canonical JSON of `request_context.caller`, emitted on every receipt produced with a `RequestContext` in scope. Optional `trajectory.session_id` — caller-chosen opaque multi-trajectory correlation key. Both fields are decision-and-proof artifacts (do not influence policy decisions; `inputs_hash` is unchanged when only `session_id` differs). Additive: a 2.2.0 receipt remains a valid 2.3.0 receipt; a 2.2.0 verifier that ignores unknown fields validates a 2.3.0 receipt unchanged; no signing-format change. |
 
 Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
 
@@ -48,9 +49,10 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "2.2.0",
+  "schema_version": "2.3.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
-  "issuer": "provenex-core/0.6.0",
+  "issuer": "provenex-core/0.6.4",
+  "caller_hash": "sha256:<64 hex chars>",   // optional (schema 2.3.0+)
   "output": { ... },
   "sources": [ ... ],
   "actions": [ ... ],            // optional (schema 2.2.0+)
@@ -69,9 +71,10 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. Always `2.2.0` for receipts produced by this SDK. |
+| `schema_version` | string | Semver. Always `2.3.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/0.6.0`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/0.6.4`. |
+| `caller_hash` | string | Optional (2.3.0+). `"sha256:<hex>"` over the canonical JSON of `request_context.caller`. Present on every receipt produced from a `RequestContext`; absent on the standalone-builder path. See **Top-level `caller_hash`** below. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
 | `actions` | array | Optional (2.2.0+). One entry per tool-call attempt. Present only when the receipt covers tool-call admissions; absent for pure-retrieval receipts. See below. |
@@ -106,6 +109,30 @@ All gates are evaluated independently. A chunk reaches the LLM only if it clears
 | `output.hash_algorithm` | string | Always `sha256` in this schema version. |
 
 The output text itself is **never** stored on the receipt. Only its hash.
+
+## Top-level `caller_hash` *(schema 2.3.0+)*
+
+A SHA-256 over the canonical JSON of `request_context.caller`. Lets a downstream anomaly detector / SIEM `GROUP BY caller_hash` without crawling per-decision `inputs.request_context.caller` blobs. Always emitted on receipts produced via `verify_chunks(request_context=...)`, `admission_check(...)`, or any framework wrapper that ultimately delegates to one of those. Omitted on receipts produced via the pure `ReceiptBuilder` path (no request context in scope).
+
+```json
+{ "caller_hash": "sha256:7a2bf01571c43f..." }
+```
+
+**Canonicalisation.** Identical to the rule used elsewhere in the receipt:
+
+```python
+json.dumps(caller, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+```
+
+Then SHA-256, hex-prefixed with `sha256:`. Use `provenex.compute_caller_hash(caller)` to recompute from raw caller JSON — useful for a downstream consumer that wants to verify the receipt is self-consistent (`compute_caller_hash(receipt.policy.access_control.decisions[0].inputs.request_context.caller) == receipt.caller_hash`).
+
+**Verbatim — by design.** The hash covers the caller dict exactly as supplied. A caller who adds a new key splits a previously-grouped caller into two buckets from a detector's perspective. That's the right signal in practice (added fields are behavior changes), but operators who want stability across upstream churn should follow this convention:
+
+> Put stable identity in `caller.*` (subject ID, role, tenant). Put churn-prone request-shape fields elsewhere on the request context (`purpose`, `jurisdiction`, future-additive request-level fields).
+
+**Decision-and-proof.** `caller_hash` is a correlation tag, not a policy input. It does not appear under `request.*` in any policy rule's `when` or `require` clause; the policy evaluator does not read it. The deterministic-per-evaluation contract on `PolicyEvaluator` is preserved: `inputs_hash` covers the verbatim caller dict that *is* a policy input, while `caller_hash` is a hash *of* that input emitted at the top of the receipt for downstream convenience.
+
+The signature covers `caller_hash` via the existing canonical-JSON rule — tampering invalidates the signature.
 
 ## `sources[]`
 
@@ -448,7 +475,8 @@ Optional. Present iff the receipt is part of a multi-step agent trajectory (sche
     "parent_step_ids": ["prx_c5d8e1f203a497bd5a6e0c2b48f7d519"],
     "step_kind": "retrieval",
     "agent_id": "research_agent",
-    "trajectory_started_at": "2026-05-13T10:00:00.000Z"
+    "trajectory_started_at": "2026-05-13T10:00:00.000Z",
+    "session_id": "incident-2026-05-14-customer-success-001"
   }
 }
 ```
@@ -461,6 +489,7 @@ Optional. Present iff the receipt is part of a multi-step agent trajectory (sche
 | `trajectory.step_kind` | string | Optional. Free-form classifier. Provenex-defined values: `retrieval`, `tool_call`, `memory_read`, `memory_write`, `compilation`. Unknown values are valid for forward compatibility. |
 | `trajectory.agent_id` | string | Optional. Caller-chosen opaque identifier for the emitting agent. Useful in multi-agent flows. Do not encode PII here. |
 | `trajectory.trajectory_started_at` | string | ISO-8601 UTC with millisecond precision. Same value across every step in the trajectory; lets a single step locate itself in time without the whole set. |
+| `trajectory.session_id` | string | Optional (2.3.0+). Caller-chosen opaque multi-trajectory correlation key. Set via `start_trajectory(session_id=...)` or `RequestContext.session_id`. Where `trajectory_id` correlates receipts within one DAG, `session_id` correlates receipts *across* trajectories that belong to one logical session — a user's chat session, an incident-response engagement, a multi-day investigation. **Not** a policy input (not readable under `request.*` in a rule); a correlation tag for downstream consumers. Omitted from JSON when absent; passed on a request without a trajectory in scope, it is silently dropped (single-shot calls aren't sessions). |
 
 The trajectory block is covered by the receipt signature using the same canonical-JSON rule as every other field. Tampering with any trajectory field invalidates the signature.
 

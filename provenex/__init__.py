@@ -22,6 +22,7 @@ from .core.receipt import (
     ProvenanceReceipt,
     ReceiptBuilder,
     ReceiptSigner,
+    compute_caller_hash,
     verify_receipt_signature,
 )
 from .core.trajectory import (
@@ -70,7 +71,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.6.3"
+__version__ = "0.6.4"
 
 __all__ = [
     # Core
@@ -122,6 +123,7 @@ __all__ = [
     "ReceiptSigner",
     "HmacSha256Signer",
     "verify_receipt_signature",
+    "compute_caller_hash",
     "Claim",
     "CONTENT_SOURCE_INDEXED_CORPUS",
     "CONTENT_SOURCE_LIVE_TOOL_OUTPUT",
