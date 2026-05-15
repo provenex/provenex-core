@@ -84,7 +84,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.6.8"
+__version__ = "0.6.9"
 
 __all__ = [
     # Core

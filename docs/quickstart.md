@@ -502,7 +502,11 @@ def handle_tools_call(request):
 
 Every wrapper emits the same receipt shape. A receipt produced via the LangChain wrapper validates the same way as one via MCP middleware. That's the standard — and it does not fragment by framework.
 
-For the headline demo — a four-step `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory audited end-to-end in one CLI invocation — run [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py).
+Runnable end-to-end demos for the framework integrations:
+
+- [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py) — the headline four-step `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory, audited end-to-end in one CLI invocation.
+- [`../examples/mcp_admission_demo.py`](../examples/mcp_admission_demo.py) — full MCP integration. Three live `tools/call` requests through a decorated handler (allow + deny + allow), the `on_deny` callback pattern producing a structured JSON-RPC error response, and `wrap_mcp_request` for routers that don't decorate. Pure stdlib — no actual MCP server library needed.
+- [`../examples/langgraph_admission_node_demo.py`](../examples/langgraph_admission_node_demo.py) — full LangGraph integration. Conditional-edge pattern: `admit_jira → if allowed → execute_jira → END` vs `→ if denied → denied_handler → END`. Two scenarios (engineer-allowed + viewer-denied), both audited. Pure stdlib — the integration imports nothing from langgraph, so the demo runs without the optional `[langgraph]` extra.
 
 See [`docs/policy.md`](policy.md) for the full DSL reference including the new `matches_pattern` / `not_matches_pattern` / `length_at_most` operators and the `tool.*` path roots; see [`docs/receipt_format.md`](receipt_format.md) for the schema 2.2.0 `actions[]` and `policy.tool_call_control` field reference.
 

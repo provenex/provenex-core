@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.8)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.8)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.9)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.9)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -95,7 +95,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.6.8",
+  "issuer": "provenex-core/0.6.9",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
@@ -513,6 +513,10 @@ python provenex-core/examples/standalone_demo.py
 For the integration-pattern story, run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store, bypassing Provenex ingest, get caught at the retrieval boundary and blocked from reaching the LLM.
 
 For the **Phase 2** headline demo — a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation — run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
+
+For **MCP** servers: [`examples/mcp_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/mcp_admission_demo.py) — the `provenex_mcp_admission` decorator on a JSON-RPC `tools/call` handler. Three live requests (allow + deny + allow), the `on_deny` callback pattern emitting a structured JSON-RPC error response, plus the lower-level `wrap_mcp_request` for routers. Pure stdlib — no MCP server library needed.
+
+For **LangGraph** state graphs: [`examples/langgraph_admission_node_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/langgraph_admission_node_demo.py) — the conditional-edge pattern (`admit_jira → execute_jira` on allow vs `admit_jira → denied_handler` on deny). Two scenarios (engineer-allowed + viewer-denied), both audited end-to-end. Pure stdlib — the integration imports nothing from langgraph, so the demo runs without `[langgraph]` installed.
 
 ## CLI
 
