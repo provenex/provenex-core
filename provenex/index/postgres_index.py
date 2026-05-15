@@ -202,9 +202,18 @@ class PostgresProvenanceIndex(ProvenanceIndex):
 
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
-                # Lock the document row (if any) to serialize concurrent
-                # supersession against this document_id. New documents take
-                # no lock; the unique PK protects against duplicate inserts.
+                # Take a transaction-scoped advisory lock keyed on
+                # document_id BEFORE the SELECT. SELECT ... FOR UPDATE
+                # alone does not serialise the new-document case
+                # (returns no row to lock), so two concurrent inserts
+                # with the same document_id could race past it and
+                # disagree on authorization. hashtext() collapses to a
+                # 32-bit int; collisions are false contention, not
+                # safety. The lock auto-releases on commit/rollback.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)",
+                    (document_id,),
+                )
                 cur.execute(
                     "SELECT current_version FROM provenex_documents "
                     "WHERE document_id = %s FOR UPDATE",
@@ -296,6 +305,12 @@ class PostgresProvenanceIndex(ProvenanceIndex):
     def set_authorization(self, document_id: str, authorized: bool) -> None:
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
+                # Same advisory lock as add() so a concurrent add() and
+                # set_authorization() cannot race on the same document.
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)",
+                    (document_id,),
+                )
                 cur.execute(
                     "UPDATE provenex_documents SET authorized = %s "
                     "WHERE document_id = %s",
@@ -308,6 +323,12 @@ class PostgresProvenanceIndex(ProvenanceIndex):
     def supersede(self, document_id: str, new_version: str) -> int:
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
+                # Same advisory lock as add() / set_authorization() so
+                # supersession cannot race against a concurrent add().
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s)::bigint)",
+                    (document_id,),
+                )
                 cur.execute(
                     "UPDATE provenex_fingerprints SET superseded = TRUE "
                     "WHERE document_id = %s AND document_version != %s",

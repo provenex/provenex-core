@@ -67,6 +67,18 @@ _KNOWN_REQUIRE_OPERATORS = frozenset(
     }
 )
 
+# Hard ceiling on the input length to ``matches_pattern`` /
+# ``not_matches_pattern``. fnmatch.fnmatchcase is linear in the typical
+# case but pathological globs paired with very large inputs can still
+# burn cycles; this cap bounds the per-decision cost regardless of how
+# the policy is authored. 64 KiB is comfortably above any realistic
+# tool-parameter / metadata value while well below the size at which
+# pattern evaluation becomes a per-request DoS vector. Operators who
+# need to match larger strings should declare an explicit
+# ``length_at_most`` companion rule (which sees this cap, not the
+# truncated input).
+_MAX_PATTERN_INPUT_LEN = 65536
+
 # Path roots a rule is allowed to reference, by domain. The
 # ``access_control`` rules see chunks and the request context; tool-call
 # ``tool_call_control`` rules see tool calls and the request context.
@@ -575,6 +587,17 @@ def _check_constraint(
                 f"{path}: 'matches_pattern' requires a string value, "
                 f"got {type(actual).__name__}"
             )
+        if len(actual) > _MAX_PATTERN_INPUT_LEN:
+            # Fail-closed: oversized inputs cannot satisfy a require/match,
+            # so the rule fires and denies. Prevents O(N×M) work from an
+            # unbounded upstream value paired with a glob containing many
+            # ``*`` segments. Operators who legitimately need to match
+            # larger strings should add a companion ``length_at_most``
+            # rule or raise this cap.
+            return False, (
+                f"{path}: matches_pattern input rejected "
+                f"(len={len(actual)} > {_MAX_PATTERN_INPUT_LEN})"
+            )
         return fnmatch.fnmatchcase(actual, pattern), (
             f"{path}: matches_pattern {pattern!r}"
         )
@@ -584,6 +607,13 @@ def _check_constraint(
             return False, (
                 f"{path}: 'not_matches_pattern' requires a string value, "
                 f"got {type(actual).__name__}"
+            )
+        if len(actual) > _MAX_PATTERN_INPUT_LEN:
+            # Same fail-closed semantics as ``matches_pattern`` above:
+            # the require fails, the rule fires.
+            return False, (
+                f"{path}: not_matches_pattern input rejected "
+                f"(len={len(actual)} > {_MAX_PATTERN_INPUT_LEN})"
             )
         return (not fnmatch.fnmatchcase(actual, pattern)), (
             f"{path}: not_matches_pattern {pattern!r}"

@@ -299,6 +299,63 @@ rules:
         )
 
 
+def test_matches_pattern_input_length_capped():
+    """Oversized inputs to matches_pattern are rejected (fail-closed).
+
+    fnmatch is linear in the typical case, but unbounded upstream values
+    paired with multi-star globs can still burn cycles. The cap bounds
+    the per-decision cost regardless of the policy's authoring quality.
+    """
+    ev = NativeYamlToolCallEvaluator.from_text(
+        """
+version: 1
+policy_id: t
+rules:
+  - name: url_allowlist
+    when: { tool.name: fetch }
+    require:
+      tool.parameters.url:
+        matches_pattern: "https://*.example.com/*"
+    on_violation: deny
+""",
+        source="<inline>",
+    )
+    # 100 KiB URL — exceeds the 64 KiB cap, so the require fails and
+    # the rule fires (deny). Importantly, evaluation returns promptly.
+    oversize = "https://api.example.com/" + ("a" * 100_000)
+    decision = ev.evaluate(
+        ToolCallContext(
+            name="fetch",
+            operation="get",
+            parameters={"url": oversize},
+        ),
+        _request(),
+    )
+    assert decision.decision == DECISION_DENY
+
+
+def test_not_matches_pattern_input_length_capped():
+    """Mirror of the above for not_matches_pattern.
+
+    Same fail-closed semantics — the require fails, the rule fires.
+    A no-secrets-in-query rule on an oversized input denies rather than
+    burning CPU trying to prove the input doesn't contain a secret-like
+    substring.
+    """
+    ev = _eval()
+    oversize_q = "a" * 100_000
+    decision = ev.evaluate(
+        ToolCallContext(
+            name="web_search",
+            operation="query",
+            parameters={"q": oversize_q},
+            target_system="google_custom_search",
+        ),
+        _request(),
+    )
+    assert decision.decision == DECISION_DENY
+
+
 # --------------------------------------------------------------------------- #
 # Bad operator inputs fail at parse                                           #
 # --------------------------------------------------------------------------- #

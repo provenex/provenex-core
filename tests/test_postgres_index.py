@@ -234,6 +234,59 @@ def test_context_manager():
                 cur.execute(f'DROP SCHEMA "{schema}" CASCADE')
 
 
+def test_concurrent_add_serialises_on_document_id(index):
+    """Two threads adding the same document_id concurrently must not race.
+
+    Before the pg_advisory_xact_lock guard, the SELECT FOR UPDATE returned
+    NULL for new documents (no row to lock) and two concurrent inserts
+    could disagree on the authorization bit. With the advisory lock,
+    one of them wins cleanly and the other observes the winner's state.
+    """
+    import threading
+
+    fp_a = "sha256:" + "a" * 64
+    fp_b = "sha256:" + "b" * 64
+    doc_id = "race-doc"
+    doc_version = "sha256:" + "0" * 64
+
+    errors: list[BaseException] = []
+
+    def add(fingerprint: str, authorized: bool) -> None:
+        try:
+            index.add(
+                fingerprint=fingerprint,
+                document_id=doc_id,
+                document_version=doc_version,
+                chunk_offset=0,
+                chunk_length=10,
+                authorized=authorized,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=add, args=(fp_a, True))
+    t2 = threading.Thread(target=add, args=(fp_b, False))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert not errors, f"concurrent add() raised: {errors!r}"
+
+    # Both fingerprints land under the same document_id. The authorization
+    # bit is whichever writer committed last — the important property is
+    # that the document row is consistent (one current_version, one
+    # authorized flag) rather than partially-applied.
+    entry_a = index.lookup(fp_a)
+    entry_b = index.lookup(fp_b)
+    assert entry_a is not None and entry_b is not None
+    assert entry_a.document_id == doc_id == entry_b.document_id
+    assert entry_a.document_version == doc_version == entry_b.document_version
+    # Both fingerprint rows observe the same authorization bit (the
+    # winner's), not split state.
+    assert entry_a.authorized == entry_b.authorized
+
+
 def test_signature_portable_with_sqlite_backend(index):
     """A row written via Postgres must verify under the same HMAC payload SQLite uses.
 
