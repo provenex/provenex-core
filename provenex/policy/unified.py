@@ -51,7 +51,7 @@ _UNIFIED_YAML_TOP_KEYS = frozenset(
         "description",
         "verification",
         "access_control",
-        # Schema 2.2.0 (Phase 2) addition: rules for tool-call admission.
+        # Schema 2.2.0 addition: rules for tool-call admission.
         "tool_call_control",
     }
 )
@@ -134,8 +134,8 @@ class Policy:
     def _from_bundle(cls, bundle: Any, *, source: str) -> "Policy":
         from .evaluator import PolicyParseError
         from .yaml_evaluator import NativeYamlEvaluator
-        # Local import to avoid the Phase 1 ↔ Phase 2 cycle at module
-        # load time. The Phase 2 evaluator subpackage imports from
+        # Local import to avoid the retrieval ↔ tool-call cycle at module
+        # load time. The tool-call evaluator subpackage imports from
         # provenex.policy.evaluator; this module being imported eagerly
         # from there would close the loop.
         from ..tool_call.evaluator import ToolCallPolicyEvaluator
@@ -273,7 +273,7 @@ def build_access_control_metadata(
         "evaluator": evaluator.evaluator_name,
         "policy_id": evaluator.policy_id,
         "policy_version_hash": evaluator.policy_version_hash,
-        # Phase 2 lights this up alongside the transparency-log
+        # this lights this up alongside the transparency-log
         # integration for policy bundles. Always False in v0.4.
         "policy_in_transparency_log": False,
         "decisions": list(decisions),

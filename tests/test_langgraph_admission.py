@@ -1,4 +1,4 @@
-"""Tests for ``provenex_admission_node`` (LangGraph Phase 2).
+"""Tests for ``provenex_admission_node`` (LangGraph tool-call admission).
 
 Same conventions as ``test_langgraph_integration.py``: we don't import
 langgraph itself — nodes are callables ``(state) -> state_delta``, so we
@@ -299,7 +299,7 @@ def test_retrieve_then_admit_threads_trajectory_into_one_dag():
 
 
 def test_admission_node_emits_step_kind_tool_call():
-    """The Phase 2 admission node propagates step_kind="tool_call" onto
+    """The tool-call admission node propagates step_kind="tool_call" onto
     the emitted receipt's trajectory block.
     """
     node = provenex_admission_node(

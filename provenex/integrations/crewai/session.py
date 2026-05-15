@@ -76,8 +76,8 @@ class ProvenexCrewSession:
     ) -> None:
         self._index = index
         self._signer = signer
-        # Accept a unified Policy (Phase 2) or a bare VerificationPolicy
-        # (Phase 1 callers continue to work). coerce_policy wraps the
+        # Accept a unified Policy or a bare VerificationPolicy
+        # (retrieval callers continue to work). coerce_policy wraps the
         # legacy form. The Policy object carries verification +
         # access_control + tool_call_control; verify_chunks and
         # admission_check pick the half they need.
@@ -258,7 +258,7 @@ class ProvenexCrewSession:
         redact_parameters: bool = False,
         redact_inputs: bool = False,
     ) -> AdmissionResult:
-        """Run Phase 2 admission on a tool-call attempt and thread state.
+        """Run tool-call admission on a tool-call attempt and thread state.
 
         Session-aware sibling of :func:`provenex.admission_check`. Pulls
         the policy and signer off the session, supplies the current
@@ -322,11 +322,11 @@ class ProvenexCrewSession:
         redact_parameters: bool = False,
         on_deny: Optional[Callable[[AdmissionResult], Any]] = None,
     ) -> Callable[..., Any]:
-        """Wrap a CrewAI tool with **Phase 2 admission** semantics.
+        """Wrap a CrewAI tool with **tool-call admission** semantics.
 
         Parallel to :meth:`wrap_tool`, but instead of verifying the
-        tool's *output* (Phase 1), this runs admission *before* the
-        tool is invoked (Phase 2). The decision is "should this tool
+        tool's *output*, this runs admission *before* the
+        tool is invoked. The decision is "should this tool
         be called at all," not "should this chunk reach the LLM."
 
         The returned callable:

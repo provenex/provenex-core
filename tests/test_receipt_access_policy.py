@@ -184,7 +184,7 @@ def test_access_control_block_preserves_decision_order():
 
 
 def test_policy_in_transparency_log_is_false_in_v0_4():
-    """Forward-compat field; always False until Phase 2 lights it up."""
+    """Forward-compat field; always False until this lights it up."""
     block = _make_access_control_block(fingerprint="sha256:" + "a" * 64)
     receipt, _ = _build_receipt_with_one_source(access_control=block)
     d = receipt.to_dict()

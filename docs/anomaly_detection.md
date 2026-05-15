@@ -89,9 +89,9 @@ Every field below is on every receipt where it makes sense. Optional fields are 
 | `policy.access_control.policy_version_hash` | `"sha256:<hex>"` | Canonical policy version. Detect "policy version changed" silently. |
 | `policy.access_control.decisions[i].decision` | `allow` / `deny` | Per-chunk decision. Aggregate to per-caller deny rates. |
 | `policy.access_control.decisions[i].rules_fired[]` | list of string | The rules whose `when` clauses matched. Even allowed decisions list rules — this is the **near-miss** signal: rule fired but `require` passed. |
-| `policy.tool_call_control.*` | mirror of access_control | Phase 2 (tool-call admission) equivalent. Same fields, parallel semantics. |
+| `policy.tool_call_control.*` | mirror of access_control | tool-call admission equivalent. Same fields, parallel semantics. |
 
-### Verification (Phase 1, retrieval-side integrity)
+### Verification (retrieval-side integrity)
 
 | Field | Type | What detectors do with it |
 | --- | --- | --- |
@@ -100,7 +100,7 @@ Every field below is on every receipt where it makes sense. Optional fields are 
 | `sources[i].fingerprint` | `"sha256:<hex>"` | The chunk's identity. GROUP BY fingerprint detects "same poisoned chunk delivered to multiple callers." |
 | `sources[i].document_id` | opaque string | Document identity from the index. Useful for "this document is over-retrieved" patterns. |
 
-### Action identity (Phase 2)
+### Action identity
 
 | Field | Type | What detectors do with it |
 | --- | --- | --- |
@@ -368,7 +368,7 @@ The receipt is the cryptographic source-of-truth. The detector's downstream guar
 
 ## Compatibility
 
-This document is the canonical positioning for Provenex's source-of-record architecture. It does not affect the wire format or any API surface. Receipts produced under any Provenex version since 0.5.0 (when Postgres landed) are usable as detector input; receipts produced under 0.6.0+ also carry Phase 2 admission events; receipts produced under 0.6.4+ carry the source-of-record correlation fields (`caller_hash`, `session_id`); receipts produced under 0.6.5+ cover the full agent surface (memory + model inference); receipts produced under 0.6.6+ ship via `ReceiptSink`; receipts produced under 0.6.7+ translate to OCSF v1.3.
+This document is the canonical positioning for Provenex's source-of-record architecture. It does not affect the wire format or any API surface. Receipts produced under any Provenex version since 0.5.0 (when Postgres landed) are usable as detector input; receipts produced under 0.6.0+ also carry tool-call admission events; receipts produced under 0.6.4+ carry the source-of-record correlation fields (`caller_hash`, `session_id`); receipts produced under 0.6.5+ cover the full agent surface (memory + model inference); receipts produced under 0.6.6+ ship via `ReceiptSink`; receipts produced under 0.6.7+ translate to OCSF v1.3.
 
 When OCSF stabilizes AI-specific event classes, this document is updated; receipts are not. The five verification outcomes (`VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED`) are sacred. The decision values (`allow` / `deny`) and the trajectory step kinds are stable. **Detectors written against today's receipts will keep working.**
 

@@ -6,7 +6,7 @@ supplies:
     * :func:`provenex_retrieval_node` — a factory that builds a retrieval
       node which verifies returned chunks, emits a trajectory-linked
       receipt, and threads the trajectory cursor forward in state.
-    * :func:`provenex_admission_node` — Phase 2 sibling. A factory that
+    * :func:`provenex_admission_node` — tool-call admission analog. A factory that
       builds a tool-call admission node: runs admission against policy,
       emits a signed receipt either way, and writes
       ``tool_admitted`` / ``tool_decision`` / ``tool_rules_fired``
@@ -70,7 +70,7 @@ _DEFAULT_KEYS: Dict[str, str] = {
     "blocked_documents": "blocked_documents",
     "receipts": "receipts",
     "trajectory": "trajectory",
-    # Phase 2 admission node keys.
+    # tool-call admission node keys.
     "tool_parameters": "tool_parameters",
     "tool_admitted": "tool_admitted",
     "tool_decision": "tool_decision",
@@ -341,7 +341,7 @@ def provenex_retrieval_node(
 
 
 # --------------------------------------------------------------------------- #
-# Phase 2: tool-call admission node                                           #
+# Tool-call admission node                                           #
 # --------------------------------------------------------------------------- #
 
 

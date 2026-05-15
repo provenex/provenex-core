@@ -32,7 +32,7 @@ Subcommands:
     provenex policy hash <policy.yaml>
         Print the canonical ``policy_version_hash`` for a policy file.
         Useful for confirming what hash will appear in receipts and (in
-        Phase 2) what gets published to the transparency log.
+        what gets published to the transparency log.
 
 The CLI is intentionally minimal. For production use, embed the Python SDK
 directly.
@@ -53,7 +53,7 @@ from ..core.merkle import verify_inclusion_proof
 from ..core.receipt import HmacSha256Signer, ReceiptBuilder, verify_receipt_signature
 from ..core.trajectory import audit_trajectory_dag
 from ..index.base import VerificationOutcome
-from ..index.sqlite_index import SQLiteProvenanceIndex
+from ..index.sqlite_index import SQLiteProvenanceIndex, _canonical_payload
 from ..policy.policy import VerificationPolicy
 from ..policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
 
@@ -205,22 +205,19 @@ def _dim(s: str) -> str:
 def _canonical_leaf(source: Dict[str, Any]) -> bytes:
     """Reconstruct the canonical bytes the Merkle tree hashed for a source.
 
-    This must match ``provenex.index.sqlite_index._canonical_payload`` exactly:
-    six fields, newline-joined, UTF-8 encoded. Documented in
-    ``docs/how_it_works.md``. If the format ever changes, both this function
-    and the producer side must change together (and the receipt schema_version
-    must bump).
+    Delegates to :func:`provenex.index.sqlite_index._canonical_payload` so the
+    serialization (and the per-field validation it performs) is shared with
+    the producer side. If validation rejects a field, the audit fails fast
+    instead of returning a cryptic "proof did not verify".
     """
-    return "\n".join(
-        [
-            str(source["fingerprint"]),
-            str(source["document_id"]),
-            str(source["document_version"]),
-            str(source["ingested_at"]),
-            str(source["chunk_offset"]),
-            str(source["chunk_length"]),
-        ]
-    ).encode("utf-8")
+    return _canonical_payload(
+        fingerprint=str(source["fingerprint"]),
+        document_id=str(source["document_id"]),
+        document_version=str(source["document_version"]),
+        ingested_at=str(source["ingested_at"]),
+        chunk_offset=int(source["chunk_offset"]),
+        chunk_length=int(source["chunk_length"]),
+    )
 
 
 def _hex_of(prefixed: str) -> bytes:
@@ -231,23 +228,33 @@ def _hex_of(prefixed: str) -> bytes:
 
 
 def _audit_signature(
-    receipt: Dict[str, Any], public_key_path: Optional[str]
+    receipt: Dict[str, Any],
+    public_key_path: Optional[str],
+    allow_unsigned: bool = False,
 ) -> Tuple[bool, str]:
     """Check the receipt signature with whichever key material is available.
 
     Routing:
         * ``--public-key <pem>`` provided → use Ed25519 with that public key.
         * Else if PROVENEX_SIGNING_SECRET env var is set → use HMAC-SHA256.
-        * Else → skip signature check (still returns True so overall result
-          depends on inclusion proofs alone).
+        * Else → FAIL unless ``allow_unsigned=True`` (i.e. ``--unsigned``).
 
     The receipt's own ``signature.algorithm`` field must match whichever
     signer we end up using; if it doesn't, we report it as a failure rather
     than silently skipping.
+
+    A receipt with no signature, or no key material to verify with, is
+    treated as a FAIL by default — a green checkmark on an unverified
+    receipt would be worse than refusing to issue one.
     """
     sig = receipt.get("signature")
     if not sig:
-        return True, "no signature on receipt (unsigned)"
+        if allow_unsigned:
+            return True, "no signature on receipt (allowed by --unsigned)"
+        return False, (
+            "no signature on receipt — re-run with --unsigned to accept "
+            "unsigned receipts"
+        )
     alg = sig.get("algorithm")
 
     if public_key_path:
@@ -273,7 +280,15 @@ def _audit_signature(
 
     secret = os.environ.get("PROVENEX_SIGNING_SECRET")
     if not secret:
-        return True, "skipped (PROVENEX_SIGNING_SECRET not set, no --public-key)"
+        if allow_unsigned:
+            return True, (
+                "signature check skipped (--unsigned; "
+                "no PROVENEX_SIGNING_SECRET, no --public-key)"
+            )
+        return False, (
+            "no key material available — set PROVENEX_SIGNING_SECRET, "
+            "pass --public-key <pem>, or re-run with --unsigned"
+        )
     if alg != "hmac-sha256":
         return False, (
             f"receipt was signed with {alg!r}; pass --public-key for "
@@ -462,7 +477,11 @@ def _cmd_audit_trajectory(args: argparse.Namespace) -> int:
     per_receipt_results: List[Dict[str, Any]] = []
     all_per_receipt_ok = True
     for path, receipt in parsed:
-        sig_ok, sig_msg = _audit_signature(receipt, public_key_path=args.public_key)
+        sig_ok, sig_msg = _audit_signature(
+            receipt,
+            public_key_path=args.public_key,
+            allow_unsigned=getattr(args, "unsigned", False),
+        )
         proof_results = _audit_inclusion_proofs(receipt)
         proofs_ok = all(ok for _, ok, _ in proof_results)
         receipt_ok = sig_ok and proofs_ok
@@ -582,7 +601,11 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         print(f"error: receipt is not valid JSON: {exc}", file=sys.stderr)
         return 2
 
-    sig_ok, sig_msg = _audit_signature(receipt, public_key_path=args.public_key)
+    sig_ok, sig_msg = _audit_signature(
+        receipt,
+        public_key_path=args.public_key,
+        allow_unsigned=getattr(args, "unsigned", False),
+    )
     proof_results = _audit_inclusion_proofs(receipt)
     all_ok = sig_ok and all(ok for _, ok, _ in proof_results)
 
@@ -735,7 +758,7 @@ def _cmd_policy_hash(args: argparse.Namespace) -> int:
 
     # No filter:
     # - Single-section file: print the hash bare (preserves the
-    #   Phase 1 CLI contract — pipeline scripts that grep
+    #   retrieval CLI contract — pipeline scripts that grep
     #   ``sha256:...`` from this output continue working).
     # - Multi-section file: prefix each line with the section name so
     #   the auditor can distinguish them.
@@ -764,7 +787,7 @@ def _print_policy_block(receipt: Dict[str, Any]) -> None:
 
     Schema 2.0.0: ``policy.verification`` is always present; the optional
     ``policy.access_control`` carries chunk-decision records. Schema
-    2.2.0 (Phase 2): adds an optional ``policy.tool_call_control``
+    2.2.0: adds an optional ``policy.tool_call_control``
     carrying tool-call admission records. We render every half present
     so an auditor sees all gates at a glance.
     """
@@ -913,6 +936,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Path to a PEM-encoded Ed25519 public key. Required when the "
             "receipt was signed with Ed25519. Without this flag, HMAC-SHA256 "
             "is assumed and PROVENEX_SIGNING_SECRET is read from the env."
+        ),
+    )
+    p_audit.add_argument(
+        "--unsigned",
+        action="store_true",
+        help=(
+            "Accept receipts whose signature cannot be verified (no signature "
+            "on the receipt, or no key material in the environment). Without "
+            "this flag, missing key material causes the audit to FAIL — "
+            "a green checkmark on an unverified receipt is worse than refusing "
+            "to issue one."
         ),
     )
     p_audit.add_argument(

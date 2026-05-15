@@ -81,11 +81,11 @@ CALLERS = {
     "u_777_noisy":   {"id": "u_777", "role": "engineer", "team": "platform"},
 }
 
-SESSION_INCIDENT = "incident-2026-05-14-customer-success-001"
+SESSION_INCIDENT = "session-2026-001"
 SESSION_NOISY    = "routine-search-2026-05-14-002"
 
 CORPUS_CHUNK = (
-    "INC-2026-05-001: Service degradation reported by customer-success at "
+    "TICKET-001: Service degradation reported at "
     "11:02 UTC. Initial triage points to elevated 5xx rates on the "
     "auth-gateway."
 )
@@ -139,7 +139,7 @@ def main() -> int:
         chunk_fp = fp.fingerprint_chunk(CORPUS_CHUNK)
         index.add(
             fingerprint=chunk_fp,
-            document_id="incident-INC-2026-05-001",
+            document_id="doc-ticket-001",
             document_version="sha256:" + "1" * 64,
             chunk_offset=0,
             chunk_length=len(CORPUS_CHUNK),

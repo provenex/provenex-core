@@ -84,7 +84,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.6.9"
+__version__ = "0.7.0"
 
 __all__ = [
     # Core
@@ -163,7 +163,7 @@ __all__ = [
     # OCSF export (0.6.7+)
     "OCSFAdapter",
     "receipt_to_ocsf",
-    # Tool-call admission (Phase 2, schema 2.2.0)
+    # Tool-call admission
     "ToolCallContext",
     "ToolCallPolicyEvaluator",
     "NullToolCallPolicyEvaluator",

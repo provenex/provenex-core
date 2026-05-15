@@ -1,6 +1,6 @@
 # Policy reference
 
-Provenex enforces policy at retrieval time and at tool-call admission time, and emits a cryptographically signed record of every decision. Schema 2.0.0 (Provenex v0.4) unified the verification gate and the data-access gate under a single `Policy` object; schema 2.2.0 (Provenex v0.6, Phase 2) adds a third half for agentic tool-call admission. This document is the reference for all three.
+Provenex enforces policy at retrieval time and at tool-call admission time, and emits a cryptographically signed record of every decision. Schema 2.0.0 (Provenex v0.4) unified the verification gate and the data-access gate under a single `Policy` object; schema 2.2.0 (Provenex v0.6) adds a third half for agentic tool-call admission. This document is the reference for all three.
 
 Before reading this, you may want the architectural framing in [`how_it_works.md`](how_it_works.md) and the receipt schema in [`receipt_format.md`](receipt_format.md).
 
@@ -20,13 +20,13 @@ from provenex import (
     Policy, VerificationPolicy,
 )
 
-# Explicit construction — Phase 1 only (no tool calls)
+# Explicit construction — native-DSL only (no tool calls)
 policy = Policy(
     verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
     access_control=NativeYamlEvaluator.from_path("hr_policy.yaml"),
 )
 
-# Explicit construction — all three halves (Phase 1 + Phase 2)
+# Explicit construction — all three halves (retrieval + tool-call admission)
 policy = Policy(
     verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
     access_control=NativeYamlEvaluator.from_path("agent_policy.yaml"),
@@ -119,7 +119,7 @@ access_control:
     unknown_metadata: deny
     policy_version_mismatch: deny
 
-# ---- TOOL-CALL ADMISSION (Phase 2, schema 2.2.0+) ----
+# ---- TOOL-CALL ADMISSION ----
 # Pluggable evaluator. The native YAML DSL is shipped in the open-source
 # core. Rego and OPA-service evaluators for tool calls are commercial.
 tool_call_control:
@@ -193,7 +193,7 @@ The native DSL is intentionally small. Each rule:
 | `name` | yes | Non-empty string. Appears in `rules_fired` on the receipt. |
 | `when` | no | Flat key/value map; rule applies iff every entry matches by direct equality. Omitting `when` makes the rule fire for every chunk. |
 | `require` | no | Flat key/value map of constraints. Operators below. |
-| `on_violation` | yes | Phase 1 supports `deny` only. `allow_with_conditions` is reserved. |
+| `on_violation` | yes | `deny` only. `allow_with_conditions` is reserved. |
 
 #### Path roots
 
@@ -620,7 +620,7 @@ For v0.4, `RequestContext` is constructed explicitly by the caller. Identity-pro
 
 ### Tool-call admission — `admission_check` *(schema 2.2.0+)*
 
-The Phase 2 sibling of `verify_chunks`. Same policy object, same request context, same trajectory cursor. Same receipt format — the receipt carries an `actions[]` block instead of (or alongside) `sources[]`.
+The tool-call admission analog of `verify_chunks`. Same policy object, same request context, same trajectory cursor. Same receipt format — the receipt carries an `actions[]` block instead of (or alongside) `sources[]`.
 
 ```python
 from provenex import (
@@ -690,7 +690,7 @@ provenex audit --trajectory ./receipts/   # validate a whole agentic trajectory 
 
 Use `provenex policy validate` in CI to catch typos before a broken policy is deployed.
 
-`provenex policy hash` on a single-section file prints one bare `sha256:...` hash (the Phase 1 contract — pipeline scripts that grep for that prefix continue working). On a unified file with both `access_control` and `tool_call_control`, it prints two lines, one per section, so the auditor can see at a glance which half changed. The `--section` flag filters to one half if needed.
+`provenex policy hash` on a single-section file prints one bare `sha256:...` hash (the original contract — pipeline scripts that grep for that prefix continue working). On a unified file with both `access_control` and `tool_call_control`, it prints two lines, one per section, so the auditor can see at a glance which half changed. The `--section` flag filters to one half if needed.
 
 ## Commercial evaluators (Rego, OPA service)
 

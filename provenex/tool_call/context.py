@@ -1,6 +1,6 @@
 """The per-call view the tool-call evaluator sees.
 
-This is the Phase 2 sibling of :class:`provenex.policy.evaluator.ChunkContext`.
+This is the tool-call admission analog of :class:`provenex.policy.evaluator.ChunkContext`.
 Both feed the same :class:`PolicyDecision` shape; the discriminator is the
 context type, not the decision type.
 
@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 class ToolCallContext:
     """One tool-call attempt as seen by the admission evaluator.
 
-    Field names mirror DSL paths exactly — Phase 1's convention. A rule
+    Field names mirror DSL paths exactly — the retrieval convention. A rule
     that writes ``tool.name`` reads :attr:`name`; a rule that writes
     ``tool.parameters.q`` walks :attr:`parameters` then indexes ``"q"``.
 

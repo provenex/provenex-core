@@ -102,16 +102,29 @@ def test_audit_tampered_receipt_returns_nonzero(monkeypatch):
     assert "INVALID" in stdout
 
 
-def test_audit_without_signing_secret_skips_signature(monkeypatch):
-    """No env secret should mean signature check is skipped (still proves the
-    inclusion proof). Overall result still PASS for an untampered receipt."""
+def test_audit_without_signing_secret_fails_without_unsigned_flag(monkeypatch):
+    """No env secret + no --public-key + no --unsigned should FAIL.
+
+    Refusing to verify is safer than silently passing an unverifiable receipt.
+    """
     workdir = Path(tempfile.mkdtemp())
     monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
     receipt_path, _ = _write_receipt(workdir)
     monkeypatch.delenv("PROVENEX_SIGNING_SECRET")
     code, stdout, _ = _run_audit(str(receipt_path))
+    assert code == 1
+    assert "no key material" in stdout.lower() or "--unsigned" in stdout
+
+
+def test_audit_without_signing_secret_passes_with_unsigned_flag(monkeypatch):
+    """With --unsigned, the missing-key case is acknowledged and overall PASS."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path, _ = _write_receipt(workdir)
+    monkeypatch.delenv("PROVENEX_SIGNING_SECRET")
+    code, stdout, _ = _run_audit("--unsigned", str(receipt_path))
     assert code == 0
-    assert "skipped" in stdout.lower()
+    assert "skipped" in stdout.lower() or "unsigned" in stdout.lower()
     assert "PASS" in stdout
 
 

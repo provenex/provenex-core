@@ -135,7 +135,13 @@ class FileJSONLSink:
     """
 
     def __init__(self, directory: Union[str, Path], prefix: str = "receipts") -> None:
-        self._dir = Path(directory)
+        # Validate prefix: it becomes part of the filename, so reject
+        # path separators and traversal that could escape ``directory``.
+        if "/" in prefix or "\\" in prefix or prefix in (".", ".."):
+            raise ValueError(
+                f"prefix must be a plain filename component, got {prefix!r}"
+            )
+        self._dir = Path(directory).resolve()
         self._dir.mkdir(parents=True, exist_ok=True)
         self._prefix = prefix
         self._current_date: Optional[str] = None
@@ -155,7 +161,23 @@ class FileJSONLSink:
             except Exception:
                 pass
         path = self._dir / f"{self._prefix}-{today}.jsonl"
-        self._fh = open(path, "a", encoding="utf-8")
+        # Refuse to append to a symlink. If a worldly-writable directory
+        # is configured (e.g., from a Kubernetes ConfigMap) an attacker
+        # could pre-create the expected filename as a symlink to a
+        # privileged file (/etc/cron.d/*, ~/.ssh/authorized_keys); the
+        # append would then write JSON into that file.
+        if path.is_symlink():
+            raise OSError(
+                f"refusing to append to symlink at {path}; remove or "
+                f"replace it with a regular file"
+            )
+        # O_NOFOLLOW on POSIX closes the symlink-after-check TOCTOU
+        # window. Not available on Windows — fall back to the pre-check
+        # above, which still rejects the common operator-misconfig case.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        nofollow = getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags | nofollow, 0o600)
+        self._fh = os.fdopen(fd, "a", encoding="utf-8")
         self._current_date = today
 
     def publish(self, receipt: Any) -> None:
@@ -253,6 +275,32 @@ class RetryQueueSink:
         self._queue: deque = deque(maxlen=maxlen)
         self._closed = False
         self._lock = threading.Lock()
+        # Edge-triggered: warn once when the queue first hits maxlen
+        # (drops would start occurring); reset after a successful drain.
+        self._warned_full = False
+
+    def _enqueue(self, receipt: Any) -> None:
+        """Append, warning once on the transition into full-queue state.
+
+        ``deque(maxlen=N)`` silently drops the oldest item on overflow;
+        receipts are audit records, so silent loss is unacceptable. Warn
+        on the transition so operators get a signal without one warning
+        per dropped receipt under sustained outage.
+        """
+        if (
+            not self._warned_full
+            and self._queue.maxlen is not None
+            and len(self._queue) >= self._queue.maxlen
+        ):
+            warnings.warn(
+                f"Provenex RetryQueueSink: queue is full "
+                f"(maxlen={self._queue.maxlen}); oldest receipts are "
+                f"being dropped silently. Investigate downstream "
+                f"{type(self._downstream).__name__}.",
+                stacklevel=3,
+            )
+            self._warned_full = True
+        self._queue.append(receipt)
 
     def publish(self, receipt: Any) -> None:
         if self._closed:
@@ -264,21 +312,29 @@ class RetryQueueSink:
                 try:
                     self._downstream.publish(pending)
                     self._queue.popleft()
+                    # Drained at least one — re-arm the full-queue warning.
+                    if self._warned_full and len(self._queue) < (
+                        self._queue.maxlen or 1
+                    ):
+                        self._warned_full = False
                 except Exception:
                     # Downstream still failing. Keep pending and
                     # enqueue the new receipt (drop-oldest if full).
-                    self._queue.append(receipt)
+                    self._enqueue(receipt)
                     return
             # Queue drained (or was empty). Try the new receipt.
             try:
                 self._downstream.publish(receipt)
             except Exception as e:
-                self._queue.append(receipt)
+                self._enqueue(receipt)
+                # Drop the exception body — downstream client libraries
+                # may embed credentials or signed URLs in str(e).
                 warnings.warn(
                     f"Provenex RetryQueueSink: downstream "
-                    f"{type(self._downstream).__name__} failed; "
-                    f"queued (queue_size={len(self._queue)}, "
-                    f"maxlen={self._queue.maxlen}): {e}",
+                    f"{type(self._downstream).__name__} failed "
+                    f"(error_type={type(e).__name__}); queued "
+                    f"(queue_size={len(self._queue)}, "
+                    f"maxlen={self._queue.maxlen}).",
                     stacklevel=2,
                 )
 
@@ -289,13 +345,22 @@ class RetryQueueSink:
     def close(self) -> None:
         with self._lock:
             self._closed = True
-            # Best-effort final drain.
+            # Best-effort final drain. Peek before popping so a failed
+            # publish leaves the receipt in the queue (matches publish()).
             while self._queue:
-                pending = self._queue.popleft()
                 try:
-                    self._downstream.publish(pending)
+                    self._downstream.publish(self._queue[0])
                 except Exception:
-                    break  # downstream still broken; we tried.
+                    break
+                self._queue.popleft()
+            if self._queue:
+                warnings.warn(
+                    f"Provenex RetryQueueSink: closed with "
+                    f"{len(self._queue)} receipt(s) still pending; "
+                    f"downstream "
+                    f"{type(self._downstream).__name__} unreachable.",
+                    stacklevel=2,
+                )
             try:
                 self._downstream.close()
             except Exception:
@@ -339,9 +404,15 @@ def _safe_publish(sink: Any, receipt: Any) -> None:
         # Re-raise so the bug is loud.
         raise
     except Exception as e:
+        # Surface only the exception class, not str(e). Downstream
+        # client libraries (boto3, kafka-python, google-cloud-pubsub)
+        # routinely embed connection URIs, request signatures, and
+        # auth headers in their exception messages — re-emitting those
+        # via warnings.warn would leak them into stderr / Sentry / etc.
         warnings.warn(
             f"Provenex sink publish failed "
             f"(sink={type(sink).__name__}, "
-            f"receipt_id={getattr(receipt, 'receipt_id', '?')}): {e}",
+            f"receipt_id={getattr(receipt, 'receipt_id', '?')}, "
+            f"error_type={type(e).__name__})",
             stacklevel=3,
         )

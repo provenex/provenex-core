@@ -1,6 +1,6 @@
 """The one-shot admission API: :func:`admission_check`.
 
-Phase 2 analog of :func:`provenex.verify_chunks`. Where ``verify_chunks``
+Tool-call admission analog of :func:`provenex.verify_chunks`. Where ``verify_chunks``
 takes retrieved chunks and returns kept/blocked plus a signed receipt,
 ``admission_check`` takes a single tool-call attempt and returns
 allow/deny plus a signed receipt. Both halves share the same trajectory
@@ -165,7 +165,7 @@ def admission_check(
         redact_inputs: If True, the receipt's
             ``policy.tool_call_control.decisions[i].inputs`` is set to
             ``None`` (the ``inputs_hash`` survives). Same discipline
-            as Phase 1's access-control receipt redaction.
+            as the retrieval-side access-control receipt redaction.
 
     Returns:
         An :class:`AdmissionResult` with the decision, rules fired, the
@@ -179,7 +179,7 @@ def admission_check(
         # No tool-call policy configured. Admission defaults to allow;
         # the receipt records an action but omits the tool_call_control
         # decisions block (parallel to the no-access-control receipt
-        # shape from Phase 1).
+        # shape from the retrieval flow).
         inputs = build_tool_call_inputs(tool, request)
         from ..policy.evaluator import compute_inputs_hash
 
@@ -195,7 +195,7 @@ def admission_check(
         )
     else:
         raw = eff_policy.tool_call_control.evaluate(tool, request)
-        # Attach metadata_binding the same way Phase 1's verify_chunks
+        # Attach metadata_binding the same way verify_chunks
         # does — operator-declared on chunks; always at_evaluate for
         # tool calls because parameters are caller-supplied per-request
         # (there is no "at_ingest" analog for an ephemeral action).

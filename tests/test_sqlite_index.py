@@ -173,6 +173,28 @@ def test_rejects_malformed_document_version():
     idx.close()
 
 
+@pytest.mark.parametrize(
+    "doc_id",
+    [
+        "doc\nwith-newline",
+        "doc\rwith-cr",
+        "doc\x00with-null",
+        "real-doc\nsha256:" + "f" * 64 + "\nsha256:" + "0" * 64 + "\n2026-01-01T00:00:00Z\n0\n0",
+    ],
+)
+def test_rejects_signing_payload_ambiguity_in_document_id(doc_id):
+    idx = make_index()
+    with pytest.raises(ValueError, match="newline|carriage|null"):
+        idx.add(
+            fingerprint="sha256:" + "a" * 64,
+            document_id=doc_id,
+            document_version="sha256:" + "b" * 64,
+            chunk_offset=0,
+            chunk_length=100,
+        )
+    idx.close()
+
+
 def test_context_manager():
     with SQLiteProvenanceIndex(":memory:", signing_secret=SECRET) as idx:
         idx.add(

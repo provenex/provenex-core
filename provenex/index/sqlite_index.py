@@ -19,11 +19,57 @@ import hmac
 import os
 import sqlite3
 import threading
+import warnings
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Optional
 
 from .base import IndexEntry, ProvenanceIndex, VerificationOutcome
+
+
+# Module-level guard so the legacy-shared-secret warning fires at most
+# once per process.
+_warned_about_shared_index_secret = False
+
+
+def _resolve_index_secret() -> bytes:
+    """Resolve the index-row HMAC secret from the environment.
+
+    Resolution order:
+
+    1. ``PROVENEX_INDEX_SECRET`` — the role-specific env (preferred).
+    2. ``PROVENEX_SIGNING_SECRET`` — the legacy shared env (fallback).
+       Emits a one-time ``DeprecationWarning``; see
+       :func:`provenex.core.receipt._resolve_receipt_secret` for the
+       receipt-side mirror.
+
+    Raises:
+        RuntimeError: If neither env var is set.
+    """
+    env_secret = os.environ.get("PROVENEX_INDEX_SECRET")
+    if env_secret:
+        return env_secret.encode("utf-8")
+    env_secret = os.environ.get("PROVENEX_SIGNING_SECRET")
+    if env_secret:
+        global _warned_about_shared_index_secret
+        if not _warned_about_shared_index_secret:
+            warnings.warn(
+                "Provenex index secret resolved via legacy "
+                "PROVENEX_SIGNING_SECRET. For key separation between the "
+                "index-row HMAC and the receipt HMAC, set "
+                "PROVENEX_INDEX_SECRET (and PROVENEX_RECEIPT_SECRET) "
+                "separately. This warning fires once per process.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            _warned_about_shared_index_secret = True
+        return env_secret.encode("utf-8")
+    raise RuntimeError(
+        "ProvenanceIndex requires a signing_secret argument, or one of "
+        "the PROVENEX_INDEX_SECRET / PROVENEX_SIGNING_SECRET "
+        "environment variables to be set. The index refuses to operate "
+        "without one because it would be impossible to detect tampering."
+    )
 
 
 _SCHEMA = """
@@ -60,6 +106,26 @@ def _now_utc_iso() -> str:
     )
 
 
+_FORBIDDEN_FIELD_CHARS = ("\n", "\r", "\x00")
+
+
+def _validate_signing_field(name: str, value: str) -> None:
+    """Reject characters that would create signing-payload ambiguity.
+
+    The canonical payload is a newline-joined sequence; any field containing
+    a literal newline, carriage return, or null byte could be confused with
+    a different field tuple under the same HMAC.
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string, got {type(value).__name__}")
+    for c in _FORBIDDEN_FIELD_CHARS:
+        if c in value:
+            raise ValueError(
+                f"{name} must not contain newline, carriage return, or "
+                f"null byte; these would create signing-payload ambiguity"
+            )
+
+
 def _canonical_payload(
     fingerprint: str,
     document_id: str,
@@ -72,7 +138,13 @@ def _canonical_payload(
 
     The canonicalization is deterministic: a fixed-order, newline-separated
     sequence of fields. Any change to field values produces a different MAC.
+    Fields are validated to contain no newline / CR / null byte, so the
+    join is unambiguous.
     """
+    _validate_signing_field("fingerprint", fingerprint)
+    _validate_signing_field("document_id", document_id)
+    _validate_signing_field("document_version", document_version)
+    _validate_signing_field("ingested_at", ingested_at)
     return "\n".join(
         [
             fingerprint,
@@ -114,15 +186,7 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
         signing_secret: Optional[bytes] = None,
     ) -> None:
         if signing_secret is None:
-            env_secret = os.environ.get("PROVENEX_SIGNING_SECRET")
-            if not env_secret:
-                raise RuntimeError(
-                    "SQLiteProvenanceIndex requires a signing_secret argument "
-                    "or the PROVENEX_SIGNING_SECRET environment variable to "
-                    "be set. The index refuses to operate without one because "
-                    "it would be impossible to detect tampering."
-                )
-            signing_secret = env_secret.encode("utf-8")
+            signing_secret = _resolve_index_secret()
         self._secret = signing_secret
         self._db_path = db_path
         # SQLite connections are not thread-safe across threads by default; we

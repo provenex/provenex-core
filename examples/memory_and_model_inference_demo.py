@@ -76,7 +76,7 @@ MEMORY_ENTRY = (
     "Prefers concise summaries with the SEV level called out."
 )
 
-SESSION_ID = "incident-2026-05-14-customer-success-001"
+SESSION_ID = "session-2026-001"
 
 
 def banner(s: str) -> None:
@@ -222,7 +222,7 @@ def main() -> int:
             {
                 "role": "user",
                 "content": (
-                    "Summarize INC-2026-05-001 in two sentences. "
+                    "Summarize TICKET-001 in two sentences. "
                     "Use a concise tone. Call out the SEV."
                 ),
             }

@@ -270,7 +270,7 @@ def main() -> int:
         "jurisdiction": "US",
         "purpose": "incident_response",
         "timestamp": "2026-05-15T11:30:00Z",
-        "session_id": "incident-2026-05-15-001",
+        "session_id": "session-2026-002",
         # Pending tool-call to admit
         "pending_tool_op": "create_issue",
         "pending_tool_args": {"project": "INC", "summary": "auth-gateway 5xx"},
@@ -294,7 +294,7 @@ def main() -> int:
         "jurisdiction": "US",
         "purpose": "incident_response",
         "timestamp": "2026-05-15T11:30:00Z",
-        "session_id": "incident-2026-05-15-001",
+        "session_id": "session-2026-002",
         "pending_tool_op": "create_issue",
         "pending_tool_args": {"project": "INC", "summary": "viewer attempt"},
     }

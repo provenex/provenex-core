@@ -77,7 +77,7 @@ def test_caller_hash_unicode_survives():
     assert h1.startswith("sha256:")
 
 
-# ---------- emission on Phase 1 (verify_chunks) ---------- #
+# ---------- emission on (verify_chunks) ---------- #
 
 
 def _make_index(tmp_path) -> SQLiteProvenanceIndex:
@@ -127,7 +127,7 @@ def test_verify_chunks_omits_caller_hash_when_no_request_context(tmp_path):
     assert "caller_hash" not in d
 
 
-# ---------- emission on Phase 2 (admission_check) ---------- #
+# ---------- emission on (admission_check) ---------- #
 
 
 def test_admission_check_always_emits_caller_hash():

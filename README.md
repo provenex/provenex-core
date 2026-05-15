@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.9)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.9)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.7.0)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.7.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -11,7 +11,7 @@ Platform engineering champions Provenex (a runtime guardrail they don't have to 
 
 Provenex is the policy enforcement layer for AI data access. You declare your security policy once — in our native YAML config (or OPA/Rego, commercial) — and Provenex enforces it on every retrieval **and on every agentic tool call**, then emits a cryptographically signed receipt that proves which chunks reached the LLM, which tool calls were admitted, and under what policy.
 
-> **Scope of this repo.** `provenex-core` covers both enforcement fronts on one policy-and-proof spine: **Phase 1 — retrieval enforcement** (what the AI *reads*) and **Phase 2 — agentic tool-call admission** (what the AI is allowed to *do*, including MCP-shaped tool calls and the "can this agent access Jira / Salesforce / this connector" question). Provenex is always **decision and proof, not execution** — an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
+> **Scope of this repo.** `provenex-core` covers both enforcement fronts on one policy-and-proof spine: **retrieval enforcement** (what the AI *reads*) and **agentic tool-call admission** (what the AI is allowed to *do*, including MCP-shaped tool calls and the "can this agent access Jira / Salesforce / this connector" question). Provenex is always **decision and proof, not execution** — an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
 
 This repository contains the open source core: fingerprinting, a Postgres-backed production index (SQLite for development), the native YAML policy DSL, receipt generation, the tool-call admission primitive, and integrations for LangChain / LangGraph / LlamaIndex / CrewAI / MCP. The algorithm is open so it can be audited. Hosted infrastructure, the Rego adapter, the OPA service adapter, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise policy interoperability are available separately at [provenex.ai](https://provenex.ai).
 
@@ -59,7 +59,7 @@ access_control:
   defaults:
     unknown_metadata: deny
 
-# Tool-call admission rules (Phase 2, schema 2.2.0)
+# Tool-call admission rules (schema 2.2.0)
 tool_call_control:
   rules:
     - name: web_search_provider_allowlist
@@ -95,7 +95,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.6.9",
+  "issuer": "provenex-core/0.7.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
@@ -142,7 +142,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
   "trajectory": { "trajectory_id": "trj_a3f1c0d2...", "step_index": 1,
                   "parent_step_ids": ["prx_c5d8e1f2..."], "step_kind": "tool_call",
                   "agent_id": "incident_agent",
-                  "session_id": "incident-2026-05-14-customer-success-001" },
+                  "session_id": "session-2026-001" },
   "signature": { "algorithm": "hmac-sha256", "value": "fc5d40895ca2..." }
 }
 ```
@@ -266,6 +266,8 @@ save_receipt(result.receipt)        # signed, verifiable offline
 
 Many verify pods plus one ingester pod is the recommended deployment shape — bulk ingest is a batch job; verify is per-request and scales horizontally via Postgres read replicas. Multi-writer ingest into the same index is supported and serialized at the document-row level. Bring your own Postgres (RDS, Aurora, Cloud SQL, Crunchy, Supabase, or self-managed) — Provenex doesn't host it.
 
+> **Default for `block_unverified` is `False`.** Chunks whose fingerprint isn't in the Provenex index (`UNVERIFIED` outcome) pass through to the LLM by default — the receipt records the outcome, but the chunk is not removed. For strict enforcement where every chunk must be Provenex-tracked, set `block_unverified=True` in your `VerificationPolicy`. Constructing `VerificationPolicy()` without an explicit value emits a `DeprecationWarning` so the choice is visible; pass `block_unverified=False` explicitly to acknowledge the advisory stance. The default will flip to `True` in a future major release.
+
 ### Development (SQLite, single-node)
 
 ```python
@@ -278,7 +280,7 @@ Stdlib-only, no service to stand up. Same interface, same canonical signing payl
 
 Your existing vector store is untouched. Provenex runs alongside as a parallel signed index plus a policy gate. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care.
 
-### Tool-call admission (Phase 2, schema 2.2.0)
+### Tool-call admission (schema 2.2.0)
 
 ```python
 from provenex import (
@@ -339,7 +341,7 @@ r2 = admit_memory_write(memory_key="user_profile", value={"prefers": "dark_mode"
 # prompt redacted by default. Enables detection on "this user is calling
 # claude-opus 100x baseline" or "prompts contain pattern X".
 r3 = admit_model_inference(model_name="claude-opus-4-7",
-                           prompt="Summarize INC-2026-05-001",
+                           prompt="Summarize TICKET-001",
                            request=request, target_provider="anthropic",
                            extra_parameters={"max_tokens": 4000}, signer=signer)
 ```
@@ -423,11 +425,11 @@ By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sh
 
 Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve, reflect, retrieve again. Multiple agents collaborate. Tools fetch live data. Provenex is built for these flows alongside the simple one-shot case:
 
-| Framework | Retrieval | Tool calls (Phase 2) |
+| Framework | Retrieval | Tool calls |
 | --- | --- | --- |
 | **LangChain** | `ProvenexRetriever` wraps any retriever. Accepts an optional `trajectory=`. | `ProvenexToolWrapper` wraps any LangChain tool; same receipt shape as MCP. |
 | **LangGraph** | `provenex_retrieval_node(...)` factory + state helpers. Drops into any state-graph DAG; the trajectory threads through the shared state. | Call `admission_check(...)` from a graph node; pass `trajectory=` to thread admissions into the same DAG. |
-| **CrewAI** | `ProvenexCrewSession.wrap_tool(tool)` wraps any retrieval / tool / memory callable; `session.verify_chunks(...)` runs Phase 1 verification on tool output. | `session.wrap_tool_admission(tool, name=..., request_factory=...)` runs Phase 2 admission **before** the tool fires (denials raise `ToolCallDenied`). `session.admission_check(tool_ctx, request)` is the lower-level variant; both thread the session's trajectory automatically. |
+| **CrewAI** | `ProvenexCrewSession.wrap_tool(tool)` wraps any retrieval / tool / memory callable; `session.verify_chunks(...)` runs retrieval verification on tool output. | `session.wrap_tool_admission(tool, name=..., request_factory=...)` runs admission **before** the tool fires (denials raise `ToolCallDenied`). `session.admission_check(tool_ctx, request)` is the lower-level variant; both thread the session's trajectory automatically. |
 | **LlamaIndex** | `ProvenexRetriever` middleware (same pattern as LangChain). | Use the framework-agnostic `admission_check(...)` directly. |
 | **MCP** | n/a (retrieval is upstream of MCP) | `provenex_mcp_admission(...)` decorator wraps a `tools/call` handler. Standard JSON-RPC error code on deny. |
 | **Anything else** | `provenex.verify_chunks(chunks, index=..., policy=..., request_context=..., trajectory=...)` | `provenex.admission_check(tool=..., request=..., policy=..., signer=..., trajectory=...)` |
@@ -512,7 +514,7 @@ python provenex-core/examples/standalone_demo.py
 
 For the integration-pattern story, run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store, bypassing Provenex ingest, get caught at the retrieval boundary and blocked from reaching the LLM.
 
-For the **Phase 2** headline demo — a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation — run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
+For the **tool-call admission** headline demo — a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation — run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
 
 For **MCP** servers: [`examples/mcp_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/mcp_admission_demo.py) — the `provenex_mcp_admission` decorator on a JSON-RPC `tools/call` handler. Three live requests (allow + deny + allow), the `on_deny` callback pattern emitting a structured JSON-RPC error response, plus the lower-level `wrap_mcp_request` for routers. Pure stdlib — no MCP server library needed.
 
@@ -549,8 +551,8 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **Unified policy** (schema 2.3.0): single top-level `policy` block with `verification`, `access_control`, and `tool_call_control` halves
 - **Native YAML policy DSL** for both chunk decisions and tool-call admission: pluggable `PolicyEvaluator` and `ToolCallPolicyEvaluator` protocols with the YAML evaluators as the reference backends; operators include `in` / `not_in` / `not_older_than` / `matches_pattern` / `not_matches_pattern` / `length_at_most`
 - **`metadata_binding`** per decision: each `chunk_metadata` block on the receipt declares whether it was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Lets an auditor see the trust class of every input at a glance.
-- **Bloom-filter interface** (`BloomFilterIndex` ABC + `NoopBloomFilter` + `BloomAcceleratedIndex` wrapper). The interface is OSS so commercial deployments are drop-in; the actual high-throughput Bloom implementation ships commercially.
-- **Tool-call admission primitive** (Phase 2, schema 2.2.0+): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
+- **Bloom-filter acceleration interface** (`BloomFilterIndex` ABC + `BloomAcceleratedIndex` wrapper). High-throughput Bloom-filter acceleration available commercially.
+- **Tool-call admission primitive** (schema 2.2.0+): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
 - **Source-of-record correlation fields** (schema 2.3.0): top-level `caller_hash` (SHA-256 over the canonical caller dict; or HMAC-SHA256 with an opt-in deployment salt for per-deployment unlinkability) and optional `trajectory.session_id` (multi-trajectory correlation key). Decision-and-proof artifacts — they don't influence policy decisions, just make receipts joinable downstream by a SIEM / anomaly detector.
 - **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` — convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
 - **Streaming export sinks** (0.6.6+): `ReceiptSink` Protocol + reference sinks for `StdoutJSONLSink` / `FileJSONLSink` (date-rotated) / `MultiSink` (fan-out) / `RetryQueueSink` (bounded in-process retry) in the stdlib core. `KafkaSink` / `SQSSink` / `S3AppendSink` (date-hour-partitioned) / `PubSubSink` behind optional `[export-kafka]` / `[export-aws]` / `[export-gcp]` extras. Every emission entrypoint accepts `sink=`; failures are swallowed-and-logged so the agent's hot path is never broken by export degradation.
@@ -571,7 +573,7 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **OPA service adapter** — delegate evaluation to a running OPA instance over HTTP
 - Hosted provenance index with distributed signed append-only storage
 - Transparency-log-backed policy bundle records (so `policy_in_transparency_log: true` lights up)
-- **Bloom-filter implementation** for high-throughput verification at 10M+ chunk scale (the OSS ships the interface; commercial ships the working filter)
+- **Bloom-filter acceleration** for high-throughput verification at 10M+ chunk scale
 - Compliance-grade export formats (PDF, CSV, JSON-LD for regulator-side / semantic-web consumers)
 - Identity-provider integration (RequestContext auto-populated from Okta / Azure AD)
 - Inference attribution and temporal decay scoring

@@ -15,20 +15,19 @@ OCSF version targeted: **v1.3.0**.
 
 Class mapping at a glance:
 
-    * Tool-call admission (Phase 2; admit_memory_write,
+    * Tool-call admission (admit_memory_write,
       admit_model_inference, raw admission_check) → **API Activity
       (class_uid 6003)** on allow.
-    * Retrieval verification (Phase 1; verify_chunks, verify_memory)
+    * Retrieval verification (verify_chunks, verify_memory)
       → **Application Activity (class_uid 6005)** per allowed source.
     * Any **block** or **deny** → **Detection Finding
       (class_uid 2004)**.
 
 Why these classes (and why NOT yet AI-specific OCSF classes):
-OCSF AI/LLM classes are still emerging (6008 "AI/ML Operations"
-draft as of late 2025; 7XXX-series for AI agent events is being
-discussed). We map to the existing closest classes now — receipts
-don't change. When AI-specific classes stabilize, this module is the
-only thing that needs updating.
+OCSF AI/LLM classes are still emerging. We map to the existing
+closest classes now — receipts don't change. When AI-specific
+classes stabilize, this module is the only thing that needs
+updating.
 
 Trajectory metadata flows as ``metadata.correlation_uid`` (the
 trajectory_id) and ``metadata.session_uid`` (the session_id, when

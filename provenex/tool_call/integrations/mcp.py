@@ -3,7 +3,7 @@
 The Model Context Protocol (MCP) defines a JSON-RPC envelope for agent
 ↔ tool communication. ``tools/call`` is the request that says "the
 agent wants to invoke tool X with parameters Y" — exactly the
-admission decision point Phase 2 is designed for. Intercepting at the
+admission decision point this module is designed for. Intercepting at the
 MCP layer rather than per-framework means one wrapper covers every
 agent client and every tool server that speaks the protocol, including
 ones that don't exist yet.

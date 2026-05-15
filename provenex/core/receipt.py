@@ -31,6 +31,7 @@ import hmac
 import json
 import os
 import secrets
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -59,7 +60,7 @@ from .trajectory import TrajectoryContext
 #           (signed by the index) or tag-at-evaluate (looked up at
 #           decision time). Additive: receipts without the field remain
 #           valid 2.0.0 subsets.
-#   2.2.0 — Phase 2: optional top-level ``actions[]`` array (tool-call
+#   2.2.0 — tool-call admission: optional top-level ``actions[]`` array (tool-call
 #           records, parallel to ``sources[]``); optional
 #           ``policy.tool_call_control`` subsection (admission decision
 #           record, parallel to ``policy.access_control``); ``summary``
@@ -81,7 +82,7 @@ from .trajectory import TrajectoryContext
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
 SCHEMA_VERSION = "2.3.0"
-ISSUER = "provenex-core/0.6.9"
+ISSUER = "provenex-core/0.7.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -130,23 +131,20 @@ class HmacSha256Signer(ReceiptSigner):
     The default signer for the open source core. Pure stdlib.
 
     Args:
-        secret: Bytes used as the HMAC key. If ``None``, the value of the
-            ``PROVENEX_SIGNING_SECRET`` environment variable is used.
+        secret: Bytes used as the HMAC key. If ``None``, the environment
+            is consulted in order:
+            ``PROVENEX_RECEIPT_SECRET`` (role-specific, preferred), then
+            ``PROVENEX_SIGNING_SECRET`` (legacy shared). Falling back to
+            the shared secret emits a one-time ``DeprecationWarning`` —
+            see :func:`_resolve_receipt_secret`.
 
     Raises:
-        RuntimeError: If no secret is provided and no environment variable is
-            set.
+        RuntimeError: If no secret is provided and neither env var is set.
     """
 
     def __init__(self, secret: Optional[bytes] = None) -> None:
         if secret is None:
-            env_secret = os.environ.get("PROVENEX_SIGNING_SECRET")
-            if not env_secret:
-                raise RuntimeError(
-                    "HmacSha256Signer requires a secret or the "
-                    "PROVENEX_SIGNING_SECRET environment variable."
-                )
-            secret = env_secret.encode("utf-8")
+            secret = _resolve_receipt_secret()
         self._secret = secret
 
     @property
@@ -281,7 +279,7 @@ class SourceRecord:
 class ActionRecord:
     """A single tool-call attempt's entry on the receipt (schema 2.2.0).
 
-    Phase 2 parallel of :class:`SourceRecord`: ``sources[]`` records what
+    Tool-call admission analog of :class:`SourceRecord`: ``sources[]`` records what
     was retrieved, ``actions[]`` records what tool calls were attempted.
     A receipt may carry one or both arrays. The per-action policy
     decision lives under ``policy.tool_call_control.decisions[]`` and
@@ -370,7 +368,7 @@ class ProvenanceReceipt:
     # the canonical policy version hash, and the per-chunk decision
     # records.
     access_control: Optional[Dict[str, Any]] = None
-    # Schema 2.2.0 (Phase 2): optional tool-call action records and the
+    # Schema 2.2.0: optional tool-call action records and the
     # parallel ``policy.tool_call_control`` decision payload. Either or
     # both of these are present on receipts produced by the tool-call
     # admission pipeline. Pure-retrieval receipts leave both empty/None.
@@ -454,13 +452,24 @@ class ProvenanceReceipt:
     def canonical_payload(self) -> bytes:
         """Build the canonical byte payload that gets signed.
 
-        The payload is the JSON serialization of the receipt with the
-        ``signature`` block omitted and keys sorted. Sorting ensures any
-        verifier produces the same bytes regardless of dict insertion order.
+        The payload is the canonical JSON serialization of the receipt
+        with the ``signature`` block omitted: keys sorted, tight
+        separators, ``ensure_ascii=False`` so non-ASCII (smart quotes,
+        accented characters, CJK in caller dicts) survives as native
+        UTF-8 instead of ``\\uXXXX`` escapes. A non-Python verifier that
+        emits raw UTF-8 by default produces the same bytes. Matches the
+        canonicalisation used by :func:`compute_caller_hash`,
+        :func:`compute_value_hash`, and
+        :func:`provenex.policy.evaluator._canonical_bytes`.
         """
         d = self.to_dict()
         d.pop("signature", None)
-        return json.dumps(d, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return json.dumps(
+            d,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
 
 
 # --------------------------------------------------------------------------- #
@@ -485,6 +494,56 @@ def _new_receipt_id() -> str:
 def _hash_output(output_text: str) -> str:
     """Compute the SHA-256 hash of an LLM output string."""
     return "sha256:" + hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+
+
+# Module-level guards so each warning fires at most once per process —
+# operators get one signal without log spam.
+_warned_about_unsalted_caller_hash = False
+_warned_about_shared_receipt_secret = False
+
+
+def _resolve_receipt_secret() -> bytes:
+    """Resolve the receipt-signing HMAC secret from the environment.
+
+    Resolution order:
+
+    1. ``PROVENEX_RECEIPT_SECRET`` — the role-specific env (preferred);
+       lets operators rotate / scope the receipt-signing key
+       independently of the index-row signing key.
+    2. ``PROVENEX_SIGNING_SECRET`` — the legacy shared env (fallback).
+       Falling back to this emits a one-time ``DeprecationWarning``:
+       sharing one secret for both index rows and receipts means anyone
+       who can produce a row in the index can also forge a receipt
+       signature.
+
+    Raises:
+        RuntimeError: If neither env var is set.
+    """
+    env_secret = os.environ.get("PROVENEX_RECEIPT_SECRET")
+    if env_secret:
+        return env_secret.encode("utf-8")
+    env_secret = os.environ.get("PROVENEX_SIGNING_SECRET")
+    if env_secret:
+        global _warned_about_shared_receipt_secret
+        if not _warned_about_shared_receipt_secret:
+            warnings.warn(
+                "Provenex receipt secret resolved via legacy "
+                "PROVENEX_SIGNING_SECRET. For key separation between the "
+                "index-row HMAC and the receipt HMAC, set "
+                "PROVENEX_RECEIPT_SECRET (and PROVENEX_INDEX_SECRET) "
+                "separately. Sharing the secret means anyone who can "
+                "write a row in the index can also forge a receipt "
+                "signature. This warning fires once per process.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            _warned_about_shared_receipt_secret = True
+        return env_secret.encode("utf-8")
+    raise RuntimeError(
+        "HmacSha256Signer requires a secret, or one of the "
+        "PROVENEX_RECEIPT_SECRET / PROVENEX_SIGNING_SECRET environment "
+        "variables to be set."
+    )
 
 
 def compute_caller_hash(
@@ -552,6 +611,22 @@ def compute_caller_hash(
         ensure_ascii=False,
     ).encode("utf-8")
     if salt is None:
+        global _warned_about_unsalted_caller_hash
+        if not _warned_about_unsalted_caller_hash:
+            warnings.warn(
+                "compute_caller_hash called without a salt; the resulting "
+                "caller_hash is a plain SHA-256 over the canonical caller "
+                "dict and can be rainbow-tabled against a known caller "
+                "(e.g., an org chart). Pass caller_hash_salt=<bytes> to "
+                "verify_chunks / admission_check / verify_memory / "
+                "admit_memory_write / admit_model_inference for HMAC-SHA256 "
+                "with a per-deployment key. This warning fires once per "
+                "process; the unsalted default will require an explicit "
+                "opt-in in a future major release.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            _warned_about_unsalted_caller_hash = True
         return "sha256:" + hashlib.sha256(payload).hexdigest()
     return "hmac-sha256:" + hmac.new(salt, payload, hashlib.sha256).hexdigest()
 
@@ -730,14 +805,14 @@ class ReceiptBuilder:
     ) -> Dict[str, Any]:
         """Compute the per-receipt summary.
 
-        Combines per-chunk verification outcomes (Phase 1) with per-action
-        admission decisions (Phase 2, schema 2.2.0). The fields emitted
+        Combines per-chunk verification outcomes with per-action
+        admission decisions. The fields emitted
         depend on which halves the receipt carries:
 
-            * Sources only — the original Phase 1 summary keys
+            * Sources only — the original summary keys
               (``total_chunks`` + the five-outcome counts) plus
               ``overall_status``.
-            * Sources + actions — Phase 1 keys, plus ``total_actions`` /
+            * Sources + actions — original keys, plus ``total_actions`` /
               ``actions_allowed`` / ``actions_denied``;
               ``overall_status`` considers both halves.
             * Actions only — verification counts are zero;
@@ -763,7 +838,7 @@ class ReceiptBuilder:
         for s in self._sources:
             counts[s.verification_outcome.value.lower()] += 1
 
-        # Phase 2 action counts. Always emitted when the receipt carries
+        # Tool-call admission action counts. Always emitted when the receipt carries
         # actions; omitted entirely on pure-retrieval receipts to
         # preserve the schema 2.1.0 summary shape exactly. Auditors
         # consuming 2.1.0 receipts under the 2.2.0 verifier see no diff.
@@ -912,7 +987,13 @@ def verify_receipt_signature(
         return False
     payload_dict = dict(receipt_dict)
     payload_dict.pop("signature", None)
-    payload = json.dumps(payload_dict, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    # ``ensure_ascii=False`` matches the producer side
+    # (:meth:`ProvenanceReceipt.canonical_payload`) — non-ASCII content
+    # is canonicalised as UTF-8 rather than ``\\uXXXX`` escapes.
+    payload = json.dumps(
+        payload_dict,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
     return signer.verify(payload, expected_value or "")

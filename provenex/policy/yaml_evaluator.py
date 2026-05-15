@@ -4,7 +4,7 @@ This is the reference implementation of :class:`PolicyEvaluator`. It loads
 a constrained YAML DSL (see :mod:`docs/policy.md`) and evaluates each
 ``(chunk, request)`` pair against the rules.
 
-The DSL is intentionally small. Phase 1 supports:
+The DSL is intentionally small. The DSL supports:
 
     * ``when`` — flat key/value map. Rule applies iff every condition
       matches via direct equality.
@@ -51,7 +51,7 @@ from .evaluator import (
 # an operator-style mapping (a dict value under a require key) is rejected
 # at parse time so a typo cannot silently allow.
 #
-# Phase 2 (schema 2.2.0) adds ``matches_pattern`` / ``not_matches_pattern``
+# (schema 2.2.0) adds ``matches_pattern`` / ``not_matches_pattern``
 # (POSIX ``fnmatch`` globs; deliberately not regex — globs are auditable,
 # regexes are a footgun) and ``length_at_most`` (integer cap on string-
 # valued paths; cheapest mitigation against parameter-size injection).
@@ -67,8 +67,8 @@ _KNOWN_REQUIRE_OPERATORS = frozenset(
     }
 )
 
-# Path roots a rule is allowed to reference, by domain. Phase 1
-# ``access_control`` rules see chunks and the request context; Phase 2
+# Path roots a rule is allowed to reference, by domain. The
+# ``access_control`` rules see chunks and the request context; tool-call
 # ``tool_call_control`` rules see tool calls and the request context.
 # Cross-domain references fail at parse time so an operator cannot
 # accidentally write a chunk rule that references ``tool.parameters``
@@ -167,7 +167,7 @@ def _check_no_reserved_keys(
         if k in _RESERVED_RULE_KEYS:
             raise UnsupportedPolicyFeature(
                 f"{where}: '{k}' is reserved for a future release. "
-                f"Phase 1 supports flat when/require maps only."
+                f"The DSL supports flat when/require maps only."
             )
 
 
@@ -179,7 +179,7 @@ def _validate_path_root(
 ) -> None:
     """Reject a path whose root is not in this rule's domain.
 
-    Phase 2 introduced two parallel rule domains (``access_control`` for
+    Schema 2.2.0 introduced two parallel rule domains (``access_control`` for
     chunks, ``tool_call_control`` for tool calls). Each domain allows a
     distinct set of path roots. Cross-domain references fail here at
     parse time rather than evaluating as missing at runtime — silent
@@ -213,8 +213,8 @@ def _validate_rule(
     default.
 
     ``allowed_roots`` controls which path roots the rule may reference.
-    Defaults to the Phase 1 chunk domain (``{"chunk", "request"}``) so
-    existing call sites behave identically. Phase 2 callers pass the
+    Defaults to the chunk domain (``{"chunk", "request"}``) so
+    existing call sites behave identically. tool-call admission callers pass the
     tool-call domain.
     """
     if not isinstance(rule, dict):
@@ -325,7 +325,7 @@ def _validate_rule(
     if on_violation == "allow_with_conditions":
         raise UnsupportedPolicyFeature(
             f"{source}: rule '{name}': 'allow_with_conditions' is reserved "
-            f"for a future release. Phase 1 supports on_violation: deny only."
+            f"for a future release. Only on_violation: deny is supported."
         )
     if on_violation != "deny":
         raise PolicyParseError(
@@ -390,17 +390,17 @@ def _resolve_path(
 
         * ``chunk.*`` — attributes of :class:`ChunkContext`. Within
           ``chunk.metadata`` further dotted segments index into the
-          metadata dict. Phase 1.
+          metadata dict.
         * ``request.*`` — attributes of :class:`RequestContext`. Within
           ``request.caller`` further segments index into the caller dict.
           Shared.
         * ``tool.*`` — attributes of
           :class:`provenex.tool_call.ToolCallContext`. Within
           ``tool.parameters`` further dotted segments index into the
-          parameter dict. Phase 2.
+          parameter dict.
 
     Exactly one of ``chunk`` or ``tool`` is supplied per evaluation
-    (Phase 1 callers pass ``chunk``, Phase 2 callers pass ``tool``). A
+    (retrieval callers pass ``chunk``, tool-call admission callers pass ``tool``). A
     rule that references a path root absent from the supplied contexts
     resolves to :data:`_MISSING` — but parse-time validation
     (:func:`_validate_path_root`) ensures that cannot happen for a
@@ -474,7 +474,7 @@ def _when_matches(
     Each ``when`` entry is one of:
 
         * **Direct equality** (scalar RHS) — the path resolves to a value
-          equal to the RHS. The original Phase 1 form.
+          equal to the RHS. The original form.
         * **`in:` membership** (``{in: [a, b, c]}`` RHS) — the path
           resolves to a value in the list. Added in schema 2.2.0 to keep
           CRUD-style tool-call rules from needing three near-identical
@@ -834,9 +834,9 @@ def validate_policy_file(path: str) -> Tuple[bool, Optional[str]]:
     except FileNotFoundError as exc:
         return False, f"file not found: {exc.filename}"
 
-    # Try the unified layout first. This handles everything new (Phase 2
+    # Try the unified layout first. This handles everything new (tool-call admission
     # tool_call_control, verification-only files, etc.) and the common
-    # Phase 1 case where the file has ``access_control:`` at the top.
+    # single-half case where the file has ``access_control:`` at the top.
     unified_err: Optional[str] = None
     try:
         # Local import to avoid the Policy ↔ yaml_evaluator load-time
@@ -849,7 +849,7 @@ def validate_policy_file(path: str) -> Tuple[bool, Optional[str]]:
         unified_err = str(exc)
 
     # Legacy fallback: a file with ``rules:`` at the top level (no
-    # unified subsection) is still acceptable for Phase 1 callers.
+    # unified subsection) is still acceptable for retrieval callers.
     try:
         NativeYamlEvaluator.from_text(text, source=path)
         return True, None

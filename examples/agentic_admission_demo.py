@@ -1,4 +1,4 @@
-"""Phase 2 headline demo: mixed retrieval + tool-call trajectory.
+"""Headline tool-call admission demo: mixed retrieval + tool-call trajectory.
 
 Run with:
 
@@ -33,7 +33,7 @@ What it shows, in order:
        first-class.
 
 The pitch: ONE signed audit trail across mixed retrieval and tool-call
-enforcement. That is the demo that sells Phase 2.
+enforcement. That is the demo that sells tool-call admission.
 
 Total runtime ~3 s. The dependencies are the [policy] extra (PyYAML)
 plus the stdlib.
@@ -137,7 +137,7 @@ tool_call_control:
 # A made-up corpus snippet the demo ingests. Realistic-looking but
 # entirely synthetic.
 CORPUS_CHUNK = (
-    "INC-2026-05-001: Service degradation reported by customer-success at "
+    "TICKET-001: Service degradation reported at "
     "11:02 UTC. Initial triage points to elevated 5xx rates on the "
     "auth-gateway. Owner: platform team. Severity: SEV-2."
 )
@@ -211,7 +211,7 @@ def main() -> int:
         chunk_fp = fp.fingerprint_chunk(CORPUS_CHUNK)
         index.add(
             fingerprint=chunk_fp,
-            document_id="incident-INC-2026-05-001",
+            document_id="doc-ticket-001",
             document_version="sha256:" + "1" * 64,
             chunk_offset=0,
             chunk_length=len(CORPUS_CHUNK),

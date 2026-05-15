@@ -21,8 +21,9 @@ Each enterprise sets its own policy. Examples:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional
 
 from ..index.base import VerificationOutcome
 
@@ -36,8 +37,13 @@ class VerificationPolicy:
             before reaching the LLM.
         block_unauthorized: If True, UNAUTHORIZED chunks are removed.
         block_unverified: If True, UNVERIFIED chunks (those not ingested via
-            Provenex at all) are removed. Set ``True`` for strict pipelines
-            where every chunk MUST be Provenex-tracked.
+            Provenex at all) are removed. Recommended ``True`` for strict
+            pipelines where every chunk MUST be Provenex-tracked. The
+            default is ``False`` (advisory) for backward compatibility;
+            constructing :class:`VerificationPolicy` without an explicit
+            value emits a ``DeprecationWarning`` so operators can audit
+            their stance. The default will flip to ``True`` in a future
+            major release.
         block_tampered: If True, TAMPERED chunks are removed. Almost always
             True — tampering is an alarm condition.
         flag_stale: If True, STALE chunks are noted on the receipt summary
@@ -50,12 +56,32 @@ class VerificationPolicy:
 
     block_stale: bool = False
     block_unauthorized: bool = True
-    block_unverified: bool = False
+    block_unverified: Optional[bool] = None
     block_tampered: bool = True
     flag_stale: bool = True
     flag_unauthorized: bool = True
     flag_unverified: bool = True
     flag_tampered: bool = True
+
+    def __post_init__(self) -> None:
+        # Distinguish "explicitly passed False" (intentional) from
+        # "default left unset" (likely overlooked). The default-unset
+        # case becomes False — same effective behavior as before — but
+        # emits a one-time DeprecationWarning so operators can decide
+        # whether to flip to True. Set ``block_unverified=False``
+        # explicitly to acknowledge the choice and silence the warning.
+        if self.block_unverified is None:
+            warnings.warn(
+                "VerificationPolicy: block_unverified is not set; "
+                "UNVERIFIED chunks (content not in the Provenex index) "
+                "will pass through to the LLM. Pass block_unverified=True "
+                "for strict enforcement, or block_unverified=False to "
+                "acknowledge the advisory-only stance. The default will "
+                "flip to True in a future major release.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            object.__setattr__(self, "block_unverified", False)
 
     def should_block(self, outcome: VerificationOutcome) -> bool:
         """Return True if a chunk with this outcome should be blocked.

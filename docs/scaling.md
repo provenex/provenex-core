@@ -309,7 +309,7 @@ is a human summary.
 
 ---
 
-## Phase 2 design: end-to-end RAG overhead bench
+## Design: end-to-end RAG overhead bench
 
 The numbers above answer "how fast is Provenex on its own?" They do not
 answer the question a buyer will ask, which is:

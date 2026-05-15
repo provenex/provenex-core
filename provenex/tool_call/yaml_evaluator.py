@@ -1,6 +1,6 @@
 """Native YAML tool-call admission evaluator (schema 2.2.0).
 
-The Phase 2 sibling of :class:`provenex.policy.yaml_evaluator.NativeYamlEvaluator`.
+The tool-call admission analog of :class:`provenex.policy.yaml_evaluator.NativeYamlEvaluator`.
 Same DSL grammar (``when`` / ``require`` / ``on_violation``), same
 operators (extended with ``matches_pattern`` / ``not_matches_pattern`` /
 ``length_at_most`` in schema 2.2.0), but rules see ``tool.*`` and
@@ -18,7 +18,7 @@ Loading paths:
 ``policy_version_hash`` covers the tool-call subset only — adding or
 changing ``verification:`` or ``access_control:`` in the same unified
 file does not change the tool-call hash. The two halves version
-independently, the same way Phase 1's access-control hash does.
+independently, the same way the retrieval-side access-control hash does.
 """
 
 from __future__ import annotations

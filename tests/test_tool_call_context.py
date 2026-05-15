@@ -1,4 +1,4 @@
-"""Tests for the Phase 2 tool-call data model.
+"""Tests for the tool-call data model.
 
 Covers:
 

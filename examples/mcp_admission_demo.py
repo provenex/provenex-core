@@ -285,7 +285,7 @@ def main() -> int:
                 "params": {
                     "name": "jira",
                     "arguments": {
-                        "issue_key": "INC-2026-05-001",
+                        "issue_key": "TICKET-001",
                         "transition": "in_progress",
                         "__operation__": "update_issue",
                         "__target_system__": "acme.atlassian.net",

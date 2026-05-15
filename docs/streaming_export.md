@@ -158,9 +158,9 @@ admit_model_inference(..., sink=sink)
 
 # Framework wrappers — sink= on the constructor / factory
 ProvenexRetriever(..., sink=sink)              # LangChain
-ProvenexToolWrapper(..., sink=sink)            # LangChain Phase 2
+ProvenexToolWrapper(..., sink=sink)            # LangChain tool-call admission
 provenex_retrieval_node(..., sink=sink)        # LangGraph
-provenex_admission_node(..., sink=sink)        # LangGraph Phase 2
+provenex_admission_node(..., sink=sink)        # LangGraph tool-call admission
 provenex_mcp_admission(..., sink=sink)         # MCP
 ProvenexLlamaIndexRetriever(..., sink=sink)    # LlamaIndex
 

@@ -150,6 +150,42 @@ def test_file_jsonl_creates_directory(tmp_path):
     assert target.exists()
 
 
+def test_file_jsonl_rejects_traversal_in_prefix(tmp_path):
+    import pytest
+    with pytest.raises(ValueError, match="filename component"):
+        FileJSONLSink(directory=str(tmp_path), prefix="../escape")
+    with pytest.raises(ValueError):
+        FileJSONLSink(directory=str(tmp_path), prefix="..")
+
+
+def test_file_jsonl_refuses_symlink_target(tmp_path):
+    """If the date-rotated filename pre-exists as a symlink, refuse to open.
+
+    Without this check, an attacker who can write to the operator-configured
+    directory could pre-create the expected receipt file as a symlink to a
+    privileged file; the next publish would write JSON into it.
+    """
+    import datetime as _dt
+    import pytest
+    target = tmp_path / "victim.txt"
+    target.write_text("untouched")
+    today = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    expected = tmp_path / f"receipts-{today}.jsonl"
+    expected.symlink_to(target)
+    sink = FileJSONLSink(directory=str(tmp_path))
+    # Call publish directly so the sink-level OSError surfaces — the
+    # _safe_publish wrapper used by admission_check would swallow it.
+    result = admission_check(
+        tool=ToolCallContext(name="t", operation="op", parameters={}),
+        request=_request(),
+        signer=_signer(),
+    )
+    with pytest.raises(OSError, match="symlink"):
+        sink.publish(result.receipt)
+    # Victim file unmodified.
+    assert target.read_text() == "untouched"
+
+
 # ---------- MultiSink ---------- #
 
 
@@ -244,7 +280,7 @@ def test_retry_queue_buffers_then_drains():
     assert retry.pending_count() == 0
 
 
-def test_retry_queue_drops_oldest_on_overflow():
+def test_retry_queue_drops_oldest_on_overflow_and_warns():
     class AlwaysFails:
         def publish(self, r):
             raise RuntimeError("down")
@@ -252,7 +288,7 @@ def test_retry_queue_drops_oldest_on_overflow():
             pass
 
     retry = RetryQueueSink(AlwaysFails(), maxlen=2)
-    with warnings.catch_warnings(record=True):
+    with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         for _ in range(5):
             admission_check(
@@ -263,6 +299,33 @@ def test_retry_queue_drops_oldest_on_overflow():
             )
     # Queue is bounded; max 2.
     assert retry.pending_count() == 2
+    # The full-queue transition must be surfaced — silent drop on an
+    # audit-record queue is the bug we are protecting against.
+    assert any("queue is full" in str(x.message) for x in w)
+
+
+def test_retry_queue_close_warns_when_pending_remain():
+    class AlwaysFails:
+        def publish(self, r):
+            raise RuntimeError("down")
+        def close(self):
+            pass
+
+    retry = RetryQueueSink(AlwaysFails(), maxlen=10)
+    admission_check(
+        tool=ToolCallContext(name="t", operation="op", parameters={}),
+        request=_request(),
+        signer=_signer(),
+        sink=retry,
+    )
+    assert retry.pending_count() == 1
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        retry.close()
+    # The receipt is still pending — close() must not silently abandon
+    # it. The peek-before-pop pattern preserves the receipt in the queue.
+    assert retry.pending_count() == 1
+    assert any("still pending" in str(x.message) for x in w)
 
 
 def test_retry_queue_close_drains_best_effort():

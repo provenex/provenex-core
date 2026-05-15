@@ -1,6 +1,6 @@
 # Quickstart
 
-Get a working provenance receipt in five minutes. Several paths below — drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, thread receipts through an agentic / multi-step flow, or enforce policy on agentic tool calls (Phase 2, schema 2.2.0).
+Get a working provenance receipt in five minutes. Several paths below — drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, thread receipts through an agentic / multi-step flow, or enforce policy on agentic tool calls.
 
 ## Install
 
@@ -342,7 +342,7 @@ provenex audit receipt.json --show-policy
 
 A `VERIFIED` chunk can still be policy-denied (wrong jurisdiction, missing role); a `STALE` chunk can still be policy-allowed if the policy explicitly accepts stale chunks. The two gates are independent. See [`docs/policy.md`](policy.md) for the DSL reference and worked examples; see [`docs/threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model.
 
-## Path G: agentic tool-call admission (Phase 2)
+## Path G: agentic tool-call admission
 
 For enforcing what an agent is allowed to **do**, not just what it can read. Same unified policy file, second half lit up.
 
@@ -387,7 +387,7 @@ tool_call_control:
     unknown_metadata: deny
 ```
 
-**Framework-agnostic** — `admission_check` is the Phase 2 sibling of `verify_chunks`:
+**Framework-agnostic** — `admission_check` is the tool-call admission analog of `verify_chunks`:
 
 ```python
 from provenex import (
@@ -404,7 +404,7 @@ request = RequestContext(
     # Optional schema-2.3.0 correlation tag. Stamped onto the emitted
     # receipt's trajectory.session_id field (when a trajectory is in
     # scope); silently dropped on single-shot calls.
-    session_id="incident-2026-05-14-customer-success-001",
+    session_id="session-2026-001",
 )
 
 result = admission_check(
@@ -524,11 +524,11 @@ from provenex import (
 index = SQLiteProvenanceIndex("memory.db")    # the memory store as a ProvenanceIndex
 signer = HmacSha256Signer()
 trj = start_trajectory(agent_id="incident_agent",
-                       session_id="incident-2026-05-14-001")
+                       session_id="session-2026-002")
 request = RequestContext(
     caller={"id": "u_42", "role": "engineer"}, jurisdiction="US",
     purpose="incident_response", timestamp="2026-05-14T11:30:00Z",
-    session_id="incident-2026-05-14-001",
+    session_id="session-2026-002",
 )
 
 # Memory read — same five outcomes as retrieval. Source records carry
@@ -552,7 +552,7 @@ r2 = admit_memory_write(
 # prompt_hash always recorded; verbatim prompt REDACTED by default.
 r3 = admit_model_inference(
     model_name="claude-opus-4-7",
-    prompt=[{"role": "user", "content": "Summarize INC-2026-05-001"}],
+    prompt=[{"role": "user", "content": "Summarize TICKET-001"}],
     request=request, target_provider="anthropic",
     extra_parameters={"max_tokens": 4000, "temperature": 0.2},
     signer=signer, trajectory=r2.next_trajectory,
@@ -692,5 +692,5 @@ Provenex emits the source-of-record. The detector / SIEM that reads it is the de
 - [`../examples/rag_with_provenance.py`](../examples/rag_with_provenance.py): RAG integration pattern. Ingest into both vector store and Provenex, verify at retrieval, watch the policy block a chunk that bypassed Provenex ingest.
 - [`../examples/basic_langchain_rag.py`](../examples/basic_langchain_rag.py): full runnable end-to-end demo against a LangChain retriever
 - [`../examples/policy_configuration.py`](../examples/policy_configuration.py): dev / prod / high-assurance policy presets
-- [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py): the Phase 2 headline demo. Mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory; one CLI audit pass over four signed receipts.
+- [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py): the headline tool-call admission demo. Mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory; one CLI audit pass over four signed receipts.
 - [`scaling.md`](scaling.md): 1M-chunk benchmark numbers (verify p50 371 µs, offline proof verify 47 µs) and honest discussion of how they move on enterprise hardware

@@ -1,6 +1,6 @@
 """Regression tests for `step_kind` propagation on retrieval emissions.
 
-Before this fix, two Phase 1 entry points took a `step_kind` argument
+Before this fix, two retrieval entry points took a `step_kind` argument
 but did not actually stamp it onto the receipt's trajectory block:
 
     * ``provenex_retrieval_node`` accepted ``step_kind="retrieval"`` as a

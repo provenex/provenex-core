@@ -127,6 +127,33 @@ def test_signature_roundtrip():
     assert verify_receipt_signature(parsed, signer) is True
 
 
+def test_signature_roundtrip_with_non_ascii_content():
+    """Receipts with non-ASCII content (smart quotes, CJK, emoji) must
+    round-trip identically.
+
+    The canonical signing payload uses ``ensure_ascii=False`` so a
+    non-Python verifier emitting raw UTF-8 produces the same bytes. If
+    the producer and verifier disagree on Unicode escape form, this
+    test fails.
+    """
+    signer = HmacSha256Signer(secret=SECRET)
+    builder = ReceiptBuilder()
+    builder.add_source(
+        fingerprint="sha256:" + "a" * 64,
+        outcome=VerificationOutcome.VERIFIED,
+        entry=make_entry(),
+    )
+    # Non-ASCII LLM output ought to survive intact through the canonical
+    # payload and re-verify.
+    output_with_smart_quotes_and_cjk = (
+        "Verified with “smart quotes” — 中文 \U0001f4dd"
+    )
+    receipt = builder.finalize(output_text=output_with_smart_quotes_and_cjk, signer=signer)
+    json_text = receipt.to_json()
+    parsed = json.loads(json_text)
+    assert verify_receipt_signature(parsed, signer) is True
+
+
 def test_signature_fails_with_wrong_secret():
     signer = HmacSha256Signer(secret=SECRET)
     wrong = HmacSha256Signer(secret=b"wrong-secret")

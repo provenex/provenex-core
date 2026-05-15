@@ -19,6 +19,11 @@ htmlcov/
 *.db-journal
 *.db-shm
 *.db-wal
+*_receipt.json
+*_receipts.jsonl
+
+# Release notes live outside the repo (private notes folder).
+meta/release_v*.md
 
 # Benchmarking artifacts — local-only; numbers are summarized in docs/scaling.md
 bench_reports/

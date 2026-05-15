@@ -16,7 +16,7 @@ Schema history:
 | `1.5.0` | (Skipped.) Interim shape that put `access_policy` as a separate top-level block. Never released. |
 | `2.0.0` | **Breaking.** Unified `policy` block with `verification` and optional `access_control` subsections. The 1.x top-level `policy` (which held only the verification config) is replaced by `policy.verification`. |
 | `2.1.0` | Per-decision `metadata_binding` field on `policy.access_control.decisions[]` recording whether `chunk_metadata` was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Additive: receipts without the field are valid 2.0.0 subsets. |
-| `2.2.0` | **Phase 2.** Optional top-level `actions[]` array (tool-call records, parallel to `sources[]`); optional `policy.tool_call_control` subsection (admission decision record, parallel to `policy.access_control`); `summary` gains `total_actions` / `actions_allowed` / `actions_denied` when actions are present. Additive: a 2.1.0 receipt with no actions is a valid 2.2.0 receipt; a 2.1.0 verifier that ignores unknown fields validates a 2.2.0 receipt with actions. |
+| `2.2.0` | **Tool-call admission.** Optional top-level `actions[]` array (tool-call records, parallel to `sources[]`); optional `policy.tool_call_control` subsection (admission decision record, parallel to `policy.access_control`); `summary` gains `total_actions` / `actions_allowed` / `actions_denied` when actions are present. Additive: a 2.1.0 receipt with no actions is a valid 2.2.0 receipt; a 2.1.0 verifier that ignores unknown fields validates a 2.2.0 receipt with actions. |
 | `2.3.0` | **Source-of-record fields for downstream anomaly detectors / SIEMs.** Top-level `caller_hash` — SHA-256 over the canonical JSON of `request_context.caller`, emitted on every receipt produced with a `RequestContext` in scope. Optional `trajectory.session_id` — caller-chosen opaque multi-trajectory correlation key. Both fields are decision-and-proof artifacts (do not influence policy decisions; `inputs_hash` is unchanged when only `session_id` differs). Additive: a 2.2.0 receipt remains a valid 2.3.0 receipt; a 2.2.0 verifier that ignores unknown fields validates a 2.3.0 receipt unchanged; no signing-format change. |
 
 Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
@@ -243,7 +243,7 @@ Combined with `verification_outcome`, this lets auditors distinguish "expected m
 
 ## `actions[]` *(schema 2.2.0+)*
 
-One entry per tool-call attempt. Phase 2 parallel of `sources[]`. Present only when the receipt covers tool-call admissions; absent on pure-retrieval receipts so the 2.1.0 shape is preserved exactly for backward compatibility.
+One entry per tool-call attempt. Tool-call admission analog of `sources[]`. Present only when the receipt covers tool-call admissions; absent on pure-retrieval receipts so the 2.1.0 shape is preserved exactly for backward compatibility.
 
 ```json
 {
@@ -485,7 +485,7 @@ Optional. Present iff the receipt is part of a multi-step agent trajectory (sche
     "step_kind": "retrieval",
     "agent_id": "research_agent",
     "trajectory_started_at": "2026-05-13T10:00:00.000Z",
-    "session_id": "incident-2026-05-14-customer-success-001"
+    "session_id": "session-2026-001"
   }
 }
 ```

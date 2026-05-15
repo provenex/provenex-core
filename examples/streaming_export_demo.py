@@ -79,7 +79,7 @@ RESET = "\033[0m" if _TTY else ""
 
 
 CORPUS = (
-    "INC-2026-05-001: Service degradation reported. SEV-2 incident "
+    "TICKET-001: Service degradation reported. SEV-2 incident "
     "on auth-gateway. Owner: platform team."
 )
 
@@ -163,7 +163,7 @@ def main() -> int:
         fp_value = fp.fingerprint_chunk(CORPUS)
         idx.add(
             fingerprint=fp_value,
-            document_id="incident-INC-2026-05-001",
+            document_id="doc-ticket-001",
             document_version="sha256:" + "1" * 64,
             chunk_offset=0,
             chunk_length=len(CORPUS),
@@ -212,7 +212,7 @@ def main() -> int:
         # Model inference
         r4 = admit_model_inference(
             model_name="claude-opus-4-7",
-            prompt="Summarize INC-2026-05-001 concisely.",
+            prompt="Summarize TICKET-001 concisely.",
             request=request, target_provider="anthropic",
             extra_parameters={"max_tokens": 4000},
             signer=signer, trajectory=r3.next_trajectory, sink=sink,

@@ -1,9 +1,9 @@
-"""Tool-call admission — Phase 2 of Provenex.
+"""Tool-call admission — Tool-call admission.
 
 This is the second enforcement front-end on the same policy-and-proof spine
-that Phase 1 built for retrieval. Where Phase 1 fingerprints content and
+that retrieval built. Where retrieval fingerprints content and
 verifies a retrieved chunk against a signed index (the five outcomes),
-Phase 2 intercepts an action attempt — agent wants to call tool X with
+tool-call admission intercepts an action attempt — agent wants to call tool X with
 parameters Y on behalf of caller Z — evaluates it against declarative
 policy, and emits a signed receipt with the decision.
 
@@ -16,7 +16,7 @@ never sits on the response data path. The caller still executes the call
 with its own credentials after we return ``allow``. We are a Kubernetes-
 admission-controller-shaped layer, not a service mesh.
 
-What's reused verbatim from Phase 1:
+What's reused verbatim from the retrieval flow:
 
     * :class:`provenex.core.receipt.ReceiptBuilder` and the signers
       (HMAC + Ed25519)

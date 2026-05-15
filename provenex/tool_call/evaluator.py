@@ -1,18 +1,18 @@
 """Tool-call policy evaluator interface (schema 2.2.0).
 
-Mirrors :mod:`provenex.policy.evaluator`. The Phase 2 sibling Protocol
+Mirrors :mod:`provenex.policy.evaluator`. The tool-call admission Protocol
 takes a :class:`ToolCallContext` instead of a :class:`ChunkContext`.
 
 Why a sibling Protocol rather than a subclass:
 
-    The discriminator between Phase 1 and Phase 2 is the type of
+    The discriminator between retrieval and tool-call admission is the type of
     ``evaluate()``'s first argument. Subtyping would force either a
     union type (loses static checking benefits) or a single ``evaluate``
     method that branches at runtime on context type (ugly, error-prone).
     Two parallel Protocols cost a handful of lines and make every call
     site explicit about which decision domain it's in.
 
-The :class:`PolicyDecision` shape is reused verbatim from Phase 1 —
+The :class:`PolicyDecision` shape is reused verbatim from the retrieval flow —
 ``decision``, ``rules_fired``, ``inputs_hash``, ``inputs``,
 ``metadata_binding`` are all content-agnostic. The :class:`RequestContext`
 is also reused verbatim (caller / jurisdiction / purpose / timestamp
@@ -63,7 +63,7 @@ class ToolCallPolicyEvaluator(Protocol):
     def evaluator_name(self) -> str:
         """Backend identifier recorded on the receipt (``"native_yaml"`` etc).
 
-        Both Phase 1 and Phase 2 share evaluator-name constants — the
+        Both retrieval and tool-call admission share evaluator-name constants — the
         backend identity is what matters, not the domain. The receipt's
         section (``policy.access_control`` vs ``policy.tool_call_control``)
         tells an auditor which domain the decision governed.
@@ -82,7 +82,7 @@ class ToolCallPolicyEvaluator(Protocol):
         Covers only the tool-call rules subset, not the entire unified
         bundle. Two unified files that differ only in ``access_control``
         or ``verification`` content produce the same
-        ``policy_version_hash`` here, the same way Phase 1's
+        ``policy_version_hash`` here, the same way the retrieval-side
         ``NativeYamlEvaluator`` only hashes the access-control subset.
         The two halves version independently.
         """
@@ -150,10 +150,10 @@ def build_tool_call_inputs(
 ) -> Dict[str, Any]:
     """Build the canonical ``inputs`` dict for a tool-call decision record.
 
-    Shape mirrors what Phase 1 emits under
+    Shape mirrors what retrieval emits under
     ``policy.access_control.decisions[i].inputs``: a top-level
     ``request_context`` plus a domain-specific block — ``chunk_metadata``
-    in Phase 1, ``tool_parameters`` here.
+    in the retrieval flow, ``tool_parameters`` here.
 
     The full parameter values appear in ``tool_parameters.parameters``.
     Receipt-level redaction (``parameters: null`` plus the surviving
@@ -223,7 +223,7 @@ def build_tool_call_control_metadata(
 
 
 # Re-export decision constants so callers can do ``from provenex.tool_call
-# import DECISION_ALLOW`` without dipping into the Phase 1 namespace.
+# import DECISION_ALLOW`` without dipping into the retrieval namespace.
 __all__ = [
     "ToolCallPolicyEvaluator",
     "NullToolCallPolicyEvaluator",

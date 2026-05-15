@@ -1,4 +1,4 @@
-"""CLI tests for Phase 2 (tool-call admission) extensions.
+"""CLI tests for tool-call admission extensions.
 
 Covers:
 
@@ -6,7 +6,7 @@ Covers:
       ``tool_call_control:`` only, with both halves, and the legacy
       access-control-only layout.
     * ``provenex policy hash`` prints one bare hash for single-section
-      files (preserves the Phase 1 CLI contract) and prefixed lines for
+      files (preserves the retrieval CLI contract) and prefixed lines for
       multi-section files.
     * ``provenex policy hash --section <name>`` filters to one half.
     * ``provenex audit`` runs cleanly on a 2.2.0 receipt with
@@ -379,7 +379,7 @@ def test_audit_trajectory_json_summary_aggregates_mixed_step_kinds(
     receipts_dir.mkdir()
 
     trj = start_trajectory(agent_id="agg_test")
-    # NOTE: Phase 1's verify_chunks doesn't auto-stamp step_kind on
+    # NOTE: verify_chunks doesn't auto-stamp step_kind on
     # the emitted receipt; we pass it explicitly so the aggregator can
     # bucket retrieval receipts under "retrieval". This is the same
     # caller-side discipline `examples/agentic_admission_demo.py`

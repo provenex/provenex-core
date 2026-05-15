@@ -256,7 +256,7 @@ class PolicyEvaluator(Protocol):
 
         Two policies that differ only in formatting (key order, whitespace)
         MUST hash to the same value. This is the field that would be
-        published to a transparency log in Phase 2.
+        published to a transparency log.
         """
         ...
 

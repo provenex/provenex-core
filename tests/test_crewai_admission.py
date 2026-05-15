@@ -1,4 +1,4 @@
-"""Phase 2 tests for ``ProvenexCrewSession``.
+"""Tool-call admission tests for ``ProvenexCrewSession``.
 
 Covers the new tool-call admission surface added in 0.6.2:
 
@@ -99,7 +99,7 @@ def test_session_accepts_unified_policy():
 
 
 def test_session_still_accepts_bare_verification_policy():
-    """Phase 1 callers passing a VerificationPolicy continue to work."""
+    """retrieval callers passing a VerificationPolicy continue to work."""
     from provenex.policy.policy import VerificationPolicy
 
     index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
@@ -299,7 +299,7 @@ def test_wrap_tool_admission_custom_params_extractor():
 
 
 def test_mixed_retrieve_and_admit_compose_one_trajectory():
-    """Phase 1 verify_chunks + Phase 2 admission_check on the same
+    """verify_chunks + tool-call admission_check on the same
     session must produce one DAG that audits end-to-end."""
     session = _session()
     # Step 0: verify some content (will be UNVERIFIED since the index

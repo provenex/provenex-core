@@ -10,22 +10,20 @@ function `receipt_to_ocsf(receipt_dict)` is the public entrypoint;
 
 ## OCSF version targeted
 
-**v1.3.0** (the most recent stable release as of late 2025). The
-mapping is forward-compatible — OCSF treats new optional fields the
-same way Provenex does, so receipts produced today flow through
-unchanged into v1.4 / v2.0 consumers that ignore unknown fields.
+**v1.3.0**. The mapping is forward-compatible — OCSF treats new
+optional fields the same way Provenex does, so receipts produced
+today flow through unchanged into v1.4 / v2.0 consumers that ignore
+unknown fields.
 
-When OCSF stabilizes AI-specific event classes (6008-series "AI/ML
-Operations" was draft as of late 2025; 7XXX-series for AI agent
-events is being discussed), this document changes. Receipts do not
-— only the mapping table moves.
+When OCSF stabilizes AI-specific event classes, this document
+changes. Receipts do not — only the mapping table moves.
 
 ## Class mapping summary
 
 | Provenex event | OCSF class | OCSF class UID | Severity |
 | --- | --- | --- | --- |
-| Allowed retrieval (Phase 1) — one per allowed source on a `verify_chunks` / `verify_memory` receipt | Application Activity | **6005** | Informational (1) |
-| Allowed admission (Phase 2) — one per allowed action: tool-call / `admit_memory_write` / `admit_model_inference` | API Activity | **6003** | Informational (1) |
+| Allowed retrieval — one per allowed source on a `verify_chunks` / `verify_memory` receipt | Application Activity | **6005** | Informational (1) |
+| Allowed admission — one per allowed action: tool-call / `admit_memory_write` / `admit_model_inference` | API Activity | **6003** | Informational (1) |
 | Blocked retrieval — verification policy blocked the chunk (TAMPERED / UNAUTHORIZED+block / UNVERIFIED+block / STALE+block) | Detection Finding | **2004** | **Critical (5)** |
 | Denied access-control decision — chunk passed verification but was denied by `policy.access_control` | Detection Finding | **2004** | **High (4)** |
 | Denied admission — action denied by `policy.tool_call_control` | Detection Finding | **2004** | **High (4)** |
@@ -108,7 +106,7 @@ themselves are unchanged.
       "feature": { "name": "provenex-receipt", "version": "2.3.0" }
     },
     "correlation_uid": "trj_…",
-    "session_uid": "incident-2026-05-14-001",
+    "session_uid": "session-2026-002",
     "policy_uid": "hr-corpus-retrieval-v3",
     "policy_uid_alt": "sha256:…",
     "labels": [

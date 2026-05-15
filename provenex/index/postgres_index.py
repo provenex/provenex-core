@@ -38,7 +38,12 @@ from __future__ import annotations
 import os
 
 from .base import IndexEntry, ProvenanceIndex, VerificationOutcome
-from .sqlite_index import _canonical_payload, _now_utc_iso, _sign
+from .sqlite_index import (
+    _canonical_payload,
+    _now_utc_iso,
+    _resolve_index_secret,
+    _sign,
+)
 
 
 def _require_psycopg():
@@ -118,15 +123,7 @@ class PostgresProvenanceIndex(ProvenanceIndex):
         max_size: int = 10,
     ) -> None:
         if signing_secret is None:
-            env_secret = os.environ.get("PROVENEX_SIGNING_SECRET")
-            if not env_secret:
-                raise RuntimeError(
-                    "PostgresProvenanceIndex requires a signing_secret argument "
-                    "or the PROVENEX_SIGNING_SECRET environment variable to be "
-                    "set. The index refuses to operate without one because it "
-                    "would be impossible to detect tampering."
-                )
-            signing_secret = env_secret.encode("utf-8")
+            signing_secret = _resolve_index_secret()
         self._secret = signing_secret
 
         if (dsn is None) == (pool is None):

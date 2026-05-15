@@ -1,4 +1,4 @@
-"""Tests for the Phase 2 native YAML DSL extension.
+"""Tests for the native YAML tool-call DSL.
 
 Covers, end-to-end:
 
@@ -277,7 +277,7 @@ rules:
 
 
 def test_chunk_rule_referencing_tool_path_rejected_at_parse():
-    """Phase 1's evaluator rejects ``tool.*`` paths in access_control rules.
+    """the retrieval evaluator rejects ``tool.*`` paths in access_control rules.
 
     Same strict-load discipline applied to the other direction.
     """
@@ -450,7 +450,7 @@ def test_tool_call_hash_changes_when_rules_change():
 
 
 def test_tool_call_hash_independent_of_verification_half():
-    """Two halves version independently — same Phase 1 invariant.
+    """Two halves version independently — same retrieval invariant.
 
     Adding or modifying the ``verification:`` section of a unified file
     must not change the ``tool_call_control`` hash. Auditors reading

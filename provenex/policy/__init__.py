@@ -9,7 +9,7 @@ This package houses two distinct policy concerns:
 * :mod:`provenex.policy.evaluator` and
   :mod:`provenex.policy.yaml_evaluator` — the schema-1.5.0 data-access
   policy framework. Pluggable evaluator backends (native YAML in v0.4;
-  Rego and OPA-service reserved for Phase 2) decide allow / deny on
+  Rego and OPA-service reserved for commercial) decide allow / deny on
   each (chunk, request) pair using the operator's own rules — origin,
   freshness, access, jurisdiction, PII tags, classification.
 

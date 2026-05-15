@@ -82,13 +82,13 @@ If an attacker rewrites embeddings in Pinecone/Weaviate/Milvus, the chunks the r
 
 Mitigation: vector-DB-level integrity (vendor controls, IAM, audit logs on the vector DB itself). Provenex composes alongside these, it does not replace them.
 
-### Bulk denial-of-service against the index or the audit path
+### Resource exhaustion
 
-Provenex is a verification layer, not a rate limiter or DDoS appliance. An attacker who can flood the index with `verify` calls can degrade performance. Mitigation: standard application-layer rate limiting in front of whatever calls into Provenex.
+Provenex is a verification layer; rate-limit calls at the application boundary the same as any verification dependency.
 
 ### Side-channel attacks on the signing key
 
-We use `hmac.compare_digest` for constant-time HMAC comparison and the underlying `cryptography` library's primitives (libsodium / OpenSSL) for Ed25519, which are also constant-time. We do not claim Spectre/Meltdown-class resistance or robustness against power-analysis on dedicated hardware. Treat the signing host as you would treat any host that has access to a production secret.
+We use `hmac.compare_digest` for constant-time HMAC comparison and the underlying `cryptography` library's primitives (libsodium / OpenSSL) for Ed25519, which are also constant-time. Treat the signing host as you would treat any host that has access to a production secret.
 
 ## Trust model for policy decisions
 

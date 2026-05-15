@@ -1,6 +1,6 @@
 """Determinism tests for policy_version_hash and inputs_hash.
 
-These are the contract the transparency-log integration (Phase 2) will
+These are the contract the transparency-log integration will
 depend on. Two policies that differ only in formatting MUST hash to the
 same value; an actual structural change MUST change the hash.
 """
