@@ -272,8 +272,35 @@ The following raise `UnsupportedPolicyFeature` at load time:
 - `on_violation: allow_with_conditions`.
 - Custom functions and external data lookups.
 - Unknown `require` operators.
+- **Trajectory-level rules** — see [What the native DSL deliberately doesn't do](#what-the-native-dsl-deliberately-doesnt-do-and-why) below. The native DSL is per-decision-pure by design; cross-decision rules live in the commercial Rego adapter or in the downstream anomaly detector reading receipts.
 
 The Rego adapter and OPA service adapter are commercial.
+
+## What the native DSL deliberately doesn't do (and why)
+
+Three things you might reach for that the native DSL refuses, **on purpose**:
+
+1. **Trajectory-level rules.** "Deny if this caller has done > N web_search calls in this trajectory." "Block if this agent has read from memory AND called an external tool within K seconds." "Alert if the rules_fired distribution on this trajectory looks anomalous." These are sequence / pattern detections. The native DSL won't evaluate them.
+
+2. **Cross-decision aggregations.** "Deny if more than half of this caller's recent decisions denied." "Alert if the per-step_kind distribution has shifted by > 20% in the last hour." Aggregations over history are out.
+
+3. **External data lookups during evaluation.** "Check the user's current entitlement in Okta before deciding." "Resolve this document's classification from the live catalog service." Calls to external systems at decision time are out.
+
+**Why it's a design choice, not a missing feature.** `PolicyEvaluator.evaluate(chunk_or_tool, request) → PolicyDecision` is contractually pure: same inputs, same decision, same `inputs_hash`. Two regulators, two months apart, with the original `(chunk, request)` inputs and the original policy bundle MUST reproduce the receipt's `inputs_hash` exactly. That property is what makes Provenex receipts auditable years after they were issued. The moment a rule reads hidden state outside `(chunk_or_tool, request)` — trajectory history, aggregations, external lookups — `inputs_hash` becomes path-dependent. The audit story collapses.
+
+**Where the load-bearing reasons go:**
+
+- `policy_version_hash` is canonical: two bundles that parse to the same Python structure produce the same hash. Trajectory rules would require canonicalising trajectory state into the bundle, which is incoherent (trajectories are runtime artifacts, not config).
+- `inputs_hash` per decision is the audit anchor. Path-dependent inputs mean an auditor can't reproduce it from the recorded inputs alone — they'd need the entire trajectory state, which is exactly what the receipt was supposed to summarise.
+- The five verification outcomes are sacred. Adding a sixth ("denied by trajectory rule") would erode the discrete-cryptographic-states discipline.
+
+**Where to put trajectory rules instead.**
+
+- **Commercial Rego adapter** — the [Rego language](https://www.openpolicyagent.org/docs/latest/policy-language/) is general-purpose and can express trajectory rules cleanly. The Rego adapter is opt-in; operators who use it accept the audit-anchor trade-off explicitly (the `inputs_hash` discipline still applies per decision, but Rego policies can reference trajectory state if the operator authors them that way). Available under the commercial license — see [provenex.ai](https://provenex.ai).
+
+- **Downstream anomaly detector reading receipts** — this is the recommended path for almost every customer. Provenex emits one signed receipt per decision; an anomaly detector / SIEM / UEBA tool reads the receipt stream and does the sequence / pattern detection there. That's the OCSF export's whole purpose (see [`ocsf_mapping.md`](ocsf_mapping.md)) — receipts become the source-of-record events the detector consumes. The detector is a different tool category (SIEM / UEBA), with different budgets and different vendors. Provenex is the firewall; the detector is the SIEM that correlates across firewall events.
+
+The firewall doesn't ship a SIEM. The SIEM doesn't ship a firewall. Each is better-engineered because it doesn't try to be the other. See [`anomaly_detection.md`](anomaly_detection.md) for the canonical positioning, including worked anomaly-detection patterns over the receipt stream.
 
 ## Evaluator interface
 

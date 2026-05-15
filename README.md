@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.7)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.7)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.6.8)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.6.8)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -95,7 +95,7 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.6.7",
+  "issuer": "provenex-core/0.6.8",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
@@ -404,6 +404,17 @@ events = receipt_to_ocsf(result.receipt.to_dict())
 
 Correlation fields land where SIEMs expect them: `caller_hash` → `actor.user.uid`, `trajectory_id` → `metadata.correlation_uid`, `session_id` → `metadata.session_uid`, `step_kind` → `metadata.labels[]`. The full field-by-field spec is in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md) — the public artifact for SIEM vendors and enterprise security architects.
 
+### Provenex is the firewall. Your detector is the SIEM.
+
+Provenex enforces per-decision admission and emits signed receipts. Your anomaly detector / UEBA / SIEM reads the receipt stream and does sequence / pattern detection. Two categories, two budgets, two vendors — by design.
+
+- **Provenex side:** deterministic, per-decision-pure, side-effect-free, sub-millisecond. `inputs_hash` is reproducible by a regulator years later from the recorded inputs + the original policy bundle.
+- **Detector side:** stateful, cross-decision, external-data-aware. Reads receipts via `ReceiptSink` (or OCSF events via `OCSFAdapter`), groups by `caller_hash` / `trajectory_id` / `session_id` / `step_kind`, baselines normal behaviour, alerts on drift.
+
+The native YAML DSL **deliberately refuses** trajectory-level rules, cross-decision aggregations, and external-data lookups during evaluation. Putting those inside a per-decision admission engine breaks the audit-anchor guarantees and the latency budget. They belong downstream — in your detector reading the receipt stream. Customers who need trajectory rules in-engine use the commercial Rego adapter; the trade-off is explicit. See [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
+
+**The canonical positioning doc, including worked detection patterns:** [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md) — what fields a detector reads, five worked patterns (per-caller rate, trajectory shape drift, policy near-miss, cross-trajectory correlation, content-source anomaly), trust model, and the operational reasoning for the firewall / SIEM split.
+
 ### Per-deployment unlinkability for `caller_hash` (0.6.5+)
 
 By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sha256:<hex>` prefix) — anyone with the verbatim caller dict can reproduce the hash. For multi-tenant deployments that want two of their customers' detectors to NOT be able to cross-correlate users via shared `caller_hash` buckets, pass `caller_hash_salt=b"..."` to `verify_chunks` / `admission_check` / `verify_memory` / `admit_memory_write` / `admit_model_inference`. The hash becomes HMAC-SHA256 keyed by the salt (`hmac-sha256:<hex>` prefix); two deployments with different salts produce different `caller_hash` for the same caller. Same algorithm family (SHA-256), same wire format — the prefix tells consumers which mode produced the hash. Salting is **opt-in**; no caller-side migration needed for the bare-SHA-256 default.
@@ -540,6 +551,7 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` — convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
 - **Streaming export sinks** (0.6.6+): `ReceiptSink` Protocol + reference sinks for `StdoutJSONLSink` / `FileJSONLSink` (date-rotated) / `MultiSink` (fan-out) / `RetryQueueSink` (bounded in-process retry) in the stdlib core. `KafkaSink` / `SQSSink` / `S3AppendSink` (date-hour-partitioned) / `PubSubSink` behind optional `[export-kafka]` / `[export-aws]` / `[export-gcp]` extras. Every emission entrypoint accepts `sink=`; failures are swallowed-and-logged so the agent's hot path is never broken by export degradation.
 - **OCSF v1.3 mapping** (0.6.7+, stdlib core): `provenex.receipt_to_ocsf(receipt_dict)` transforms one signed receipt into one or more OCSF events (Application Activity / API Activity / Detection Finding). `OCSFAdapter` wraps any `ReceiptSink` so the stream emits OCSF events instead of raw receipts — instantly compatible with Splunk / Datadog / Elastic / Microsoft Sentinel. Full mapping spec in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md).
+- **Source-of-record positioning + detection patterns** (0.6.8+): [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md) — the canonical reference for how receipts integrate with downstream anomaly detectors / UEBA / SIEM. Schema field reference for detectors, five worked detection patterns, trust model, and the operational reasoning for the firewall / SIEM split. **The native DSL deliberately refuses** trajectory-level rules so per-decision purity (and the audit-anchor guarantees that depend on it) stays intact — see [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why).
 - Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval, tool-call, memory, and model-inference steps
 - Self-attribution claims (schema 1.4.0+): signed but unverified records of what the agent said it used
 - Content-source classifier (schema 1.4.0+): distinguish indexed-corpus chunks from live-tool / memory-store chunks

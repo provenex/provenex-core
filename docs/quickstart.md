@@ -424,6 +424,8 @@ save_receipt(result.receipt)             # signed; denials are auditable too
 
 **Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call. Provenex never holds OAuth tokens, never proxies traffic, and never sits on the response-data path.
 
+**Per-decision, not cross-decision.** The native DSL rules above are pure functions of `(tool, request)` — no trajectory state, no aggregations, no external lookups. That's by design: it's what makes `inputs_hash` an audit anchor a regulator can reproduce years later. Trajectory-level rules ("deny if > N web_search calls in this trajectory") and sequence-pattern detection belong **downstream** — in your anomaly detector reading the receipt stream. See [`anomaly_detection.md`](anomaly_detection.md) for the positioning and worked patterns, or [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
+
 **LangChain** — wrap any tool with admission semantics:
 
 ```python
