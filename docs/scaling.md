@@ -216,10 +216,9 @@ proofs give you "and here's why you can prove it five years from now."
 
 ## What changes on enterprise hardware
 
-Honest framing first: I'm not going to print a single multiplier here.
-Customers benchmark on their own gear and any made-up number will
-embarrass us when it doesn't match. The discussion below names the
-factors that move and gives a **range**.
+No single multiplier applies across deployments; benchmarks should be
+run on the target hardware. The discussion below names the factors
+that move performance and gives a **range**.
 
 ### CPU axis
 
@@ -422,8 +421,7 @@ keep in mind when sizing:
    transaction commit and WAL flush - typically **5-15k commits/sec**
    on managed Postgres with the write cache enabled. Batching ingest
    across documents (multiple chunks per transaction) is the right
-   tuning lever; we'll add a batched `add_many` to the interface in a
-   subsequent release.
+   tuning lever.
 
 ### Deployment patterns for big-enterprise / polyglot stacks
 
@@ -452,12 +450,11 @@ The three SDK distribution patterns:
 | **B. Sidecar container** | One Provenex sidecar per app pod, app talks to it via local HTTP / gRPC over the pod network. Sidecar handles fingerprinting, verify, signing, and the Postgres pool. | Polyglot enterprises - Java, Go, Rust, Node apps need only a thin HTTP client. | Extra hop (microseconds within a pod), one container per app pod. |
 | **C. Centralized verify service** | Three to five Provenex pods serving as a shared HTTP service. All app pods call it. | Enterprises that refuse per-pod runtime cost; "treat Provenex like any other internal microservice." | Introduces a service dependency. "Decision and proof, not execution" still holds (we never sit on the data path), but Provenex becomes a critical-path internal service rather than a library. |
 
-The HTTP-server side of patterns B and C is not yet shipped in the OSS
-core. The library exposes everything the server needs (`verify_chunks`,
-`admission_check`, `compute_request_binding`); wrapping it in
-~200 lines of FastAPI is the work. We will ship a reference image when
-the first customer with a polyglot stack asks; the design is
-intentionally not speculative.
+The HTTP-server side of patterns B and C is not part of the OSS
+core today. The library exposes the primitives a server wrapper
+needs (`verify_chunks`, `admission_check`, `compute_request_binding`);
+a thin FastAPI or aiohttp wrapper of roughly 200 lines closes the
+gap.
 
 ### Sizing the Postgres connection layer
 
@@ -535,20 +532,19 @@ before Python overhead dominates. Above that, the levers in order:
    "fingerprint not in index" case in process memory, eliminating the
    Postgres round-trip for UNVERIFIED chunks. Material when UNVERIFIED
    is a small-but-nonzero fraction of traffic at scale.
-5. **Rust core with language bindings** (roadmap, not yet built) - the
-   algorithm is small enough that a Rust core would 50-100x per-call
-   throughput and remove the install-Python constraint entirely. Real
-   roadmap, no ETA.
+5. **Rust core with language bindings** (not in the OSS core today) -
+   the algorithm is small enough that a Rust core would 50-100x
+   per-call throughput and remove the install-Python constraint
+   entirely.
 
-Levers 1 and 2 are operational. Lever 3 is a library API addition. Levers
-4 and 5 are roadmap. In practice almost every enterprise deployment we
-have seen is comfortable on levers 1 and 2.
+Levers 1 and 2 are operational and require no Provenex changes. Lever 3
+is a library API addition. Levers 4 and 5 are out of scope for the OSS
+core today.
 
 ### What this doc does not yet cover
 
 - **Postgres benchmarks** at 1M and 10M chunks against managed
-  Postgres (RDS, Aurora, Cloud SQL). Coming once we have a stable
-  production reference deployment to publish numbers from.
+  Postgres (RDS, Aurora, Cloud SQL). Pending.
 - **Multi-process ingest scaling on the SQLite backend.** See the
   parallelism caveat above. Use the Postgres backend if you need this.
 - **Hot-cache vs cold-cache verify.** Current verify numbers are
@@ -560,6 +556,3 @@ have seen is comfortable on levers 1 and 2.
   single-process figure.
 - **Network-attached storage.** All current measurements are on a
   local SSD. EBS, GP3, and managed-disk performance will differ.
-
-Each of these is the right question to ask before shipping a production
-deployment.
