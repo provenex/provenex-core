@@ -145,7 +145,7 @@ A signed receipt per retrieval **or per tool-call** - verifiable offline by anyo
       "policy_in_transparency_log": false,
       "decisions": [
         { "action_index": 0, "decision": "allow",
-          "rules_fired": ["web_search_provider_allowlist", "no_secrets_in_query"],
+          "rules_fired": ["web_search_provider_allowlist", "no_api_key_in_query", "no_password_in_query"],
           "inputs_hash": "sha256:b8e441f7...", "inputs": null }
       ]
     }
@@ -574,7 +574,7 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **SQLite** provenance index for single-node development (HMAC-signed rows, stdlib-only)
 - RFC 6962 Merkle transparency log (optional, on top of either index)
 - Receipt generation, HMAC + Ed25519 signing, offline inclusion-proof verification
-- **Unified policy** (schema 2.3.0): single top-level `policy` block with `verification`, `access_control`, and `tool_call_control` halves
+- **Unified policy** (schema 2.0.0+): single top-level `policy` block with `verification`, `access_control`, and `tool_call_control` halves
 - **Native YAML policy DSL** for both chunk decisions and tool-call admission: pluggable `PolicyEvaluator` and `ToolCallPolicyEvaluator` protocols with the YAML evaluators as the reference backends; operators include `in` / `not_in` / `not_older_than` / `matches_pattern` / `not_matches_pattern` / `length_at_most`
 - **`metadata_binding`** per decision: each `chunk_metadata` block on the receipt declares whether it was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Lets an auditor see the trust class of every input at a glance.
 - **Bloom-filter acceleration interface** (`BloomFilterIndex` ABC + `BloomAcceleratedIndex` wrapper). High-throughput Bloom-filter acceleration available commercially.
@@ -629,7 +629,7 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 - [Five Things People Mean by "AI Provenance" (And Which One Is For You)](https://provenex.ai/blog/five-things-ai-provenance): the category map, and where Provenex sits
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): unified policy reference (verification + access control), DSL, worked examples, commercial roadmap
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): full algorithm, threat model, and architectural comparison to embedding-based systems
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.0.0 specification
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.4.0 specification (current); full version history table inside
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started, including a policy-driven retrieval path
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended/undefended threats, trust model for policy decisions
 - [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): 1M-chunk benchmark numbers and policy-evaluation latency profile
