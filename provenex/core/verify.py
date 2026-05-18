@@ -42,6 +42,7 @@ from .receipt import (
     ReceiptBuilder,
     ReceiptSigner,
     compute_caller_hash,
+    compute_request_binding,
 )
 from .trajectory import TrajectoryContext
 from ..export.streaming import _safe_publish
@@ -161,6 +162,7 @@ def verify_chunks(
     agent_id: Optional[str] = None,
     output_text: str = "",
     request_context: Optional[RequestContext] = None,
+    request_text: Optional[str] = None,
     chunk_metadata: Optional[List[Dict[str, Any]]] = None,
     chunk_metadata_binding: str = BINDING_AT_EVALUATE,
     caller_hash_salt: Optional[bytes] = None,
@@ -207,6 +209,14 @@ def verify_chunks(
             The caller / jurisdiction / purpose / timestamp the evaluator
             checks against. For v0.4 the caller constructs this
             explicitly; identity-provider integration is future work.
+        request_text: Optional triggering query / prompt text (v0.8.0+).
+            When supplied, the receipt's ``request_binding.query_hash``
+            is the SHA-256 of this text; the binding is covered by the
+            receipt signature, so a valid receipt cannot be presented as
+            evidence for a different query. The text itself is NEVER
+            recorded on the receipt, only its hash. Recommended for any
+            retrieval where the receipt may be handed to a regulator,
+            third-party auditor, or downstream compliance system.
         chunk_metadata: Optional list, one entry per chunk in retrieval
             order, of opaque metadata dicts surfaced to the policy
             evaluator under ``chunk.metadata.*``. Use this to pass
@@ -357,12 +367,23 @@ def verify_chunks(
             request_context.caller, salt=caller_hash_salt
         )
 
+    # Schema 2.4.0: cryptographic binding between this receipt and the
+    # request that produced it. Both halves are optional; absence is
+    # recorded explicitly so an auditor sees that the binding is
+    # incomplete. When the operator passes neither a request_text nor
+    # a request_context, the block is omitted entirely.
+    request_binding = compute_request_binding(
+        request_text=request_text,
+        request_context=request_context,
+    )
+
     receipt = builder.finalize(
         output_text=output_text,
         signer=signer,
         trajectory=emit_trajectory,
         access_control=access_control_block,
         caller_hash=emit_caller_hash,
+        request_binding=request_binding,
     )
 
     # Schema 2.3.0 / 0.6.6+: ship to downstream sink if supplied.

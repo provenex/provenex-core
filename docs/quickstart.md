@@ -1,6 +1,6 @@
 # Quickstart
 
-Get a working provenance receipt in five minutes. Several paths below — drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, thread receipts through an agentic / multi-step flow, or enforce policy on agentic tool calls.
+Get a working provenance receipt in five minutes. Several paths below - drop in alongside a LangChain pipeline, run standalone, layer in a transparency log, swap to Ed25519, thread receipts through an agentic / multi-step flow, or enforce policy on agentic tool calls.
 
 ## Install
 
@@ -65,15 +65,31 @@ The core SDK works without any framework integration:
 ```python
 from provenex.core.fingerprinter import Fingerprinter
 from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
+from provenex.index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW
 from provenex.index.sqlite_index import SQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
 
 index = SQLiteProvenanceIndex("provenance.db")
 fp = Fingerprinter()
 
-# Ingestion.
+# Ingestion. v0.8.0: each chunk you intend to authorize as a discrete
+# unit gets entry_kind=whole_chunk. Sliding-window fingerprints (for
+# structural locating) get entry_kind=window and CANNOT promote to
+# VERIFIED on a whole-chunk match - they are locators only.
 result = fp.fingerprint(document_text)
+whole_doc_fp = fp.fingerprint_chunk(document_text)
+index.add(
+    fingerprint=whole_doc_fp,
+    document_id="policy_v4",
+    document_version=result.document_version,
+    chunk_offset=0,
+    chunk_length=len(document_text),
+    authorized=True,
+    entry_kind=ENTRY_KIND_WHOLE_CHUNK,
+)
 for f in result.fingerprints:
+    if f.fingerprint == whole_doc_fp:
+        continue
     index.add(
         fingerprint=f.fingerprint,
         document_id="policy_v4",
@@ -81,6 +97,7 @@ for f in result.fingerprints:
         chunk_offset=f.offset,
         chunk_length=f.length,
         authorized=True,
+        entry_kind=ENTRY_KIND_WINDOW,
     )
 
 # Retrieval-time verification.
@@ -94,6 +111,12 @@ for chunk_text in retrieved_chunks:
 receipt = builder.finalize(output_text=llm_output, signer=HmacSha256Signer())
 print(receipt.to_json())
 ```
+
+The same split is what `provenex ingest` does at the CLI; if you call it
+instead of writing the loop yourself, the `entry_kind` assignment is
+already correct. The `entry_kind` field is part of the canonical row
+signing payload, so a storage-layer flip from `window` to `whole_chunk`
+invalidates the row signature and produces `TAMPERED` at verify time.
 
 ## Path C: with transparency log (offline verification)
 
@@ -202,7 +225,7 @@ provenex audit receipt.json --public-key audit.pub
 
 ## Path E: agentic / multi-step flows
 
-When an agent retrieves more than once per answer — Self-RAG, RAT, LangGraph DAGs, CrewAI multi-agent crews — each retrieval emits its own receipt, and Provenex links them into a verifiable trajectory. Pick whichever fits your stack:
+When an agent retrieves more than once per answer - Self-RAG, RAT, LangGraph DAGs, CrewAI multi-agent crews - each retrieval emits its own receipt, and Provenex links them into a verifiable trajectory. Pick whichever fits your stack:
 
 **Framework-agnostic** (works anywhere):
 
@@ -256,7 +279,7 @@ End-to-end audit from the shell:
 provenex audit --trajectory ./receipts/   # validates the whole DAG, incl. tool-call steps
 ```
 
-The trajectory audit now emits an aggregate summary alongside the per-receipt detail — total chunks (verified / stale / unauthorized / unverified / tampered), total actions (allowed / denied), and a breakdown by step kind. Both human-readable and `--json` output include it.
+The trajectory audit now emits an aggregate summary alongside the per-receipt detail - total chunks (verified / stale / unauthorized / unverified / tampered), total actions (allowed / denied), and a breakdown by step kind. Both human-readable and `--json` output include it.
 
 ## Path F: policy-driven retrieval
 
@@ -325,6 +348,8 @@ result = verify_chunks(
     signer=HmacSha256Signer(),
     policy=policy,
     request_context=request,
+    request_text=user_query,         # v0.8.0: binds the receipt
+                                     # cryptographically to this query
     chunk_metadata=metadata,
 )
 
@@ -387,7 +412,7 @@ tool_call_control:
     unknown_metadata: deny
 ```
 
-**Framework-agnostic** — `admission_check` is the tool-call admission analog of `verify_chunks`:
+**Framework-agnostic** - `admission_check` is the tool-call admission analog of `verify_chunks`:
 
 ```python
 from provenex import (
@@ -424,9 +449,9 @@ save_receipt(result.receipt)             # signed; denials are auditable too
 
 **Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call. Provenex never holds OAuth tokens, never proxies traffic, and never sits on the response-data path.
 
-**Per-decision, not cross-decision.** The native DSL rules above are pure functions of `(tool, request)` — no trajectory state, no aggregations, no external lookups. That's by design: it's what makes `inputs_hash` an audit anchor a regulator can reproduce years later. Trajectory-level rules ("deny if > N web_search calls in this trajectory") and sequence-pattern detection belong **downstream** — in your anomaly detector reading the receipt stream. See [`anomaly_detection.md`](anomaly_detection.md) for the positioning and worked patterns, or [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
+**Per-decision, not cross-decision.** The native DSL rules above are pure functions of `(tool, request)` - no trajectory state, no aggregations, no external lookups. That's by design: it's what makes `inputs_hash` an audit anchor a regulator can reproduce years later. Trajectory-level rules ("deny if > N web_search calls in this trajectory") and sequence-pattern detection belong **downstream** - in your anomaly detector reading the receipt stream. See [`anomaly_detection.md`](anomaly_detection.md) for the positioning and worked patterns, or [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
 
-**LangChain** — wrap any tool with admission semantics:
+**LangChain** - wrap any tool with admission semantics:
 
 ```python
 from provenex.tool_call.integrations.langchain import ProvenexToolWrapper
@@ -440,7 +465,7 @@ wrapped = ProvenexToolWrapper(
 agent.tools = [wrapped]                  # rest of the agent code unchanged
 ```
 
-**CrewAI** — the session wraps tool callables; receipts accumulate in `session.receipts`:
+**CrewAI** - the session wraps tool callables; receipts accumulate in `session.receipts`:
 
 ```python
 from provenex.integrations.crewai import ProvenexCrewSession
@@ -461,7 +486,7 @@ wrapped_web_search = session.wrap_tool_admission(
 # ToolCallDenied; the receipt is still appended for audit.
 ```
 
-**LangGraph** — admission node writes the decision into state so a conditional edge routes execution:
+**LangGraph** - admission node writes the decision into state so a conditional edge routes execution:
 
 ```python
 from provenex.integrations.langgraph import provenex_admission_node
@@ -484,7 +509,7 @@ admit_jira = provenex_admission_node(
 # )
 ```
 
-**MCP** — decorate a `tools/call` handler:
+**MCP** - decorate a `tools/call` handler:
 
 ```python
 from provenex.tool_call.integrations.mcp import provenex_mcp_admission
@@ -500,19 +525,19 @@ def handle_tools_call(request):
     return your_existing_tool_handler(request)
 ```
 
-Every wrapper emits the same receipt shape. A receipt produced via the LangChain wrapper validates the same way as one via MCP middleware. That's the standard — and it does not fragment by framework.
+Every wrapper emits the same receipt shape. A receipt produced via the LangChain wrapper validates the same way as one via MCP middleware. That's the standard - and it does not fragment by framework.
 
 Runnable end-to-end demos for the framework integrations:
 
-- [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py) — the headline four-step `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory, audited end-to-end in one CLI invocation.
-- [`../examples/mcp_admission_demo.py`](../examples/mcp_admission_demo.py) — full MCP integration. Three live `tools/call` requests through a decorated handler (allow + deny + allow), the `on_deny` callback pattern producing a structured JSON-RPC error response, and `wrap_mcp_request` for routers that don't decorate. Pure stdlib — no actual MCP server library needed.
-- [`../examples/langgraph_admission_node_demo.py`](../examples/langgraph_admission_node_demo.py) — full LangGraph integration. Conditional-edge pattern: `admit_jira → if allowed → execute_jira → END` vs `→ if denied → denied_handler → END`. Two scenarios (engineer-allowed + viewer-denied), both audited. Pure stdlib — the integration imports nothing from langgraph, so the demo runs without the optional `[langgraph]` extra.
+- [`../examples/agentic_admission_demo.py`](../examples/agentic_admission_demo.py) - the headline four-step `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` trajectory, audited end-to-end in one CLI invocation.
+- [`../examples/mcp_admission_demo.py`](../examples/mcp_admission_demo.py) - full MCP integration. Three live `tools/call` requests through a decorated handler (allow + deny + allow), the `on_deny` callback pattern producing a structured JSON-RPC error response, and `wrap_mcp_request` for routers that don't decorate. Pure stdlib - no actual MCP server library needed.
+- [`../examples/langgraph_admission_node_demo.py`](../examples/langgraph_admission_node_demo.py) - full LangGraph integration. Conditional-edge pattern: `admit_jira → if allowed → execute_jira → END` vs `→ if denied → denied_handler → END`. Two scenarios (engineer-allowed + viewer-denied), both audited. Pure stdlib - the integration imports nothing from langgraph, so the demo runs without the optional `[langgraph]` extra.
 
 See [`docs/policy.md`](policy.md) for the full DSL reference including the new `matches_pattern` / `not_matches_pattern` / `length_at_most` operators and the `tool.*` path roots; see [`docs/receipt_format.md`](receipt_format.md) for the schema 2.2.0 `actions[]` and `policy.tool_call_control` field reference.
 
 ## Path H: memory reads, memory writes, and model-inference (0.6.5+)
 
-When you want every action class an agent takes — not just retrieve and tool-call — to land on a signed receipt under the right `step_kind`. Three thin convenience entrypoints over the existing primitives.
+When you want every action class an agent takes - not just retrieve and tool-call - to land on a signed receipt under the right `step_kind`. Three thin convenience entrypoints over the existing primitives.
 
 ```python
 from provenex import (
@@ -531,13 +556,13 @@ request = RequestContext(
     session_id="session-2026-002",
 )
 
-# Memory read — same five outcomes as retrieval. Source records carry
+# Memory read - same five outcomes as retrieval. Source records carry
 # content_source="memory_store" so an UNVERIFIED outcome reads as
 # "memory miss" rather than "corpus miss" to an auditor.
 r1 = verify_memory(["last user msg: where is the runbook?"], index=index,
                    signer=signer, request_context=request, trajectory=trj)
 
-# Memory write — admission-shaped. name="memory.write",
+# Memory write - admission-shaped. name="memory.write",
 # operation=<memory_key>. value_hash always recorded; verbatim value
 # REDACTED by default (memory values often contain PII).
 r2 = admit_memory_write(
@@ -547,7 +572,7 @@ r2 = admit_memory_write(
     signer=signer, trajectory=r1.next_trajectory,
 )
 
-# Model inference — admission-shaped. name=<model>, operation="complete"
+# Model inference - admission-shaped. name=<model>, operation="complete"
 # (or "stream" / "embed" / "chat"), target_system=<provider>.
 # prompt_hash always recorded; verbatim prompt REDACTED by default.
 r3 = admit_model_inference(
@@ -566,11 +591,11 @@ r3 = admit_model_inference(
 provenex audit --trajectory ./receipts/   # one CLI pass; mixed kinds
 ```
 
-**Why this matters.** Every class of agent action — read corpus, read memory, write memory, call a model, call a tool — produces one signed receipt under one trajectory. A downstream anomaly detector / SIEM sees the full event stream classified by `step_kind`, not a hodgepodge of "tool_call" entries it has to disambiguate. `caller_hash` and `session_id` (schema 2.3.0+) make per-caller / per-session grouping trivial without crawling per-decision input blobs.
+**Why this matters.** Every class of agent action - read corpus, read memory, write memory, call a model, call a tool - produces one signed receipt under one trajectory. A downstream anomaly detector / SIEM sees the full event stream classified by `step_kind`, not a hodgepodge of "tool_call" entries it has to disambiguate. `caller_hash` and `session_id` (schema 2.3.0+) make per-caller / per-session grouping trivial without crawling per-decision input blobs.
 
-**Redaction defaults.** Memory values and LLM prompts are recorded as **hashes only** by default (`value_hash`, `prompt_hash`) — both fields often contain PII or customer data, and Provenex stays decision-and-proof, never on the data path. The hash anchor stays on the receipt for audit; an operator who needs verbatim recording for debugging passes `redact_value=False` or `redact_prompt=False`.
+**Redaction defaults.** Memory values and LLM prompts are recorded as **hashes only** by default (`value_hash`, `prompt_hash`) - both fields often contain PII or customer data, and Provenex stays decision-and-proof, never on the data path. The hash anchor stays on the receipt for audit; an operator who needs verbatim recording for debugging passes `redact_value=False` or `redact_prompt=False`.
 
-**Per-deployment unlinkability.** Pass `caller_hash_salt=b"..."` on any of the entrypoints above (or on `verify_chunks` / `admission_check`) to switch `caller_hash` from bare SHA-256 to HMAC-SHA256 keyed by the salt. Two deployments with different salts produce different `caller_hash` values for the same caller — useful when you don't want third-party detectors to cross-correlate users across your tenants. Same algorithm family, same wire format; the prefix (`sha256:` vs `hmac-sha256:`) tells consumers which mode was used.
+**Per-deployment unlinkability.** Pass `caller_hash_salt=b"..."` on any of the entrypoints above (or on `verify_chunks` / `admission_check`) to switch `caller_hash` from bare SHA-256 to HMAC-SHA256 keyed by the salt. Two deployments with different salts produce different `caller_hash` values for the same caller - useful when you don't want third-party detectors to cross-correlate users across your tenants. Same algorithm family, same wire format; the prefix (`sha256:` vs `hmac-sha256:`) tells consumers which mode was used.
 
 See [`../examples/memory_and_model_inference_demo.py`](../examples/memory_and_model_inference_demo.py) for a runnable end-to-end demo.
 
@@ -600,13 +625,13 @@ result = admission_check(
 )
 ```
 
-**Error semantics.** Sink failures are swallowed and logged via `warnings.warn` — the agent's hot path is never broken by export degradation. Wrap with `RetryQueueSink(downstream, maxlen=...)` to buffer through transient broker hiccups.
+**Error semantics.** Sink failures are swallowed and logged via `warnings.warn` - the agent's hot path is never broken by export degradation. Wrap with `RetryQueueSink(downstream, maxlen=...)` to buffer through transient broker hiccups.
 
 **Reference sinks.** `StdoutJSONLSink`, `FileJSONLSink` (daily-rotated), `MultiSink` (fan-out), `RetryQueueSink` (bounded retry) in the stdlib core. `KafkaSink`, `SQSSink`, `S3AppendSink` (date-hour-partitioned), `PubSubSink` behind optional extras. Define your own via the `ReceiptSink` Protocol. See [`streaming_export.md`](streaming_export.md) for the full reference; see [`../examples/streaming_export_demo.py`](../examples/streaming_export_demo.py) for a runnable end-to-end demo.
 
-## OCSF export — feeding receipts into your SIEM (0.6.7+)
+## OCSF export - feeding receipts into your SIEM (0.6.7+)
 
-Provenex maps receipts to OCSF v1.3 events so they're instantly readable by Splunk / Datadog / Elastic / Microsoft Sentinel. Two surfaces — a pure transformation function and a streaming-sink adapter.
+Provenex maps receipts to OCSF v1.3 events so they're instantly readable by Splunk / Datadog / Elastic / Microsoft Sentinel. Two surfaces - a pure transformation function and a streaming-sink adapter.
 
 ```python
 # Pure transformation: convert a receipt to OCSF events for batch pipelines
@@ -655,12 +680,29 @@ assert ok, "receipt signature invalid; receipt has been tampered with"
 
 For asymmetric verification (so an auditor can verify without holding the signing key), implement the `ReceiptSigner` interface with Ed25519 or similar and swap it in. The receipt structure does not change.
 
+### Confirming the installed pipeline matches the docs
+
+```bash
+provenex selftest
+```
+
+`provenex selftest` runs a self-contained set of conformance checks that match the security properties this doc + [`how_it_works.md`](how_it_works.md) + [`threat_model.md`](threat_model.md) describe: fingerprint determinism, NFC normalization, peppered-mode unlinkability, window-aligned splice control, the five-outcome precedence, receipt signature roundtrip, request-binding determinism, and witness-log chain integrity. Exits 0 on every check passing; 1 on any failure. Suitable for CI / pre-deploy.
+
+### Linting the index for supersession-skip
+
+```bash
+provenex index audit --index provenance.db --threshold-days 180
+```
+
+Surfaces documents that have not been re-ingested in the threshold window AND any older versions that are still flagged not-superseded after a re-ingest skipped the API. The supersession contract: whoever re-ingests a document is responsible for invoking `index.add(...)` (or `index.supersede(...)`) against every Provenex index that holds the old version. The lint command is the CI hook that catches misses; see [`how_it_works.md`](how_it_works.md) for the contract statement.
+
 ## Reading receipts as an anomaly-detection event stream
 
-Schema 2.3.0 adds two correlation fields that make Provenex receipts the source-of-record an AI-agent anomaly detector or SIEM consumes:
+Schema 2.3.0 added two correlation fields and schema 2.4.0 (v0.8.0) adds a request-binding block - together they make Provenex receipts the source-of-record an AI-agent anomaly detector or SIEM consumes:
 
-- **`caller_hash`** (top-level) — a stable SHA-256 over `request_context.caller`. `GROUP BY caller_hash` to baseline a single user's activity across all their receipts without crawling per-decision input blobs.
-- **`trajectory.session_id`** (optional) — a caller-chosen opaque string that correlates receipts across multiple trajectories under one logical session.
+- **`caller_hash`** (top-level, 2.3.0+) - a stable SHA-256 over `request_context.caller`. `GROUP BY caller_hash` to baseline a single user's activity across all their receipts without crawling per-decision input blobs.
+- **`trajectory.session_id`** (optional, 2.3.0+) - a caller-chosen opaque string that correlates receipts across multiple trajectories under one logical session.
+- **`request_binding.request_hash`** (top-level, 2.4.0+) - a stable SHA-256 over the triggering query + canonical request_context. `GROUP BY request_hash` to spot repeat queries from one or many callers, or to spot a single caller running the same prompt against multiple agents. The binding is in the canonical signing payload, so the join key is non-forgeable.
 
 ```python
 # Read your receipts dir as a downstream consumer would. Bucket by
@@ -680,7 +722,7 @@ for path in Path("./receipts").glob("*.json"):
         session_step_kinds[(sess, sk)] += 1
 ```
 
-Provenex emits the source-of-record. The detector / SIEM that reads it is the detector. We don't compete with the detector — we're the substrate that makes detection possible. See [`../examples/anomaly_correlation_demo.py`](../examples/anomaly_correlation_demo.py) for a runnable demo (stdlib only) and [`../examples/anomaly_correlation_with_policy_demo.py`](../examples/anomaly_correlation_with_policy_demo.py) for the same demo running against a unified YAML policy.
+Provenex emits the source-of-record. The detector / SIEM that reads it is the detector. We don't compete with the detector - we're the substrate that makes detection possible. See [`../examples/anomaly_correlation_demo.py`](../examples/anomaly_correlation_demo.py) for a runnable demo (stdlib only) and [`../examples/anomaly_correlation_with_policy_demo.py`](../examples/anomaly_correlation_with_policy_demo.py) for the same demo running against a unified YAML policy.
 
 ## Next steps
 

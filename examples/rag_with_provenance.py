@@ -238,6 +238,16 @@ def main() -> int:
     pause(0.8, skip=args.fast)
 
     # Verify each retrieved chunk at the boundary.
+    #
+    # NOTE on policy defaults: this demo opts in to strict enforcement
+    # by setting block_unverified=True. The shipping default is
+    # block_unverified=False (UNVERIFIED chunks pass through to the LLM
+    # while the receipt records the outcome) so that adding Provenex to
+    # an existing pipeline is non-blocking by default. The poisoned-chunk
+    # narrative below depends on the strict setting -- pre-existing
+    # un-Provenex'd content would otherwise still reach the LLM. Operators
+    # who want hard blocking in production must set block_unverified=True
+    # explicitly; the default will flip in a future major release.
     policy = VerificationPolicy(block_unverified=True, block_tampered=True)
     builder = ReceiptBuilder(policy=policy)
     accepted: List[StoredChunk] = []

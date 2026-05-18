@@ -52,7 +52,7 @@ from ..core.fingerprinter import Fingerprinter
 from ..core.merkle import verify_inclusion_proof
 from ..core.receipt import HmacSha256Signer, ReceiptBuilder, verify_receipt_signature
 from ..core.trajectory import audit_trajectory_dag
-from ..index.base import VerificationOutcome
+from ..index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW, VerificationOutcome
 from ..index.sqlite_index import SQLiteProvenanceIndex, _canonical_payload
 from ..policy.policy import VerificationPolicy
 from ..policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
@@ -74,11 +74,14 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         print("error: at least one file is required", file=sys.stderr)
         return 2
 
+    # v0.8.0: whole-document hash gets entry_kind="whole_chunk" (the
+    # operator-authorized chunk, VERIFIED-eligible at verify time).
+    # Sliding-window fingerprints get entry_kind="window" (structural
+    # locators only; never promote to VERIFIED on a whole-chunk match).
     if args.doc_id:
         # All files = one logical document.
         joined = "\n".join(_read_text(p) for p in files)
         result = fp.fingerprint(joined)
-        # Whole-document fingerprint, so `provenex verify <same-file>` works.
         whole_fp = fp.fingerprint_chunk(joined)
         index.add(
             fingerprint=whole_fp,
@@ -87,6 +90,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             chunk_offset=0,
             chunk_length=len(joined),
             authorized=not args.unauthorized,
+            entry_kind=ENTRY_KIND_WHOLE_CHUNK,
         )
         for f in result.fingerprints:
             if f.fingerprint == whole_fp:
@@ -98,6 +102,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
                 chunk_offset=f.offset,
                 chunk_length=f.length,
                 authorized=not args.unauthorized,
+                entry_kind=ENTRY_KIND_WINDOW,
             )
         print(
             f"ingested {len(result.fingerprints) + 1} fingerprints under "
@@ -117,6 +122,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
                 chunk_offset=0,
                 chunk_length=len(text),
                 authorized=not args.unauthorized,
+                entry_kind=ENTRY_KIND_WHOLE_CHUNK,
             )
             for f in result.fingerprints:
                 if f.fingerprint == whole_fp:
@@ -128,6 +134,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
                     chunk_offset=f.offset,
                     chunk_length=f.length,
                     authorized=not args.unauthorized,
+                    entry_kind=ENTRY_KIND_WINDOW,
                 )
             print(
                 f"ingested {len(result.fingerprints) + 1} fingerprints under "
@@ -209,6 +216,11 @@ def _canonical_leaf(source: Dict[str, Any]) -> bytes:
     serialization (and the per-field validation it performs) is shared with
     the producer side. If validation rejects a field, the audit fails fast
     instead of returning a cryptic "proof did not verify".
+
+    ``entry_kind`` is part of the canonical payload as of v0.8.0. The
+    receipt records the kind in ``sources[i].entry_kind``; older receipts
+    that pre-date v0.8.0 default to ``whole_chunk`` (the only kind that
+    could have produced a VERIFIED outcome under the old rule).
     """
     return _canonical_payload(
         fingerprint=str(source["fingerprint"]),
@@ -217,6 +229,7 @@ def _canonical_leaf(source: Dict[str, Any]) -> bytes:
         ingested_at=str(source["ingested_at"]),
         chunk_offset=int(source["chunk_offset"]),
         chunk_length=int(source["chunk_length"]),
+        entry_kind=str(source.get("entry_kind", ENTRY_KIND_WHOLE_CHUNK)),
     )
 
 
@@ -782,6 +795,290 @@ def _cmd_policy_hash(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_selftest(args: argparse.Namespace) -> int:
+    """Run a self-contained conformance check of the installed binary.
+
+    The point: a security team can confirm in one command that the
+    pipeline this binary executes is byte-for-byte what
+    [docs/how_it_works.md] and [docs/threat_model.md] describe. Each
+    check pairs a property the docs claim with a runnable assertion.
+    Failing checks print the expected and observed values; passing
+    checks just tick.
+
+    Exit code:
+        0  every check passed
+        1  any check failed
+
+    The checks deliberately use ephemeral in-memory state so the
+    command is safe to run on a production host.
+    """
+    import json
+    from hashlib import sha256
+
+    from ..core.fingerprinter import Fingerprinter, FingerprinterConfig
+    from ..core.receipt import (
+        HmacSha256Signer,
+        ReceiptBuilder,
+        compute_request_binding,
+        verify_receipt_signature,
+    )
+    from ..core.witness import WitnessLog
+    from ..index.base import (
+        ENTRY_KIND_WHOLE_CHUNK,
+        ENTRY_KIND_WINDOW,
+        OUTCOME_PRECEDENCE,
+        VerificationOutcome,
+        reduce_outcomes,
+    )
+
+    failures: List[str] = []
+
+    def _check(name: str, condition: bool, detail: str = "") -> None:
+        if condition:
+            print(f"  ok   {name}")
+        else:
+            failures.append(name)
+            print(f"  FAIL {name}")
+            if detail:
+                print(f"       {detail}")
+
+    print("provenex selftest")
+    print("  binary issuer:", __import__("provenex").__version__)
+    print()
+
+    # 1. Fingerprint determinism: a hardcoded vector.
+    fp = Fingerprinter()
+    expected = (
+        "sha256:" + sha256("hello world".encode("utf-8")).hexdigest()
+    )
+    actual = fp.fingerprint_chunk("hello world")
+    _check(
+        "fingerprint_chunk('hello world') matches SHA-256 of the bytes",
+        actual == expected,
+        f"expected {expected}, got {actual}",
+    )
+
+    # 2. Normalization: smart quotes and NFC.
+    nfc_pair = ("café", "café")  # combining acute vs precomposed.
+    _check(
+        "Unicode NFC unifies precomposed and decomposed forms",
+        fp.fingerprint_chunk(nfc_pair[0]) == fp.fingerprint_chunk(nfc_pair[1]),
+    )
+
+    # 3. Peppered mode: same text + different pepper -> different fp.
+    fp_a = Fingerprinter(FingerprinterConfig(pepper=b"pepperA-x32-bytes-please-yes!!!"))
+    fp_b = Fingerprinter(FingerprinterConfig(pepper=b"pepperB-x32-bytes-please-yes!!!"))
+    _check(
+        "pepper change produces different fingerprint (per-deployment unlinkability)",
+        fp_a.fingerprint_chunk("hello") != fp_b.fingerprint_chunk("hello"),
+    )
+
+    # 4. Window-splice control: a 128-codepoint substring of an authorized doc
+    # must NOT promote to VERIFIED.
+    secret = b"selftest-index-secret-32-bytes-x"
+    idx = SQLiteProvenanceIndex(":memory:", signing_secret=secret)
+    doc = (
+        "Section A: confidentiality clause. Section B: non-compete. "
+        "Section C: return of property. Padding to ensure multiple windows: "
+        "lorem ipsum dolor sit amet consectetur adipiscing elit sed do "
+        "eiusmod tempor incididunt ut labore et dolore magna aliqua."
+    )
+    full = fp.fingerprint(doc)
+    whole_fp = fp.fingerprint_chunk(doc)
+    idx.add(whole_fp, "doc1", full.document_version, 0, len(doc),
+            entry_kind=ENTRY_KIND_WHOLE_CHUNK)
+    window = full.fingerprints[len(full.fingerprints) // 2]
+    idx.add(window.fingerprint, "doc1", full.document_version,
+            window.offset, window.length, entry_kind=ENTRY_KIND_WINDOW)
+    from ..core.normalizer import TextNormalizer
+    normalized = TextNormalizer().normalize(doc).text
+    window_text = normalized[window.offset : window.offset + window.length]
+    _check(
+        "window-aligned substring does NOT promote to VERIFIED",
+        idx.verify(fp.fingerprint_chunk(window_text))
+            == VerificationOutcome.UNVERIFIED,
+    )
+    _check(
+        "whole-chunk SHA-256 of the original doc DOES promote to VERIFIED",
+        idx.verify(whole_fp) == VerificationOutcome.VERIFIED,
+    )
+    idx.close()
+
+    # 5. Outcome precedence: TAMPERED > UNAUTHORIZED > STALE.
+    _check(
+        "OUTCOME_PRECEDENCE has the documented order",
+        OUTCOME_PRECEDENCE == (
+            VerificationOutcome.TAMPERED,
+            VerificationOutcome.UNAUTHORIZED,
+            VerificationOutcome.STALE,
+            VerificationOutcome.UNVERIFIED,
+            VerificationOutcome.VERIFIED,
+        ),
+    )
+    _check(
+        "reduce_outcomes picks TAMPERED out of all five",
+        reduce_outcomes(set(VerificationOutcome))
+            == VerificationOutcome.TAMPERED,
+    )
+
+    # 6. Receipt signature roundtrip.
+    signer = HmacSha256Signer(secret=b"r" * 32)
+    builder = ReceiptBuilder()
+    builder.add_source(
+        fingerprint="sha256:" + "1" * 64,
+        outcome=VerificationOutcome.VERIFIED,
+        entry=None,
+    )
+    receipt = builder.finalize(output_text="answer", signer=signer)
+    rdict = receipt.to_dict()
+    _check(
+        "receipt signature roundtrips",
+        verify_receipt_signature(rdict, signer),
+    )
+    rforged = json.loads(json.dumps(rdict))
+    rforged["sources"][0]["fingerprint"] = "sha256:" + "f" * 64
+    _check(
+        "receipt signature catches tampering with sources[]",
+        not verify_receipt_signature(rforged, signer),
+    )
+
+    # 7. Request binding: same query -> same hash; different query -> different.
+    rb1 = compute_request_binding(request_text="What is the policy?")
+    rb2 = compute_request_binding(request_text="What is the policy?")
+    rb3 = compute_request_binding(request_text="What is the OTHER policy?")
+    _check(
+        "request_binding is deterministic across calls with the same input",
+        rb1["request_hash"] == rb2["request_hash"],
+    )
+    _check(
+        "request_binding distinguishes different queries",
+        rb1["request_hash"] != rb3["request_hash"],
+    )
+
+    # 8. Witness log: chain integrity.
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        log = WitnessLog(os.path.join(td, "w.jsonl"),
+                          signer=HmacSha256Signer(secret=b"w" * 32))
+        log.append(tree_size=1, tree_root="sha256:" + "a" * 64)
+        log.append(tree_size=2, tree_root="sha256:" + "b" * 64)
+        _check(
+            "witness log chain verifies after appends",
+            log.verify(),
+        )
+
+    print()
+    if failures:
+        print(f"FAILED ({len(failures)}): {', '.join(failures)}")
+        return 1
+    print("PASS")
+    return 0
+
+
+def _cmd_index_audit(args: argparse.Namespace) -> int:
+    """Surface supersession-health problems in a Provenex index.
+
+    The supersession operational contract (v0.8.0): whoever re-ingests
+    a document is responsible for ensuring ``index.supersede(...)`` or
+    a same-document_id re-add() runs against every Provenex index that
+    holds the old version. If a document is re-ingested only to the
+    vector store but the Provenex index never sees a new version, the
+    old chunks stay ``VERIFIED`` forever and the access decision
+    silently uses out-of-date content.
+
+    This command prints a punch list:
+
+    1. **Stale documents** - any document whose
+       ``ingested_at`` is older than ``--threshold-days`` (default
+       180). Long-stale documents are the population most likely to
+       have drifted from their authoritative source.
+    2. **Unsuperseded duplicates** - any (fingerprint, document_id)
+       row that exists in more than one ``document_version`` without
+       all older versions marked ``superseded``. This is the
+       supersession-skip signature.
+
+    Exit code 0 if both lists are empty; 1 if either is non-empty.
+    Suitable for cron / CI. See [docs/how_it_works.md] for the
+    supersession contract this command enforces.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    threshold_days = int(getattr(args, "threshold_days", 180) or 180)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=threshold_days)
+    cutoff_iso = cutoff.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    idx = SQLiteProvenanceIndex(args.index)
+    cur = idx._conn.cursor()
+
+    # 1. Stale documents: most-recent non-superseded fingerprint older
+    # than cutoff. We look at the latest fingerprint per document_id;
+    # if even the newest one is old, the document hasn't been touched
+    # in a while.
+    stale_rows = cur.execute(
+        "SELECT d.document_id, d.current_version, "
+        "       MAX(f.ingested_at) AS most_recent "
+        "FROM documents d "
+        "JOIN fingerprints f ON f.document_id = d.document_id "
+        "                   AND f.document_version = d.current_version "
+        "GROUP BY d.document_id "
+        "HAVING most_recent < ? "
+        "ORDER BY most_recent ASC",
+        (cutoff_iso,),
+    ).fetchall()
+
+    # 2. Unsuperseded duplicates: a document_id with more than one
+    # version where any older versions are NOT marked superseded.
+    dup_rows = cur.execute(
+        "SELECT document_id, "
+        "       COUNT(DISTINCT document_version) AS n_versions, "
+        "       SUM(CASE WHEN superseded = 0 THEN 1 ELSE 0 END) "
+        "         AS n_unsuperseded "
+        "FROM fingerprints "
+        "GROUP BY document_id "
+        "HAVING n_versions > 1 AND n_unsuperseded > 0 "
+        "ORDER BY document_id"
+    ).fetchall()
+
+    # Filter further: a duplicate is concerning only if rows from a
+    # version OTHER than the current one are still un-superseded.
+    concerning_dups = []
+    for row in dup_rows:
+        unflagged_old = cur.execute(
+            "SELECT COUNT(*) FROM fingerprints f "
+            "JOIN documents d ON d.document_id = f.document_id "
+            "WHERE f.document_id = ? AND f.superseded = 0 "
+            "AND f.document_version != d.current_version",
+            (row["document_id"],),
+        ).fetchone()[0]
+        if unflagged_old > 0:
+            concerning_dups.append((row["document_id"], int(unflagged_old)))
+
+    idx.close()
+
+    print(
+        f"provenex index audit (threshold: documents not re-ingested "
+        f"in {threshold_days} days)"
+    )
+    print(f"  index: {args.index}")
+    print()
+    print(f"Stale documents ({len(stale_rows)}):")
+    if not stale_rows:
+        print("  (none)")
+    for r in stale_rows:
+        print(f"  {r['document_id']:<40}  last ingest: {r['most_recent']}")
+    print()
+    print(f"Unsuperseded older versions ({len(concerning_dups)}):")
+    if not concerning_dups:
+        print("  (none)")
+    for doc_id, n in concerning_dups:
+        print(
+            f"  {doc_id:<40}  {n} row(s) from a non-current version "
+            f"still flagged not-superseded"
+        )
+
+    return 0 if not stale_rows and not concerning_dups else 1
+
+
 def _print_policy_block(receipt: Dict[str, Any]) -> None:
     """Render the unified ``policy`` block for ``provenex audit --show-policy``.
 
@@ -1011,6 +1308,51 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_policy_hash.set_defaults(func=_cmd_policy_hash)
+
+    # selftest (v0.8.0+).
+    p_selftest = sub.add_parser(
+        "selftest",
+        help="Run a conformance check of the installed pipeline",
+        description=(
+            "Run a self-contained set of checks that match the security "
+            "properties documented in [docs/how_it_works.md] and "
+            "[docs/threat_model.md]. Use this to confirm the binary's "
+            "pipeline is byte-for-byte the documented one. Exits 0 on "
+            "every check passing, 1 on any failure."
+        ),
+    )
+    p_selftest.set_defaults(func=_cmd_selftest)
+
+    # index subcommands (v0.8.0+).
+    p_index = sub.add_parser(
+        "index",
+        help="Inspect / lint the provenance index",
+        description=(
+            "Operations on an existing Provenex index. 'index audit' "
+            "surfaces stale documents and unsuperseded older versions "
+            "so a re-ingest skip is caught in CI rather than silently "
+            "leaving out-of-date chunks marked VERIFIED."
+        ),
+    )
+    p_index_sub = p_index.add_subparsers(dest="index_command", required=True)
+    p_index_audit = p_index_sub.add_parser(
+        "audit",
+        help="Lint the index for supersession-skip / stale-document problems",
+    )
+    p_index_audit.add_argument(
+        "--index", required=True, help="Path to SQLite index file"
+    )
+    p_index_audit.add_argument(
+        "--threshold-days",
+        type=int,
+        default=180,
+        help=(
+            "Flag documents whose most-recent ingest is older than this "
+            "many days (default: 180). Set to a value matching your "
+            "re-ingest cadence."
+        ),
+    )
+    p_index_audit.set_defaults(func=_cmd_index_audit)
 
     return parser
 

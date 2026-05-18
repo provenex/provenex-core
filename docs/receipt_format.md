@@ -2,7 +2,7 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`2.3.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`.
+This document specifies the schema. The current schema version is **`2.4.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`. Schema 2.4.0 (v0.8.0) adds the `request_binding` block and per-source `entry_kind`.
 
 Schema history:
 
@@ -17,7 +17,8 @@ Schema history:
 | `2.0.0` | **Breaking.** Unified `policy` block with `verification` and optional `access_control` subsections. The 1.x top-level `policy` (which held only the verification config) is replaced by `policy.verification`. |
 | `2.1.0` | Per-decision `metadata_binding` field on `policy.access_control.decisions[]` recording whether `chunk_metadata` was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Additive: receipts without the field are valid 2.0.0 subsets. |
 | `2.2.0` | **Tool-call admission.** Optional top-level `actions[]` array (tool-call records, parallel to `sources[]`); optional `policy.tool_call_control` subsection (admission decision record, parallel to `policy.access_control`); `summary` gains `total_actions` / `actions_allowed` / `actions_denied` when actions are present. Additive: a 2.1.0 receipt with no actions is a valid 2.2.0 receipt; a 2.1.0 verifier that ignores unknown fields validates a 2.2.0 receipt with actions. |
-| `2.3.0` | **Source-of-record fields for downstream anomaly detectors / SIEMs.** Top-level `caller_hash` — SHA-256 over the canonical JSON of `request_context.caller`, emitted on every receipt produced with a `RequestContext` in scope. Optional `trajectory.session_id` — caller-chosen opaque multi-trajectory correlation key. Both fields are decision-and-proof artifacts (do not influence policy decisions; `inputs_hash` is unchanged when only `session_id` differs). Additive: a 2.2.0 receipt remains a valid 2.3.0 receipt; a 2.2.0 verifier that ignores unknown fields validates a 2.3.0 receipt unchanged; no signing-format change. |
+| `2.3.0` | **Source-of-record fields for downstream anomaly detectors / SIEMs.** Top-level `caller_hash` - SHA-256 over the canonical JSON of `request_context.caller`, emitted on every receipt produced with a `RequestContext` in scope. Optional `trajectory.session_id` - caller-chosen opaque multi-trajectory correlation key. Both fields are decision-and-proof artifacts (do not influence policy decisions; `inputs_hash` is unchanged when only `session_id` differs). Additive: a 2.2.0 receipt remains a valid 2.3.0 receipt; a 2.2.0 verifier that ignores unknown fields validates a 2.3.0 receipt unchanged; no signing-format change. |
+| `2.4.0` | **Window-aligned splice control + request-to-receipt binding (v0.8.0).** Optional top-level `request_binding` block cryptographically ties a receipt to the triggering query and request_context (so a valid receipt cannot be presented as evidence for a different query). Optional per-source `entry_kind` field reports the index row class that was matched (`"whole_chunk"` vs `"window"`); only `whole_chunk` rows produce VERIFIED. Both fields are part of the canonical signing payload. Additive on the wire: a 2.3.0 receipt without either field is a valid 2.4.0 receipt. The underlying index storage change (an `entry_kind` column in the canonical signing payload) is breaking - pre-v0.8.0 indexes must be re-ingested. |
 
 Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
 
@@ -33,7 +34,7 @@ If your code reads a 1.x receipt:
 | *(no equivalent)* | `receipt["policy"]["access_control"]["policy_id"]` |
 | *(no equivalent)* | `receipt["policy"]["access_control"]["decisions"][i]` |
 
-The Provenex SDK only emits 2.0.0 receipts. Historical 1.x receipts remain valid artifacts — keep an older SDK around if you need to re-verify them.
+The Provenex SDK only emits 2.0.0 receipts. Historical 1.x receipts remain valid artifacts - keep an older SDK around if you need to re-verify them.
 
 ## Design properties
 
@@ -49,10 +50,16 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "2.3.0",
+  "schema_version": "2.4.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
-  "issuer": "provenex-core/0.6.5",
+  "issuer": "provenex-core/0.8.0",
   "caller_hash": "sha256:<64 hex chars>",   // optional (schema 2.3.0+)
+  "request_binding": {                       // optional (schema 2.4.0+)
+    "algorithm": "sha256",
+    "query_hash": "sha256:<64 hex chars>",
+    "request_context_hash": "sha256:<64 hex chars>",
+    "request_hash": "sha256:<64 hex chars>"
+  },
   "output": { ... },
   "sources": [ ... ],
   "actions": [ ... ],            // optional (schema 2.2.0+)
@@ -71,10 +78,11 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. Always `2.3.0` for receipts produced by this SDK. |
+| `schema_version` | string | Semver. Always `2.4.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/0.6.5`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/0.8.0`. |
 | `caller_hash` | string | Optional (2.3.0+). `"sha256:<hex>"` over the canonical JSON of `request_context.caller`. Present on every receipt produced from a `RequestContext`; absent on the standalone-builder path. See **Top-level `caller_hash`** below. |
+| `request_binding` | object | Optional (2.4.0+). Cryptographically ties this receipt to the triggering query / prompt + request_context. Present when `verify_chunks(..., request_text=...)` or `admission_check(..., request_text=...)` is called with at least one of `request_text` or `request_context` supplied. See **Top-level `request_binding`** below. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
 | `actions` | array | Optional (2.2.0+). One entry per tool-call attempt. Present only when the receipt covers tool-call admissions; absent for pure-retrieval receipts. See below. |
@@ -87,8 +95,8 @@ The schema is intentionally:
 The unified `policy` block carries **every gate present**:
 
 - `policy.verification` (always present): the per-outcome blocking and flagging configuration for the five verification outcomes (`VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`). Applies to retrieval only.
-- `policy.access_control` (optional): the data-access policy decision record — which evaluator was used, the canonical policy version hash, and the per-chunk allow / deny verdict with the rules that fired.
-- `policy.tool_call_control` *(schema 2.2.0+, optional)*: the tool-call admission decision record — same shape as `access_control`, but the decisions reference `actions[i].action_index` rather than `sources[i].fingerprint`. Present iff a tool-call evaluator was configured at admission time.
+- `policy.access_control` (optional): the data-access policy decision record - which evaluator was used, the canonical policy version hash, and the per-chunk allow / deny verdict with the rules that fired.
+- `policy.tool_call_control` *(schema 2.2.0+, optional)*: the tool-call admission decision record - same shape as `access_control`, but the decisions reference `actions[i].action_index` rather than `sources[i].fingerprint`. Present iff a tool-call evaluator was configured at admission time.
 
 All gates are evaluated independently. A chunk reaches the LLM only if it clears both retrieval-side gates. A tool call is admitted only if it clears the tool-call-control gate.
 
@@ -118,12 +126,12 @@ A hash over the canonical JSON of `request_context.caller`. Lets a downstream an
 { "caller_hash": "sha256:7a2bf01571c43f..." }
 ```
 
-**Two modes.** The prefix is the algorithm identifier — a consumer dispatches on it the same way it does for `signature.algorithm`:
+**Two modes.** The prefix is the algorithm identifier - a consumer dispatches on it the same way it does for `signature.algorithm`:
 
 | Prefix | Algorithm | When | Reproducibility |
 | --- | --- | --- | --- |
 | `sha256:<hex>` | Bare SHA-256 over canonical caller JSON | Default. No salt configured. | Anyone holding the verbatim caller dict can re-derive. |
-| `hmac-sha256:<hex>` | HMAC-SHA256 keyed by a deployment-chosen salt | Opt-in via `caller_hash_salt=b"..."` (0.6.5+). | Only the salt-holder can re-derive — two deployments with different salts produce different hashes for the same caller. |
+| `hmac-sha256:<hex>` | HMAC-SHA256 keyed by a deployment-chosen salt | Opt-in via `caller_hash_salt=b"..."` (0.6.5+). | Only the salt-holder can re-derive - two deployments with different salts produce different hashes for the same caller. |
 
 **Canonicalisation (same for both modes).** Identical to the rule used elsewhere in the receipt:
 
@@ -131,17 +139,45 @@ A hash over the canonical JSON of `request_context.caller`. Lets a downstream an
 json.dumps(caller, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 ```
 
-Then SHA-256 (or HMAC-SHA256 with the salt as the key), hex-prefixed with the appropriate algorithm tag. Use `provenex.compute_caller_hash(caller)` for the bare mode or `compute_caller_hash(caller, salt=b"...")` for the salted mode — useful for a downstream consumer that wants to verify the receipt is self-consistent (`compute_caller_hash(receipt.policy.access_control.decisions[0].inputs.request_context.caller) == receipt.caller_hash` in the unsalted case; or compute with the deployment salt and compare).
+Then SHA-256 (or HMAC-SHA256 with the salt as the key), hex-prefixed with the appropriate algorithm tag. Use `provenex.compute_caller_hash(caller)` for the bare mode or `compute_caller_hash(caller, salt=b"...")` for the salted mode - useful for a downstream consumer that wants to verify the receipt is self-consistent (`compute_caller_hash(receipt.policy.access_control.decisions[0].inputs.request_context.caller) == receipt.caller_hash` in the unsalted case; or compute with the deployment salt and compare).
 
-**When to use salting.** Multi-tenant deployments where two of your customers' detectors should NOT be able to cross-correlate users via shared `caller_hash` buckets — different per-deployment salts produce different hashes for the same identity. The trade-off: only the salt-holder can verify caller_hash, so cross-org provenance hand-off loses this group key. The signature still verifies — only the verify-don't-trust property on `caller_hash` itself is restricted.
+**When to use salting.** Multi-tenant deployments where two of your customers' detectors should NOT be able to cross-correlate users via shared `caller_hash` buckets - different per-deployment salts produce different hashes for the same identity. The trade-off: only the salt-holder can verify caller_hash, so cross-org provenance hand-off loses this group key. The signature still verifies - only the verify-don't-trust property on `caller_hash` itself is restricted.
 
-**Verbatim — by design.** The hash covers the caller dict exactly as supplied. A caller who adds a new key splits a previously-grouped caller into two buckets from a detector's perspective. That's the right signal in practice (added fields are behavior changes), but operators who want stability across upstream churn should follow this convention:
+**Verbatim - by design.** The hash covers the caller dict exactly as supplied. A caller who adds a new key splits a previously-grouped caller into two buckets from a detector's perspective. That's the right signal in practice (added fields are behavior changes), but operators who want stability across upstream churn should follow this convention:
 
 > Put stable identity in `caller.*` (subject ID, role, tenant). Put churn-prone request-shape fields elsewhere on the request context (`purpose`, `jurisdiction`, future-additive request-level fields).
 
 **Decision-and-proof.** `caller_hash` is a correlation tag, not a policy input. It does not appear under `request.*` in any policy rule's `when` or `require` clause; the policy evaluator does not read it. The deterministic-per-evaluation contract on `PolicyEvaluator` is preserved: `inputs_hash` covers the verbatim caller dict that *is* a policy input, while `caller_hash` is a hash *of* that input emitted at the top of the receipt for downstream convenience.
 
-The signature covers `caller_hash` via the existing canonical-JSON rule — tampering invalidates the signature.
+The signature covers `caller_hash` via the existing canonical-JSON rule - tampering invalidates the signature.
+
+## Top-level `request_binding` *(schema 2.4.0+)*
+
+A cryptographic binding between the receipt and the request that produced it. Without this block, the receipt's link to the triggering query is implicit and operator-controlled: a valid signed receipt could be presented as evidence for any query. With it, an auditor who has the original query and request_context can re-derive the hashes and confirm a match.
+
+```json
+{
+  "request_binding": {
+    "algorithm": "sha256",
+    "query_hash": "sha256:b7a1e09c...",
+    "request_context_hash": "sha256:31d8e94c...",
+    "request_hash": "sha256:c2f6a18d..."
+  }
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `algorithm` | string | Always `"sha256"` in this schema version. The same algorithm covers both halves and the join. |
+| `query_hash` | string \| null | SHA-256 over the UTF-8 bytes of the query / prompt text. `null` when the operator did not supply `request_text=` to the emitting call - the absence is explicit so an auditor sees that the query half is unbound. |
+| `request_context_hash` | string \| null | SHA-256 over the canonical JSON of the request_context's `caller / jurisdiction / purpose / timestamp` subset. `session_id` is **excluded** from this hash by the same rule that excludes it from `inputs_hash`: two requests differing only in `session_id` produce identical bindings. `null` when no request_context was in scope. |
+| `request_hash` | string | SHA-256 over `query_hash + "\n" + request_context_hash` (with `"null"` literal substituted for missing halves). The canonical single value an auditor compares; one of the two component hashes will be `null` in the omitted-half case. |
+
+**Canonicalisation.** Query text is hashed verbatim (UTF-8 bytes). The request_context is canonicalised as `json.dumps(ctx_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` over the policy-relevant subset, identical to the rule used elsewhere in the receipt (`inputs_hash`, `caller_hash`).
+
+**The verbatim query text is never stored on the receipt.** Only its hash. Operators who omit `request_text` get `query_hash: null` and the block records that the binding is incomplete - the omission is auditable, not hidden.
+
+**Covered by the signature.** Any modification to `query_hash`, `request_context_hash`, or `request_hash` invalidates the receipt signature. A receipt cannot be re-presented as evidence for a different query without breaking the signature.
 
 ## `sources[]`
 
@@ -158,6 +194,7 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
   "chunk_length": 936,
   "authorized": true,
   "verification_outcome": "VERIFIED",
+  "entry_kind": "whole_chunk",
   "normalization_applied": ["unicode_nfc", "strip_zero_width", "whitespace_collapse"],
   "leaf_index": 4217,
   "inclusion_proof": ["sha256:<hex>", "sha256:<hex>", "..."]
@@ -168,13 +205,14 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
 | --- | --- | --- |
 | `chunk_index` | integer | 0-based position in the retrieval result. |
 | `fingerprint` | string | SHA-256 of the normalized chunk text. `sha256:` prefix. |
-| `document_id` | string \| null | Caller-chosen stable document identifier. `null` if outcome is `UNVERIFIED`. |
-| `document_version` | string \| null | SHA-256 of the normalized full document. `null` if `UNVERIFIED`. |
-| `ingested_at` | string \| null | ISO-8601 UTC when the fingerprint was written to the index. `null` if `UNVERIFIED`. |
-| `chunk_offset` | integer \| null | Character offset of the chunk in the normalized document. `null` if `UNVERIFIED`. |
-| `chunk_length` | integer \| null | Chunk length in characters. `null` if `UNVERIFIED`. |
-| `authorized` | boolean \| null | Authorization state at retrieval time. `null` if `UNVERIFIED`. |
+| `document_id` | string \| null | Caller-chosen stable document identifier. `null` if outcome is `UNVERIFIED` AND no window locator matched. |
+| `document_version` | string \| null | SHA-256 of the normalized full document. `null` if no matching row was found. |
+| `ingested_at` | string \| null | ISO-8601 UTC when the fingerprint was written to the index. `null` if no matching row was found. |
+| `chunk_offset` | integer \| null | Character offset of the chunk in the normalized document. `null` if no matching row was found. |
+| `chunk_length` | integer \| null | Chunk length in characters. `null` if no matching row was found. |
+| `authorized` | boolean \| null | Authorization state at retrieval time. `null` if no matching row was found. |
 | `verification_outcome` | string | One of `VERIFIED`, `STALE`, `UNAUTHORIZED`, `UNVERIFIED`, `TAMPERED`. |
+| `entry_kind` | string | Optional (2.4.0+). One of `"whole_chunk"` or `"window"`. The class of the index row that matched. Only `whole_chunk` rows produce `VERIFIED`; window-locator matches produce `UNVERIFIED` (or `UNAUTHORIZED` if the locator-owning document has been revoked). See **Window-aligned splice control** below. |
 | `normalization_applied` | array of string | Ordered list of normalization steps applied. Used to reproduce the pipeline byte-for-byte. |
 | `leaf_index` | integer | Optional (1.1.0+). Position of this fingerprint in the transparency log. Omitted on receipts produced without a log. |
 | `inclusion_proof` | array of string | Optional (1.1.0+). RFC 6962 audit path as `sha256:<hex>` strings. Verifiable offline against `transparency_log.tree_root`. |
@@ -185,11 +223,21 @@ One entry per chunk that was retrieved, in retrieval order. Both kept and policy
 
 | Outcome | Meaning |
 | --- | --- |
-| `VERIFIED` | Fingerprint in index, signature OK, document authorized, version current. |
-| `STALE` | Fingerprint in index, signature OK, document authorized, but version is superseded. |
-| `UNAUTHORIZED` | Fingerprint in index, signature OK, but document is not currently authorized. |
-| `UNVERIFIED` | Fingerprint not in index. The chunk was not ingested through Provenex. |
-| `TAMPERED` | Fingerprint in index but the stored row's HMAC signature failed verification. |
+| `VERIFIED` | Fingerprint in index, matched row is a `whole_chunk` entry (2.4.0+), signature OK, document authorized, version current. |
+| `STALE` | Fingerprint in index, matched row is a `whole_chunk` entry, signature OK, document authorized, but version is superseded. |
+| `UNAUTHORIZED` | Fingerprint in index, signature OK, but document is not currently authorized. Applies to both whole-chunk and window-locator matches. |
+| `UNVERIFIED` | No matching row, OR the only matching row is a `window` (locator-only) entry. Window-locator-only matches still carry `document_id` / `chunk_offset` / `chunk_length` on the source record so an auditor sees where the bytes came from. |
+| `TAMPERED` | Fingerprint in index but the stored row's HMAC signature failed verification. Includes the case where an attacker flipped `entry_kind` out-of-band - the change invalidates the row signature. |
+
+**Precedence among outcomes.** When more than one condition could apply to the same row (e.g. signature broken AND document unauthorized), the engine returns the dominant outcome from the fixed order `TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED`. Exposed as `OUTCOME_PRECEDENCE` and `reduce_outcomes()` on `provenex.index.base`.
+
+### Window-aligned splice control *(schema 2.4.0+)*
+
+The optional `entry_kind` field on each source record reports which class of index row the chunk's whole-chunk SHA-256 matched. Only `whole_chunk` rows (the operator-authorized chunks written at ingest with `entry_kind=ENTRY_KIND_WHOLE_CHUNK`) are eligible for promotion to `VERIFIED`. Sliding-window fingerprints written for structural locating (`entry_kind=ENTRY_KIND_WINDOW`) match but produce `UNVERIFIED` - they are not the operator-authorized chunk. The classification is part of the canonical row signing payload, so flipping a window row to `whole_chunk` out-of-band triggers `TAMPERED`.
+
+This closes the substring-promotion gap: a 128-codepoint substring of an authorized document, or a splice of authentic windows from two authorized documents, no longer verifies on its own. Re-chunking robustness is correspondingly narrower than pre-v0.8.0 advertised: a retriever that returns the operator-authorized chunks verifies cleanly, but a retriever that splits or merges into different shapes returns `UNVERIFIED` (with the window-locator metadata visible on the receipt so an auditor can see where the bytes came from).
+
+Source: [`provenex/index/base.py`](../provenex/index/base.py) (`ENTRY_KIND_*`, `OUTCOME_PRECEDENCE`) + [`tests/test_window_splice_redteam.py`](../tests/test_window_splice_redteam.py).
 
 ### `claims[]`
 
@@ -220,7 +268,7 @@ Optional (schema 1.4.0+). A list of self-attribution claims from the calling age
 | `claims[].value` | boolean \| string \| null | Optional value the assertion carries (e.g. `true`, `"partial"`). |
 | `claims[].reason` | string | Optional short rationale supplied by the agent. |
 
-**Trust model — load-bearing:** Provenex binds claims into the receipt's signature so the asserting agent cannot deny what it said, but **does not verify** that a claim is correct. A claim is **signed evidence of what was asserted**, not a verified fact. The trust root for the *content* of a claim is the agent operator; the trust root for the *integrity* of the record is Provenex's signature. Compliance teams reading a receipt should treat claims as the agent's word, not a Provenex attestation.
+**Trust model - load-bearing:** Provenex binds claims into the receipt's signature so the asserting agent cannot deny what it said, but **does not verify** that a claim is correct. A claim is **signed evidence of what was asserted**, not a verified fact. The trust root for the *content* of a claim is the agent operator; the trust root for the *integrity* of the record is Provenex's signature. Compliance teams reading a receipt should treat claims as the agent's word, not a Provenex attestation.
 
 ### `content_source`
 
@@ -328,7 +376,7 @@ Recording the verification config on the receipt means an auditor can reason abo
 
 ### `policy.access_control`
 
-The data-access policy decision record. Optional — present iff a `PolicyEvaluator` was configured at retrieval time.
+The data-access policy decision record. Optional - present iff a `PolicyEvaluator` was configured at retrieval time.
 
 | Field | Type | Notes |
 | --- | --- | --- |
@@ -340,15 +388,15 @@ The data-access policy decision record. Optional — present iff a `PolicyEvalua
 | `decisions[].chunk_fingerprint` | string | The chunk's fingerprint. Matches `sources[i].fingerprint`. |
 | `decisions[].decision` | string | Enum: `allow` or `deny`. |
 | `decisions[].rules_fired` | array of string | Names of the rules whose `when` clause matched. The trace of rules that participated in the decision (regardless of pass / fail). Empty when no rules fired. |
-| `decisions[].inputs_hash` | string | SHA-256 over the canonical `inputs` object. Always present — even when `inputs` is redacted, the hash lets an auditor with the original inputs independently verify. |
+| `decisions[].inputs_hash` | string | SHA-256 over the canonical `inputs` object. Always present - even when `inputs` is redacted, the hash lets an auditor with the original inputs independently verify. |
 | `decisions[].inputs` | object \| null | The canonical inputs the evaluator looked at, or `null` if the operator chose to redact. Shape: `{"chunk_metadata": {...}, "request_context": {...}}`. |
-| `decisions[].metadata_binding` | object | **Schema 2.1.0+.** Per-section trust class of the inputs. Shape: `{"chunk_metadata": "at_ingest"|"at_evaluate", "request_context": "at_evaluate"}`. `request_context` is always `at_evaluate` (the caller dict is built freshly at retrieval). `chunk_metadata` is operator-declared via `verify_chunks(..., chunk_metadata_binding=...)` — default `"at_evaluate"` for safety. See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions). |
+| `decisions[].metadata_binding` | object | **Schema 2.1.0+.** Per-section trust class of the inputs. Shape: `{"chunk_metadata": "at_ingest"|"at_evaluate", "request_context": "at_evaluate"}`. `request_context` is always `at_evaluate` (the caller dict is built freshly at retrieval). `chunk_metadata` is operator-declared via `verify_chunks(..., chunk_metadata_binding=...)` - default `"at_evaluate"` for safety. See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions). |
 
-The whole `policy` block is covered by the receipt signature using the canonical-JSON rule. Tampering with any field — including reordering decisions, rewriting `rules_fired`, or flipping a `metadata_binding` value — invalidates the signature.
+The whole `policy` block is covered by the receipt signature using the canonical-JSON rule. Tampering with any field - including reordering decisions, rewriting `rules_fired`, or flipping a `metadata_binding` value - invalidates the signature.
 
 ### `policy.tool_call_control` *(schema 2.2.0+)*
 
-The tool-call admission decision record. Optional — present iff a `ToolCallPolicyEvaluator` was configured at admission time.
+The tool-call admission decision record. Optional - present iff a `ToolCallPolicyEvaluator` was configured at admission time.
 
 ```json
 {
@@ -388,7 +436,7 @@ The tool-call admission decision record. Optional — present iff a `ToolCallPol
 | --- | --- | --- |
 | `evaluator` | string | Backend identifier. Enum values overlap with `access_control.evaluator`: `native_yaml`, `rego` (commercial), `opa_service` (commercial), `custom`, `none`. |
 | `policy_id` | string | The `policy_id` from the tool-call rule subset of the policy bundle. |
-| `policy_version_hash` | string | SHA-256 over the canonicalised tool-call rule subset. Versioned independently of `access_control.policy_version_hash` — the two halves of a unified file change independently. |
+| `policy_version_hash` | string | SHA-256 over the canonicalised tool-call rule subset. Versioned independently of `access_control.policy_version_hash` - the two halves of a unified file change independently. |
 | `policy_in_transparency_log` | boolean | Always `false` in the open-source core; lit up by the commercial transparency-log integration. |
 | `decisions` | array | Per-action decisions in `actions[]` order. One entry per action in `actions[]`. |
 | `decisions[].action_index` | integer | References `actions[action_index]`. Parallel to `access_control.decisions[i].chunk_fingerprint`. |
@@ -422,7 +470,7 @@ The tool-call admission decision record. Optional — present iff a `ToolCallPol
 | --- | --- | --- |
 | `total_chunks` | integer | Number of source records on this receipt. |
 | `verified` / `stale` / `unauthorized` / `unverified` / `tampered` | integer | Counts per outcome. Sum equals `total_chunks`. |
-| `total_actions` | integer | Schema 2.2.0+. Number of action records on this receipt. **Emitted only when `actions[]` is non-empty** — pure-retrieval receipts produce the exact 2.1.0 summary shape with no action keys. |
+| `total_actions` | integer | Schema 2.2.0+. Number of action records on this receipt. **Emitted only when `actions[]` is non-empty** - pure-retrieval receipts produce the exact 2.1.0 summary shape with no action keys. |
 | `actions_allowed` | integer | Schema 2.2.0+. Count of admitted tool calls. Emitted alongside `total_actions`. |
 | `actions_denied` | integer | Schema 2.2.0+. Count of denied tool calls. Emitted alongside `total_actions`. |
 | `overall_status` | string | One of `PASS`, `PARTIAL`, `FAIL`. See below. |
@@ -498,15 +546,15 @@ Optional. Present iff the receipt is part of a multi-step agent trajectory (sche
 | `trajectory.step_kind` | string | Optional. Free-form classifier. Provenex-defined values: `retrieval`, `tool_call`, `memory_read`, `memory_write`, `model_inference`, `compilation`. Unknown values are valid for forward compatibility. The 0.6.5 release added first-class convenience entrypoints (`verify_memory`, `admit_memory_write`, `admit_model_inference`) that stamp the right classifier automatically. |
 | `trajectory.agent_id` | string | Optional. Caller-chosen opaque identifier for the emitting agent. Useful in multi-agent flows. Do not encode PII here. |
 | `trajectory.trajectory_started_at` | string | ISO-8601 UTC with millisecond precision. Same value across every step in the trajectory; lets a single step locate itself in time without the whole set. |
-| `trajectory.session_id` | string | Optional (2.3.0+). Caller-chosen opaque multi-trajectory correlation key. Set via `start_trajectory(session_id=...)` or `RequestContext.session_id`. Where `trajectory_id` correlates receipts within one DAG, `session_id` correlates receipts *across* trajectories that belong to one logical session — a user's chat session, an incident-response engagement, a multi-day investigation. **Not** a policy input (not readable under `request.*` in a rule); a correlation tag for downstream consumers. Omitted from JSON when absent; passed on a request without a trajectory in scope, it is silently dropped (single-shot calls aren't sessions). |
+| `trajectory.session_id` | string | Optional (2.3.0+). Caller-chosen opaque multi-trajectory correlation key. Set via `start_trajectory(session_id=...)` or `RequestContext.session_id`. Where `trajectory_id` correlates receipts within one DAG, `session_id` correlates receipts *across* trajectories that belong to one logical session - a user's chat session, an incident-response engagement, a multi-day investigation. **Not** a policy input (not readable under `request.*` in a rule); a correlation tag for downstream consumers. Omitted from JSON when absent; passed on a request without a trajectory in scope, it is silently dropped (single-shot calls aren't sessions). |
 
 The trajectory block is covered by the receipt signature using the same canonical-JSON rule as every other field. Tampering with any trajectory field invalidates the signature.
 
 Verification semantics:
 
-- **Per-step verification** is unchanged — each receipt verifies its own signature, sources, and inclusion proofs exactly as a single-step receipt would.
+- **Per-step verification** is unchanged - each receipt verifies its own signature, sources, and inclusion proofs exactly as a single-step receipt would.
 - **Trajectory verification** is additional. `provenex audit --trajectory <dir_or_glob>` takes a set of receipt files and validates: all share the same `trajectory_id`; the DAG formed by `parent_step_ids` is acyclic; every referenced parent resolves to a receipt in the set; at least one root step exists.
-- **Trust model.** Provenex binds parent-step claims cryptographically (the signature) but does not verify that the agent's claim about parent steps is causally correct — that is a verifiable-claim property, not a verifiable-computation property. The signature ensures the claim is non-repudiable.
+- **Trust model.** Provenex binds parent-step claims cryptographically (the signature) but does not verify that the agent's claim about parent steps is causally correct - that is a verifiable-claim property, not a verifiable-computation property. The signature ensures the claim is non-repudiable.
 
 Backward compatibility: receipts without a `trajectory` block behave identically to schema 1.1.0 / 1.2.0 receipts. Verifiers that do not understand 1.3.0 should ignore unknown fields per the minor-version additive rule.
 

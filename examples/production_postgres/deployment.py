@@ -19,7 +19,7 @@ changes is the deployment shape:
       connection pool, representing one verify pod).
 
 The two "pods" share no in-process state. The only thing they share is
-the Postgres index — and the canonical HMAC payload, which is identical
+the Postgres index - and the canonical HMAC payload, which is identical
 to the SQLite backend's. A receipt produced here verifies bit-identically
 against a SQLite-backed index using the same signing secret.
 
@@ -163,8 +163,25 @@ def main() -> int:
 
     ingester = PostgresProvenanceIndex(dsn=dsn)
     fp = Fingerprinter()
+
+    # v0.8.0 ingest discipline: the whole-doc hash and any operator
+    # authorized chunks get entry_kind=whole_chunk (VERIFIED-eligible).
+    # Sliding-window fingerprints are structural locators only.
+    from provenex.index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW
     ingest_result = fp.fingerprint(document_text)
+    whole_doc_fp = fp.fingerprint_chunk(document_text)
+    ingester.add(
+        fingerprint=whole_doc_fp,
+        document_id="policy_v4",
+        document_version=ingest_result.document_version,
+        chunk_offset=0,
+        chunk_length=len(document_text),
+        authorized=True,
+        entry_kind=ENTRY_KIND_WHOLE_CHUNK,
+    )
     for f in ingest_result.fingerprints:
+        if f.fingerprint == whole_doc_fp:
+            continue
         ingester.add(
             fingerprint=f.fingerprint,
             document_id="policy_v4",
@@ -172,10 +189,14 @@ def main() -> int:
             chunk_offset=f.offset,
             chunk_length=f.length,
             authorized=True,
+            entry_kind=ENTRY_KIND_WINDOW,
         )
     ingester.close()  # ingester pod disconnects after the batch
 
-    print(f"  {GREEN}✓ ingested{RESET} {len(ingest_result.fingerprints)} chunks")
+    print(
+        f"  {GREEN}✓ ingested{RESET} 1 whole-document chunk + "
+        f"{len(ingest_result.fingerprints)} window locators"
+    )
     kv("document_id", "policy_v4")
     kv("connection pool", "ingester (closed)")
     print(
@@ -192,7 +213,9 @@ def main() -> int:
     verifier = PostgresProvenanceIndex(dsn=dsn)
     kv("connection pool", "verifier (new)")
 
-    retrieved_chunk = document_text[: ingest_result.fingerprints[0].length]
+    # Verify the whole document text - the operator-authorized chunk
+    # the ingester wrote with entry_kind=whole_chunk.
+    retrieved_chunk = document_text
     chunk_fp = fp.fingerprint_chunk(retrieved_chunk)
     outcome = verifier.verify(chunk_fp)
     entry = verifier.lookup(chunk_fp)
@@ -257,7 +280,7 @@ def main() -> int:
 
     # Re-derive the canonical payload from a non-tampered row Postgres
     # stored. This is the bytes the HMAC was over. The same function imports
-    # cleanly from provenex.index.sqlite_index — the two backends share
+    # cleanly from provenex.index.sqlite_index - the two backends share
     # exactly one signing-payload definition. A receipt produced here
     # verifies against the SQLite backend (and vice versa) using the same
     # secret.

@@ -1,13 +1,15 @@
-# Streaming export — receipts → your firehose
+# Streaming export - receipts → your firehose
 
 Provenex emits signed receipts; a downstream anomaly detector / SIEM /
-archival store reads them. `provenex.export.streaming` is the 1–2-line
+archival store reads them. `provenex.export.streaming` is the 1-2-line
 firehose that closes the loop: a `ReceiptSink` Protocol plus reference
 sinks for stdout, file, Kafka, SQS, S3, and Pub/Sub. Available since
 **0.6.6**.
 
-Schema is unchanged — sinks consume serialised receipts; the wire
-format stays at 2.3.0.
+Schema is unchanged on the sink-protocol side - sinks consume
+serialised receipts; the current wire format is 2.4.0 (each receipt
+carries the v0.8.0 additions: optional `entry_kind` per source and
+optional top-level `request_binding`).
 
 ## TL;DR
 
@@ -49,7 +51,7 @@ reference sinks fit.
 - `close()` is idempotent. After a sink is closed, `publish()` raises
   `SinkClosedError`.
 
-The Protocol is `runtime_checkable` — `isinstance(my_sink, ReceiptSink)`
+The Protocol is `runtime_checkable` - `isinstance(my_sink, ReceiptSink)`
 returns `True` for any duck-typed implementation.
 
 ## Reference sinks
@@ -62,24 +64,24 @@ from provenex import (
 )
 ```
 
-- **`StdoutJSONLSink(stream=None)`** — one JSON line per receipt to
+- **`StdoutJSONLSink(stream=None)`** - one JSON line per receipt to
   `sys.stdout` (or any writable stream). For testing / dev / quick
   eyeballing.
-- **`FileJSONLSink(directory, prefix="receipts")`** — append to a
+- **`FileJSONLSink(directory, prefix="receipts")`** - append to a
   local file rotated daily by UTC date:
   `<directory>/<prefix>-YYYY-MM-DD.jsonl`. Rotation happens
-  transparently on the next `publish()` after the day changes — no
+  transparently on the next `publish()` after the day changes - no
   background thread.
-- **`MultiSink([sink_a, sink_b, ...])`** — fan-out to N sinks.
+- **`MultiSink([sink_a, sink_b, ...])`** - fan-out to N sinks.
   Failures are isolated per-sink; if one raises, a warning is logged
   and publishing continues with the remaining sinks.
-- **`RetryQueueSink(downstream, maxlen=1000)`** — bounded retry queue
+- **`RetryQueueSink(downstream, maxlen=1000)`** - bounded retry queue
   in front of a downstream sink. When `downstream.publish()` raises,
   the receipt is enqueued in an in-memory deque (drop-oldest on
   overflow). On the next successful publish, pending receipts drain
   in FIFO order before the new receipt.
 
-### Kafka — extra `[export-kafka]`
+### Kafka - extra `[export-kafka]`
 
 ```bash
 pip install "provenex-core[export-kafka]"
@@ -102,7 +104,7 @@ Depends on `kafka-python` (pure Python, no C build deps). Each
 message has the receipt JSON as value (UTF-8 bytes); the key is the
 field named by `key_field` (default `receipt_id`).
 
-### AWS — extra `[export-aws]`
+### AWS - extra `[export-aws]`
 
 ```bash
 pip install "provenex-core[export-aws]"
@@ -127,7 +129,7 @@ Both lazy-import `boto3`. SQS is best for decoupled, retry-friendly
 pipelines; S3 is best for long-term archive with Athena / Glue
 analytics. Use them together via `MultiSink([sqs, s3])`.
 
-### GCP Pub/Sub — extra `[export-gcp]`
+### GCP Pub/Sub - extra `[export-gcp]`
 
 ```bash
 pip install "provenex-core[export-gcp]"
@@ -156,7 +158,7 @@ admission_check(..., sink=sink)
 admit_memory_write(..., sink=sink)
 admit_model_inference(..., sink=sink)
 
-# Framework wrappers — sink= on the constructor / factory
+# Framework wrappers - sink= on the constructor / factory
 ProvenexRetriever(..., sink=sink)              # LangChain
 ProvenexToolWrapper(..., sink=sink)            # LangChain tool-call admission
 provenex_retrieval_node(..., sink=sink)        # LangGraph
@@ -164,20 +166,20 @@ provenex_admission_node(..., sink=sink)        # LangGraph tool-call admission
 provenex_mcp_admission(..., sink=sink)         # MCP
 ProvenexLlamaIndexRetriever(..., sink=sink)    # LlamaIndex
 
-# CrewAI session — constructor + add_sink()
+# CrewAI session - constructor + add_sink()
 session = ProvenexCrewSession(..., sink=sink)
 session.add_sink(other_sink)                   # accumulates
 ```
 
-A single sink or a list of sinks is accepted everywhere — passing
+A single sink or a list of sinks is accepted everywhere - passing
 `sink=[a, b]` is auto-wrapped as `MultiSink([a, b])` internally.
 
-## Error semantics — load-bearing
+## Error semantics - load-bearing
 
 **Sink failures are swallowed and logged via `warnings.warn`.**
 Provenex must never break the agent's hot path because export is
 degraded. A misconfigured Kafka cluster, an SQS quota error, an S3
-permissions issue — all produce a warning on stderr and the receipt
+permissions issue - all produce a warning on stderr and the receipt
 keeps flowing through the function return value. The agent keeps
 running.
 
@@ -191,7 +193,7 @@ result = admission_check(..., sink=Broken())
 # result.receipt is still complete; a warning was emitted to stderr.
 ```
 
-If you want **fail-loud-on-export** semantics (rare — production
+If you want **fail-loud-on-export** semantics (rare - production
 deployments almost always want resilience), wrap your sink in your
 own strict adapter:
 
@@ -202,15 +204,15 @@ class StrictSink:
     def publish(self, r):
         try: self._inner.publish(r)
         except Exception:
-            raise   # propagate — Provenex's _safe_publish will still warn,
+            raise   # propagate - Provenex's _safe_publish will still warn,
                     # then the exception bubbles back up through your caller.
     def close(self): self._inner.close()
 ```
 
 Note: even with `StrictSink`, Provenex's `_safe_publish` still
-catches the re-raise and logs — that's by design. The strict path
+catches the re-raise and logs - that's by design. The strict path
 needs to instrument your own code, not Provenex's. We do not ship
-`StrictSink` for that reason — most production deployments want
+`StrictSink` for that reason - most production deployments want
 resilience by default, and the few that don't can write the
 appropriate adapter at their boundary.
 
@@ -264,7 +266,7 @@ assert isinstance(MyCustomSink(), ReceiptSink)   # runtime_checkable
 Use `receipt.to_json(indent=None)` for compact one-line JSON
 (suitable for JSONL); use `receipt.to_json(indent=2)` for the
 human-readable form. The receipt's canonical-bytes payload (what the
-signature covers) is `receipt.canonical_payload()` — useful when
+signature covers) is `receipt.canonical_payload()` - useful when
 publishing to a system that also verifies the signature
 independently.
 
@@ -302,12 +304,12 @@ sink = MultiSink([
 ## Examples
 
 - [`examples/streaming_export_demo.py`](../examples/streaming_export_demo.py)
-  — pure stdlib end-to-end. Generates ~5 receipts across mixed step
+  - pure stdlib end-to-end. Generates ~5 receipts across mixed step
   kinds, ships them to a `MultiSink([StdoutJSONLSink(),
   FileJSONLSink(temp_dir)])`, prints the resulting JSONL contents,
   and demonstrates the retry queue absorbing a flaky downstream.
 
 - The "Reading receipts as an anomaly-detection event stream" section
-  of [`quickstart.md`](quickstart.md) shows the consumer side — how
+  of [`quickstart.md`](quickstart.md) shows the consumer side - how
   to `GROUP BY caller_hash` and `GROUP BY session_id` over the JSONL
   stream that comes out of `FileJSONLSink`.

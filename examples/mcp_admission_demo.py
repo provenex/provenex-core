@@ -1,4 +1,4 @@
-"""MCP admission demo (0.6.9+) — Model Context Protocol middleware.
+"""MCP admission demo (0.6.9+) - Model Context Protocol middleware.
 
 Run with:
 
@@ -7,12 +7,12 @@ Run with:
 
 What it shows, in order:
 
-    1. A toy MCP ``tools/call`` handler — what an MCP server author
+    1. A toy MCP ``tools/call`` handler - what an MCP server author
        writes today (no Provenex). The handler accepts a JSON-RPC
        request dict and returns a JSON-RPC response dict.
 
     2. The same handler decorated with ``provenex_mcp_admission``
-       — one decorator, zero changes to the handler body. Every
+       - one decorator, zero changes to the handler body. Every
        call now passes through admission first; allow → handler
        runs as normal; deny → ``ToolCallDenied`` raised (or
        ``on_deny`` callback fires) and the handler does not run.
@@ -25,21 +25,21 @@ What it shows, in order:
 
     4. The ``on_deny`` pattern: a custom callback that translates
        the deny into a structured JSON-RPC error response instead
-       of raising — useful for MCP servers that emit their own
+       of raising - useful for MCP servers that emit their own
        error shapes.
 
     5. Receipt drain: every allow AND every deny produces a signed
        receipt. Drain them via the ``receipts_sink=`` list-append
        parameter (back-compat 0.5+) or the 0.6.6+ ``sink=``
-       ReceiptSink — both shown.
+       ReceiptSink - both shown.
 
 The pitch: drop-in MCP middleware. Provenex never holds OAuth
 tokens, never proxies the call, never touches the response payload
-— it returns a decision and emits a receipt. The MCP server keeps
+- it returns a decision and emits a receipt. The MCP server keeps
 its own credentials and its own response shape; the decorator is
 strictly a wrapper.
 
-Pure stdlib. No actual MCP server library required — we simulate
+Pure stdlib. No actual MCP server library required - we simulate
 the JSON-RPC envelope as a dict, which is exactly what every MCP
 implementation passes around internally.
 """
@@ -87,7 +87,7 @@ policy_id: mcp-demo-v1
 
 tool_call_control:
   rules:
-    # Domain allowlist on web_search — only approved providers.
+    # Domain allowlist on web_search - only approved providers.
     - name: web_search_provider_allowlist
       when: { tool.name: web_search }
       require:
@@ -95,7 +95,7 @@ tool_call_control:
           in: [google_custom_search, bing_v7]
       on_violation: deny
 
-    # Role gate on Jira writes — engineers and admins only.
+    # Role gate on Jira writes - engineers and admins only.
     - name: jira_writes_require_role
       when:
         tool.name: jira
@@ -125,7 +125,7 @@ def my_tools_call_handler(request: Dict[str, Any]) -> Dict[str, Any]:
     """
     name = request["params"]["name"]
     args = request["params"]["arguments"]
-    # Simulated execution result — in real MCP this is where you'd
+    # Simulated execution result - in real MCP this is where you'd
     # call Jira / your search provider / etc. with YOUR credentials.
     return {
         "jsonrpc": "2.0",
@@ -152,7 +152,7 @@ def request_factory(request: Dict[str, Any]) -> RequestContext:
     Most production MCP servers attach a session token / JWT /
     custom auth claim to the request. The factory's job is to read
     that and produce a Provenex :class:`RequestContext`. Provenex
-    does NOT own identity — that's the host application's call.
+    does NOT own identity - that's the host application's call.
     """
     caller_info = request["params"]["arguments"].get("__provenex_caller__", {})
     return RequestContext(
@@ -205,7 +205,7 @@ def main() -> int:
     receipts_list: List[Any] = []   # back-compat list-append sink
 
     # Also wire up a ReceiptSink (0.6.6+) so the receipts also stream
-    # to stdout — both sinks work side-by-side.
+    # to stdout - both sinks work side-by-side.
     streaming_buf = io.StringIO()
     streaming_sink = StdoutJSONLSink(stream=streaming_buf)
 
@@ -309,7 +309,7 @@ def main() -> int:
             # the ``__operation__`` / ``__target_system__`` /
             # ``__invocation_id__`` keys out of arguments during
             # decoding. A real MCP server doesn't reuse request
-            # dicts, so this isn't observable in production — but
+            # dicts, so this isn't observable in production - but
             # in this demo we re-send the same dict in section 4,
             # so a per-call deep-copy keeps the demo self-consistent.
             response = decorated(copy.deepcopy(spec["request"]))
@@ -331,7 +331,7 @@ def main() -> int:
         assert actual == expect, f"expected {expect}, got {actual} for {label}"
 
     # --- 4. The on_deny pattern: structured JSON-RPC error response --- #
-    banner("4. on_deny pattern — return a JSON-RPC error response on deny")
+    banner("4. on_deny pattern - return a JSON-RPC error response on deny")
 
     def deny_to_jsonrpc_error(result: Any, original_request: Any) -> Dict[str, Any]:
         """Translate a Provenex deny into a JSON-RPC 2.0 error envelope.
@@ -368,7 +368,7 @@ def main() -> int:
     print("    " + json.dumps(err_response, indent=2).replace("\n", "\n    "))
 
     # --- 5. Receipt drain --- #
-    banner("5. Receipt drain — every allow AND deny produces a signed receipt")
+    banner("5. Receipt drain - every allow AND deny produces a signed receipt")
 
     print(
         f"  Receipts collected via receipts_sink list: "
@@ -402,7 +402,7 @@ def main() -> int:
     )
 
     # --- 6. Lower-level wrap_mcp_request (no decorator) --- #
-    banner("6. wrap_mcp_request — lower-level (no decorator)")
+    banner("6. wrap_mcp_request - lower-level (no decorator)")
     print(
         f"  {DIM}For MCP servers that don't decorate handlers (e.g. routers "
         f"that dispatch{RESET}"

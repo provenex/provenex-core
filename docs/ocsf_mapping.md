@@ -1,4 +1,4 @@
-# OCSF mapping — Provenex receipts as cross-vendor security events
+# OCSF mapping - Provenex receipts as cross-vendor security events
 
 This document is the public specification for how Provenex receipts
 land in your SIEM. It is the artifact a SIEM vendor or enterprise
@@ -10,23 +10,23 @@ function `receipt_to_ocsf(receipt_dict)` is the public entrypoint;
 
 ## OCSF version targeted
 
-**v1.3.0**. The mapping is forward-compatible — OCSF treats new
+**v1.3.0**. The mapping is forward-compatible - OCSF treats new
 optional fields the same way Provenex does, so receipts produced
 today flow through unchanged into v1.4 / v2.0 consumers that ignore
 unknown fields.
 
 When OCSF stabilizes AI-specific event classes, this document
-changes. Receipts do not — only the mapping table moves.
+changes. Receipts do not - only the mapping table moves.
 
 ## Class mapping summary
 
 | Provenex event | OCSF class | OCSF class UID | Severity |
 | --- | --- | --- | --- |
-| Allowed retrieval — one per allowed source on a `verify_chunks` / `verify_memory` receipt | Application Activity | **6005** | Informational (1) |
-| Allowed admission — one per allowed action: tool-call / `admit_memory_write` / `admit_model_inference` | API Activity | **6003** | Informational (1) |
-| Blocked retrieval — verification policy blocked the chunk (TAMPERED / UNAUTHORIZED+block / UNVERIFIED+block / STALE+block) | Detection Finding | **2004** | **Critical (5)** |
-| Denied access-control decision — chunk passed verification but was denied by `policy.access_control` | Detection Finding | **2004** | **High (4)** |
-| Denied admission — action denied by `policy.tool_call_control` | Detection Finding | **2004** | **High (4)** |
+| Allowed retrieval - one per allowed source on a `verify_chunks` / `verify_memory` receipt | Application Activity | **6005** | Informational (1) |
+| Allowed admission - one per allowed action: tool-call / `admit_memory_write` / `admit_model_inference` | API Activity | **6003** | Informational (1) |
+| Blocked retrieval - verification policy blocked the chunk (TAMPERED / UNAUTHORIZED+block / UNVERIFIED+block / STALE+block) | Detection Finding | **2004** | **Critical (5)** |
+| Denied access-control decision - chunk passed verification but was denied by `policy.access_control` | Detection Finding | **2004** | **High (4)** |
+| Denied admission - action denied by `policy.tool_call_control` | Detection Finding | **2004** | **High (4)** |
 
 One Provenex receipt with N sources and M actions can emit up to
 N+M OCSF events. A receipt with zero of each (a pure output-hash
@@ -36,7 +36,7 @@ receipt) emits zero events.
 
 - **6005 (Application Activity)** for allowed retrievals: "verify
   chunk reached LLM" maps cleanly to "subject accessed a resource"
-  — the spec's intended semantics for 6005. Every OCSF-aware SIEM
+  - the spec's intended semantics for 6005. Every OCSF-aware SIEM
   already ingests 6005; a custom Data Access class extension would
   require vendor-side work for every SIEM.
 - **6003 (API Activity)** for allowed admissions: tool calls,
@@ -67,7 +67,7 @@ choices:
 | Allow (every Application / API Activity event) | **1** | Informational |
 
 The verification block → Critical reflects that fingerprint
-tampering is a high-confidence integrity violation — an authorised
+tampering is a high-confidence integrity violation - an authorised
 chunk's signature failed, or an unrecognised chunk attempted to
 enter the LLM. Routing to a SOC's high-priority queue is the right
 default. Policy deny → High reflects that the operator's authoring
@@ -75,10 +75,10 @@ of the policy is the trust root; a deny is intended behaviour, not
 an integrity violation.
 
 If your SOC's routing wants different thresholds, the only file
-that needs to change is `provenex/export/ocsf.py` — the receipts
+that needs to change is `provenex/export/ocsf.py` - the receipts
 themselves are unchanged.
 
-## Field-by-field — Application Activity (6005, allowed retrieval)
+## Field-by-field - Application Activity (6005, allowed retrieval)
 
 ```json
 {
@@ -101,9 +101,9 @@ themselves are unchanged.
     "version": "1.3.0",
     "product": {
       "name": "provenex-core",
-      "version": "0.6.7",
+      "version": "0.8.0",
       "vendor_name": "Provenex",
-      "feature": { "name": "provenex-receipt", "version": "2.3.0" }
+      "feature": { "name": "provenex-receipt", "version": "2.4.0" }
     },
     "correlation_uid": "trj_…",
     "session_uid": "session-2026-002",
@@ -139,7 +139,7 @@ themselves are unchanged.
 | `schema_version` | `metadata.product.feature.version` |
 | `issued_at` | `time` (epoch ms) + `time_dt` (ISO-8601 verbatim) |
 | `issuer` (split on `/`) | `metadata.product.name` / `metadata.product.version` |
-| `caller_hash` | `actor.user.uid` (prefix `sha256:` or `hmac-sha256:` survives — the algorithm tag is the dispatcher) |
+| `caller_hash` | `actor.user.uid` (prefix `sha256:` or `hmac-sha256:` survives - the algorithm tag is the dispatcher) |
 | `trajectory.trajectory_id` | `metadata.correlation_uid` |
 | `trajectory.session_id` | `metadata.session_uid` |
 | `trajectory.agent_id` | `actor.process.name` |
@@ -154,7 +154,7 @@ themselves are unchanged.
 | `policy.access_control.decisions[i].rules_fired` | `metadata.labels[]` (`rules_fired:<comma-joined>`) |
 | (constant) | `class_uid` `6005`, `severity_id` `1`, `status_id` `1`, `event_code` `provenex.verification.allow` |
 
-## Field-by-field — API Activity (6003, allowed admission)
+## Field-by-field - API Activity (6003, allowed admission)
 
 ```json
 {
@@ -207,11 +207,11 @@ themselves are unchanged.
 The verbatim parameters / value / prompt are **not** mapped onto the
 OCSF event. If the receipt redacted them, they don't exist; if it
 recorded them (caller opted out of redaction), they stay on the
-receipt — Provenex stays decision-and-proof, never on the data
+receipt - Provenex stays decision-and-proof, never on the data
 path. The hash anchor on `api.request.uid` is the auditor's
 re-derivation point.
 
-## Field-by-field — Detection Finding (2004, block/deny)
+## Field-by-field - Detection Finding (2004, block/deny)
 
 ```json
 {
@@ -264,7 +264,7 @@ to reconstruct a multi-step agent flow:
 | where 'metadata.labels{}' = "step_kind:tool_call"
 ```
 
-`trajectory.session_id` becomes `metadata.session_uid` — useful when
+`trajectory.session_id` becomes `metadata.session_uid` - useful when
 one user's "session" spans multiple trajectories (a chat
 conversation, an incident-response engagement, a multi-day
 investigation).
@@ -298,7 +298,7 @@ events = receipt_to_ocsf(
 
 `OCSFAdapter` accepts the same parameter for the streaming-sink path.
 
-## Streaming integration — `OCSFAdapter`
+## Streaming integration - `OCSFAdapter`
 
 ```python
 from provenex import FileJSONLSink, MultiSink, OCSFAdapter
@@ -329,7 +329,7 @@ or more OCSF events; each event is forwarded to the downstream sink.
 ## What we deliberately do not map
 
 - **Verbatim chunk text / parameters / prompts** that were redacted
-  on the receipt — they aren't in the OCSF event either. Privacy-
+  on the receipt - they aren't in the OCSF event either. Privacy-
   preserving by design.
 - **Receipt signature value.** The `signature` block is on the
   receipt for offline verification; it's not on the OCSF event. A
@@ -344,18 +344,18 @@ or more OCSF events; each event is forwarded to the downstream sink.
 
 OCSF v1.3 events flow into:
 
-- **Splunk** — via the Splunk Add-on for OCSF (HEC ingest with
+- **Splunk** - via the Splunk Add-on for OCSF (HEC ingest with
   sourcetype = `ocsf:application_activity` / `ocsf:detection_finding`
   / `ocsf:api_activity`).
-- **Datadog** — via the Datadog Logs API; OCSF events are recognised
+- **Datadog** - via the Datadog Logs API; OCSF events are recognised
   by the Cloud SIEM pipeline.
-- **Elastic** — via the Elastic Common Schema (ECS) integration with
+- **Elastic** - via the Elastic Common Schema (ECS) integration with
   the OCSF schema package; OCSF events are stored in the `logs-*`
   data stream and mapped at index time.
-- **Microsoft Sentinel** — via the Common Event Format (CEF) /
+- **Microsoft Sentinel** - via the Common Event Format (CEF) /
   Codeless Connectors framework; OCSF support is via the AMA / DCR
   pipeline.
-- **Any OCSF-aware tool** — the Open Cybersecurity Schema Framework
+- **Any OCSF-aware tool** - the Open Cybersecurity Schema Framework
   is a cross-vendor spec; consuming the JSON is sufficient.
 
 ## Migration path to AI-specific OCSF classes
@@ -379,12 +379,12 @@ receipts are stable.
 
 ## Implementation reference
 
-- [`provenex/export/ocsf.py`](../provenex/export/ocsf.py) — the
+- [`provenex/export/ocsf.py`](../provenex/export/ocsf.py) - the
   executable implementation of every mapping in this document.
-- [`tests/test_ocsf_export.py`](../tests/test_ocsf_export.py) — 21
+- [`tests/test_ocsf_export.py`](../tests/test_ocsf_export.py) - 21
   cases covering class selection, severity, correlation fields,
   redaction, OCSFAdapter wiring, and serialisability.
 - [`examples/ocsf_export_demo.py`](../examples/ocsf_export_demo.py)
-  — runnable end-to-end demo: emits mixed-step-kind receipts,
+  - runnable end-to-end demo: emits mixed-step-kind receipts,
   converts each to OCSF, prints the wire JSON, demonstrates
   OCSFAdapter forwarding.

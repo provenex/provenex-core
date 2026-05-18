@@ -29,6 +29,7 @@ from ..core.receipt import (
     ReceiptBuilder,
     ReceiptSigner,
     compute_caller_hash,
+    compute_request_binding,
     compute_value_hash,
 )
 from ..export.streaming import _safe_publish
@@ -112,6 +113,7 @@ def admission_check(
     redact_inputs: bool = False,
     caller_hash_salt: Optional[bytes] = None,
     sink: Any = None,
+    request_text: Optional[str] = None,
 ) -> AdmissionResult:
     """Evaluate one tool-call attempt against policy and emit a signed receipt.
 
@@ -284,12 +286,21 @@ def admission_check(
         request.caller, salt=caller_hash_salt
     )
 
+    # Schema 2.4.0: cryptographic binding between this admission
+    # receipt and the request that produced it. See
+    # :func:`compute_request_binding` for canonicalisation rules.
+    request_binding = compute_request_binding(
+        request_text=request_text,
+        request_context=request,
+    )
+
     receipt = builder.finalize(
         output_text=output_text,
         signer=signer,
         trajectory=emit_trajectory,
         tool_call_control=tool_call_control_block,
         caller_hash=emit_caller_hash,
+        request_binding=request_binding,
     )
 
     # Schema 2.3.0 / 0.6.6+: ship to downstream sink if supplied.

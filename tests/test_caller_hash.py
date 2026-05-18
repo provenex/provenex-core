@@ -112,7 +112,7 @@ access_control:
         request_context=request,
     )
     d = result.receipt.to_dict()
-    assert d["schema_version"] == "2.3.0"
+    assert d["schema_version"] == "2.4.0"
     assert d["caller_hash"] == compute_caller_hash(request.caller)
 
 

@@ -12,8 +12,8 @@ What it shows, in order:
        (for archive), and a custom in-memory sink (a stand-in for
        Kafka / SQS / Pub/Sub).
 
-    2. Emit ~5 receipts across mixed step kinds — retrieval,
-       tool_call, memory_write, model_inference — each finalised
+    2. Emit ~5 receipts across mixed step kinds - retrieval,
+       tool_call, memory_write, model_inference - each finalised
        under one trajectory. Every receipt lands in all three
        destinations.
 
@@ -21,7 +21,7 @@ What it shows, in order:
        "FileJSONLSink → SIEM-readable archive" wire shape.
 
     4. Demonstrate the auto-coerce: ``sink=[a, b]`` is equivalent to
-       ``sink=MultiSink([a, b])`` — one-parameter ergonomics.
+       ``sink=MultiSink([a, b])`` - one-parameter ergonomics.
 
     5. Demonstrate ``RetryQueueSink`` absorbing a flaky downstream:
        a fake sink that fails the first two calls then succeeds.
@@ -35,7 +35,7 @@ is degraded.
 
 Pure stdlib. No extras required for this demo (the Kafka / SQS / S3
 / Pub/Sub sinks behind extras share the exact same ``ReceiptSink``
-interface — the in-memory sink in this demo is shape-identical).
+interface - the in-memory sink in this demo is shape-identical).
 """
 
 from __future__ import annotations
@@ -156,7 +156,7 @@ def main() -> int:
         )
 
         # --- 2. Emit receipts across mixed step kinds, one sink call each --- #
-        banner("2. Emit receipts across mixed step kinds — one trajectory")
+        banner("2. Emit receipts across mixed step kinds - one trajectory")
 
         idx = SQLiteProvenanceIndex(str(tmp_path / "p.db"))
         fp = Fingerprinter()
@@ -250,10 +250,10 @@ def main() -> int:
             )
 
         # --- 5. Auto-coerce: sink=[a, b] is auto-wrapped as MultiSink --- #
-        banner("5. Auto-coerce — passing a list of sinks is auto-MultiSink'd")
+        banner("5. Auto-coerce - passing a list of sinks is auto-MultiSink'd")
 
         a, b = InMemorySink("sink-A"), InMemorySink("sink-B")
-        # sink=[a, b] is auto-wrapped — same behavior as MultiSink([a, b]).
+        # sink=[a, b] is auto-wrapped - same behavior as MultiSink([a, b]).
         admission_check(
             tool=ToolCallContext(name="t", operation="op", parameters={}),
             request=request, signer=signer,
@@ -266,7 +266,7 @@ def main() -> int:
         )
 
         # --- 6. RetryQueueSink absorbs a flaky downstream --- #
-        banner("6. RetryQueueSink — absorbs transient downstream failures")
+        banner("6. RetryQueueSink - absorbs transient downstream failures")
 
         class FlakySink:
             """Fails the first two publishes, then succeeds."""
@@ -308,7 +308,7 @@ def main() -> int:
 
         match = flaky.delivered == rids
         print(
-            f"  Final state: all {len(flaky.delivered)} receipts delivered in FIFO order — "
+            f"  Final state: all {len(flaky.delivered)} receipts delivered in FIFO order - "
             f"{GREEN if match else RED}{'match' if match else 'MISMATCH'}{RESET}"
         )
 
@@ -326,7 +326,7 @@ def main() -> int:
             f"  {DIM}hot path is unchanged; the firehose runs alongside.{RESET}"
         )
         print(
-            f"  {DIM}Sink failures are swallowed-and-logged — Provenex never"
+            f"  {DIM}Sink failures are swallowed-and-logged - Provenex never"
             f"{RESET}"
         )
         print(

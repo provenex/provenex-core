@@ -2,7 +2,7 @@
 
 This example uses minimal duck-typed stubs in place of LangChain's Document
 and BaseRetriever so it runs without LangChain installed. The integration
-points are identical for real LangChain — the wrapper only requires
+points are identical for real LangChain - the wrapper only requires
 ``page_content`` on documents and ``invoke``/``get_relevant_documents`` on
 retrievers.
 
@@ -74,7 +74,7 @@ def main() -> None:
     # Replace StubRetriever with your existing LangChain retriever:
     base_retriever = StubRetriever(policy_chunks + guideline_chunks)
 
-    # Add an extra chunk that was NEVER ingested through Provenex — to show
+    # Add an extra chunk that was NEVER ingested through Provenex - to show
     # the UNVERIFIED outcome on the receipt.
     base_retriever._docs.append(  # type: ignore[attr-defined]
         StubDoc(page_content="This chunk was injected from outside Provenex.")

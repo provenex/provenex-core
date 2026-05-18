@@ -24,7 +24,14 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Optional
 
-from .base import IndexEntry, ProvenanceIndex, VerificationOutcome
+from .base import (
+    ENTRY_KIND_WHOLE_CHUNK,
+    ENTRY_KIND_WINDOW,
+    VALID_ENTRY_KINDS,
+    IndexEntry,
+    ProvenanceIndex,
+    VerificationOutcome,
+)
 
 
 # Module-level guard so the legacy-shared-secret warning fires at most
@@ -72,6 +79,12 @@ def _resolve_index_secret() -> bytes:
     )
 
 
+# v0.8.0 schema. ``entry_kind`` distinguishes operator-authorized
+# whole-chunk entries (VERIFIED-eligible) from sliding-window
+# locator-only entries (NEVER VERIFIED-eligible). The column is NOT
+# NULL with a CHECK constraint so a malformed write fails at the
+# storage layer, and it is covered by the row signature so flipping
+# the value out-of-band is tamper-evident.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
     document_id TEXT PRIMARY KEY,
@@ -88,7 +101,9 @@ CREATE TABLE IF NOT EXISTS fingerprints (
     chunk_length INTEGER NOT NULL,
     superseded INTEGER NOT NULL DEFAULT 0,
     signature TEXT NOT NULL,
-    PRIMARY KEY (fingerprint, document_id, document_version),
+    entry_kind TEXT NOT NULL DEFAULT 'whole_chunk'
+        CHECK (entry_kind IN ('whole_chunk','window')),
+    PRIMARY KEY (fingerprint, document_id, document_version, entry_kind),
     FOREIGN KEY (document_id) REFERENCES documents(document_id)
 );
 
@@ -133,6 +148,7 @@ def _canonical_payload(
     ingested_at: str,
     chunk_offset: int,
     chunk_length: int,
+    entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
 ) -> bytes:
     """Build the canonical bytes that get HMAC'd for a fingerprint row.
 
@@ -140,7 +156,17 @@ def _canonical_payload(
     sequence of fields. Any change to field values produces a different MAC.
     Fields are validated to contain no newline / CR / null byte, so the
     join is unambiguous.
+
+    v0.8.0: ``entry_kind`` is included in the payload so the
+    whole-chunk-vs-window classification is tamper-evident; an attacker
+    cannot flip ``window`` to ``whole_chunk`` (promoting a locator to
+    VERIFIED-eligible) without invalidating the signature.
     """
+    if entry_kind not in VALID_ENTRY_KINDS:
+        raise ValueError(
+            f"entry_kind must be one of {VALID_ENTRY_KINDS}, got "
+            f"{entry_kind!r}"
+        )
     _validate_signing_field("fingerprint", fingerprint)
     _validate_signing_field("document_id", document_id)
     _validate_signing_field("document_version", document_version)
@@ -153,6 +179,7 @@ def _canonical_payload(
             ingested_at,
             str(chunk_offset),
             str(chunk_length),
+            entry_kind,
         ]
     ).encode("utf-8")
 
@@ -197,8 +224,41 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         with self._lock:
+            self._refuse_legacy_schema()
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
+
+    def _refuse_legacy_schema(self) -> None:
+        """Fail fast if opening a pre-v0.8.0 index.
+
+        v0.8.0 added ``entry_kind`` to the ``fingerprints`` table and to
+        the canonical signing payload. An index created by an older
+        Provenex version lacks the column; opening it under v0.8.0 code
+        would either silently downgrade behavior (if we backfill with
+        DEFAULT 'whole_chunk') or produce confusing TAMPERED outcomes
+        on every row. The right behavior is to refuse to open it and
+        tell the operator to re-ingest.
+        """
+        row = self._conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='fingerprints'"
+        ).fetchone()
+        if row is None:
+            # Brand new DB; nothing to refuse.
+            return
+        cols = self._conn.execute(
+            "PRAGMA table_info(fingerprints)"
+        ).fetchall()
+        names = {c["name"] for c in cols}
+        if "entry_kind" not in names:
+            raise RuntimeError(
+                "This Provenex index was created by a pre-v0.8.0 release. "
+                "v0.8.0 closed the window-aligned splice gap by adding an "
+                "entry_kind column to the canonical signing payload, which "
+                "is not present in this index. Re-ingest your documents "
+                "with the v0.8.0 CLI / SDK against a fresh index to upgrade. "
+                "(Path: " + self._db_path + ")"
+            )
 
     # ------------------------------------------------------------------ add
 
@@ -210,6 +270,7 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
         chunk_offset: int,
         chunk_length: int,
         authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
     ) -> None:
         if not fingerprint.startswith("sha256:"):
             raise ValueError(
@@ -219,6 +280,11 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
             raise ValueError(
                 "document_version must be in the form 'sha256:<hex>', got "
                 f"{document_version!r}"
+            )
+        if entry_kind not in VALID_ENTRY_KINDS:
+            raise ValueError(
+                f"entry_kind must be one of {VALID_ENTRY_KINDS}, got "
+                f"{entry_kind!r}"
             )
 
         ingested_at = _now_utc_iso()
@@ -230,6 +296,7 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
                 ingested_at=ingested_at,
                 chunk_offset=chunk_offset,
                 chunk_length=chunk_length,
+                entry_kind=entry_kind,
             ),
             self._secret,
         )
@@ -271,8 +338,9 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
             cur.execute(
                 "INSERT OR IGNORE INTO fingerprints "
                 "(fingerprint, document_id, document_version, ingested_at, "
-                " chunk_offset, chunk_length, superseded, signature) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, ?)",
+                " chunk_offset, chunk_length, superseded, signature, "
+                " entry_kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
                 (
                     fingerprint,
                     document_id,
@@ -281,6 +349,7 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
                     chunk_offset,
                     chunk_length,
                     signature,
+                    entry_kind,
                 ),
             )
             self._conn.commit()
@@ -288,15 +357,24 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
     # --------------------------------------------------------------- lookup
 
     def lookup(self, fingerprint: str) -> Optional[IndexEntry]:
+        # Prefer a whole-chunk row over a window row when both exist for
+        # the same fingerprint (rare but possible: an operator
+        # explicitly ingested a chunk text that also happens to coincide
+        # with one of the document's sliding-window offsets). The
+        # whole-chunk row is the operator-authorized intent; verify()
+        # can promote it to VERIFIED. Otherwise prefer non-superseded
+        # then most-recently-ingested.
         with self._lock:
             row = self._conn.execute(
                 "SELECT f.fingerprint, f.document_id, f.document_version, "
                 "       f.ingested_at, f.chunk_offset, f.chunk_length, "
-                "       f.superseded, f.signature, d.authorized "
+                "       f.superseded, f.signature, d.authorized, "
+                "       f.entry_kind "
                 "FROM fingerprints f "
                 "JOIN documents d ON d.document_id = f.document_id "
                 "WHERE f.fingerprint = ? "
-                "ORDER BY f.superseded ASC, f.ingested_at DESC "
+                "ORDER BY CASE f.entry_kind WHEN 'whole_chunk' THEN 0 ELSE 1 END ASC, "
+                "         f.superseded ASC, f.ingested_at DESC "
                 "LIMIT 1",
                 (fingerprint,),
             ).fetchone()
@@ -312,6 +390,7 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
             authorized=bool(row["authorized"]),
             superseded=bool(row["superseded"]),
             signature=row["signature"],
+            entry_kind=row["entry_kind"],
         )
 
     # ------------------------------------------------------ set_authorization
@@ -355,11 +434,24 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
                 ingested_at=entry.ingested_at,
                 chunk_offset=entry.chunk_offset,
                 chunk_length=entry.chunk_length,
+                entry_kind=entry.entry_kind,
             ),
             self._secret,
         )
         if not hmac.compare_digest(expected, entry.signature):
             return VerificationOutcome.TAMPERED
+
+        # v0.8.0 splice control: window entries are structural locators
+        # only. They never promote to VERIFIED on a whole-chunk SHA-256
+        # match. UNAUTHORIZED still wins if the locator-owning document
+        # is unauthorized (the bytes are recognized as coming from a
+        # forbidden source). Otherwise the locator match produces
+        # UNVERIFIED — there is no operator-authorized chunk record for
+        # this byte sequence.
+        if entry.entry_kind == ENTRY_KIND_WINDOW:
+            if not entry.authorized:
+                return VerificationOutcome.UNAUTHORIZED
+            return VerificationOutcome.UNVERIFIED
 
         if not entry.authorized:
             return VerificationOutcome.UNAUTHORIZED

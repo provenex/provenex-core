@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from ..core.merkle import MerkleTree
 from .postgres_index import PostgresProvenanceIndex
+from .base import ENTRY_KIND_WHOLE_CHUNK
 from .sqlite_index import _canonical_payload
 
 _MERKLE_SCHEMA = """
@@ -113,17 +114,18 @@ class MerklePostgresProvenanceIndex(PostgresProvenanceIndex):
         chunk_offset: int,
         chunk_length: int,
         authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
     ) -> None:
-        # Did this exact (fp, doc, version) row already exist? If so the
-        # base add() is an authorization-refresh only and we must NOT append
-        # a new Merkle leaf.
+        # Did this exact (fp, doc, version, entry_kind) row already exist?
+        # If so the base add() is an authorization-refresh only and we
+        # must NOT append a new Merkle leaf.
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT 1 FROM provenex_fingerprints "
                     "WHERE fingerprint = %s AND document_id = %s "
-                    "AND document_version = %s LIMIT 1",
-                    (fingerprint, document_id, document_version),
+                    "AND document_version = %s AND entry_kind = %s LIMIT 1",
+                    (fingerprint, document_id, document_version, entry_kind),
                 )
                 existed = cur.fetchone() is not None
 
@@ -134,6 +136,7 @@ class MerklePostgresProvenanceIndex(PostgresProvenanceIndex):
             chunk_offset=chunk_offset,
             chunk_length=chunk_length,
             authorized=authorized,
+            entry_kind=entry_kind,
         )
 
         if existed:
@@ -147,11 +150,12 @@ class MerklePostgresProvenanceIndex(PostgresProvenanceIndex):
                 cur.execute("SELECT pg_advisory_xact_lock(%s)", (_LEAF_LOCK_KEY,))
                 cur.execute(
                     "SELECT fingerprint, document_id, document_version, "
-                    "       ingested_at, chunk_offset, chunk_length "
+                    "       ingested_at, chunk_offset, chunk_length, "
+                    "       entry_kind "
                     "FROM provenex_fingerprints "
                     "WHERE fingerprint = %s AND document_id = %s "
-                    "AND document_version = %s",
-                    (fingerprint, document_id, document_version),
+                    "AND document_version = %s AND entry_kind = %s",
+                    (fingerprint, document_id, document_version, entry_kind),
                 )
                 row = cur.fetchone()
                 leaf_bytes = _canonical_payload(
@@ -161,6 +165,7 @@ class MerklePostgresProvenanceIndex(PostgresProvenanceIndex):
                     ingested_at=row[3],
                     chunk_offset=row[4],
                     chunk_length=row[5],
+                    entry_kind=row[6],
                 )
                 cur.execute(
                     "SELECT COALESCE(MAX(leaf_index), -1) + 1 "

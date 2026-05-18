@@ -78,11 +78,24 @@ from .trajectory import TrajectoryContext
 #           canonical signing payload covers both new fields via the
 #           existing sort_keys+tight-separators rule, so no signing-format
 #           change.
+#   2.4.0 — Window-aligned splice control (v0.8.0). New per-source
+#           ``entry_kind`` field (``"whole_chunk"`` | ``"window"``)
+#           reports the index row class that was matched; only
+#           ``whole_chunk`` rows are eligible for VERIFIED. Index rows
+#           carry ``entry_kind`` in their canonical signing payload, so
+#           a row's class is tamper-evident at the storage layer. New
+#           top-level ``request_binding`` block cryptographically binds
+#           the triggering request (query/prompt hash + request_context
+#           hash) into the signed payload, so a valid receipt cannot be
+#           re-presented as evidence for a different query. Both
+#           additions are additive on the wire; the receipt shape is a
+#           valid 2.3.0 superset. The index storage change is breaking:
+#           pre-v0.8.0 indexes must be re-ingested.
 # Minor-version bumps are additive: receipts at a lower revision remain
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
-SCHEMA_VERSION = "2.3.0"
-ISSUER = "provenex-core/0.7.2"
+SCHEMA_VERSION = "2.4.0"
+ISSUER = "provenex-core/0.8.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -229,10 +242,16 @@ class SourceRecord:
 
     Schema 1.4.0 added two optional fields:
 
-        * ``claims`` — list of self-attribution :class:`Claim`s (item 5).
-        * ``content_source`` — origin classifier, e.g.
+        * ``claims`` - list of self-attribution :class:`Claim`s (item 5).
+        * ``content_source`` - origin classifier, e.g.
           ``"live_tool_output"`` (item 6). Absent means
           ``"indexed_corpus"`` implicitly.
+
+    Schema 2.4.0 (v0.8.0) added ``entry_kind`` so an auditor reading
+    the receipt can confirm the matched index row was a whole-chunk
+    entry (the only kind that can produce VERIFIED). For UNVERIFIED
+    sources with a window locator match, this field will read
+    ``"window"`` and the row metadata reflects the locator.
     """
 
     chunk_index: int
@@ -249,6 +268,7 @@ class SourceRecord:
     inclusion_proof: Optional[List[str]] = None
     claims: Optional[List[Claim]] = None
     content_source: Optional[str] = None
+    entry_kind: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize this source record to a plain dict (JSON-ready)."""
@@ -264,6 +284,8 @@ class SourceRecord:
             "verification_outcome": self.verification_outcome.value,
             "normalization_applied": list(self.normalization_applied),
         }
+        if self.entry_kind is not None:
+            d["entry_kind"] = self.entry_kind
         if self.leaf_index is not None:
             d["leaf_index"] = self.leaf_index
         if self.inclusion_proof is not None:
@@ -380,6 +402,12 @@ class ProvenanceReceipt:
     # crawling the per-decision inputs blob. Absent on receipts produced
     # without a RequestContext (the standalone-demo path).
     caller_hash: Optional[str] = None
+    # Schema 2.4.0: top-level cryptographic binding to the triggering
+    # request (query/prompt hash plus request_context hash). Covered by
+    # the receipt signature, so a valid receipt cannot be presented as
+    # evidence for a different query. Absent when the caller supplied
+    # neither a request_text nor a request_context.
+    request_binding: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -411,6 +439,8 @@ class ProvenanceReceipt:
         # receipt under the additive-minor rule.
         if self.caller_hash is not None:
             d["caller_hash"] = self.caller_hash
+        if self.request_binding is not None:
+            d["request_binding"] = dict(self.request_binding)
         d.update(
             {
                 "output": {
@@ -631,6 +661,97 @@ def compute_caller_hash(
     return "hmac-sha256:" + hmac.new(salt, payload, hashlib.sha256).hexdigest()
 
 
+def compute_request_binding(
+    *,
+    request_text: Optional[str] = None,
+    request_context: Any = None,
+) -> Dict[str, Any]:
+    """Build the request-binding block for the signed receipt (v0.8.0).
+
+    The block ties a receipt cryptographically to *the specific request
+    that produced it*. Without this binding, the receipt's link to the
+    triggering query is implicit and operator-controlled: a valid receipt
+    could be presented as evidence for a different query (different RAG
+    question, different incident-response prompt) than the one that
+    actually fired it. With this binding, an auditor who knows the
+    original query and request_context can re-derive the request_hash
+    and confirm a match.
+
+    Canonicalisation rules (identical to :func:`compute_caller_hash` and
+    :func:`compute_value_hash`):
+
+        * Query text: SHA-256 over the UTF-8 bytes directly.
+        * Request context: SHA-256 over canonical JSON
+          (``sort_keys=True, separators=(",", ":"), ensure_ascii=False``)
+          of a normalised dict containing ``caller``, ``jurisdiction``,
+          ``purpose``, and ``timestamp``. ``session_id`` is *excluded*
+          from this hash by the same rule that excludes it from
+          ``inputs_hash``: two requests differing only in session_id
+          produce identical decisions and identical bindings.
+        * Combined hash: SHA-256 over
+          ``query_hash + "\\n" + request_context_hash`` (string
+          concatenation, both prefixed with ``"sha256:"`` or replaced
+          with literal ``"null"`` when the source was absent). The
+          combined hash is the canonical join an auditor checks.
+
+    Either input may be absent. Absence is recorded explicitly (the
+    corresponding field is ``null``) so an auditor sees that the
+    operator did not bind that half of the request. A binding with
+    both halves null still serves as a structural placeholder; this
+    function returns ``None`` in that case so the receipt simply omits
+    the block — making the omission unambiguous.
+
+    Args:
+        request_text: The exact query / prompt text that triggered the
+            retrieval or admission. Hashed verbatim. The text itself is
+            NEVER stored on the receipt, only its hash.
+        request_context: A :class:`provenex.policy.evaluator.RequestContext`
+            (or any object with ``caller``, ``jurisdiction``,
+            ``purpose``, ``timestamp`` attributes), or ``None``.
+
+    Returns:
+        A dict suitable for inclusion under the receipt's
+        ``request_binding`` key, or ``None`` when both inputs are
+        absent.
+    """
+    query_hash: Optional[str] = None
+    if request_text is not None:
+        query_hash = (
+            "sha256:" + hashlib.sha256(request_text.encode("utf-8")).hexdigest()
+        )
+
+    context_hash: Optional[str] = None
+    if request_context is not None:
+        # Canonicalise the policy-relevant subset, NOT the entire dataclass.
+        # session_id is excluded by the same rule used for inputs_hash:
+        # the binding tracks the policy-shaping subset of the request.
+        ctx_dict = {
+            "caller": getattr(request_context, "caller", None),
+            "jurisdiction": getattr(request_context, "jurisdiction", None),
+            "purpose": getattr(request_context, "purpose", None),
+            "timestamp": getattr(request_context, "timestamp", None),
+        }
+        payload = json.dumps(
+            ctx_dict,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        context_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
+
+    if query_hash is None and context_hash is None:
+        return None
+
+    joiner = (query_hash or "null") + "\n" + (context_hash or "null")
+    request_hash = "sha256:" + hashlib.sha256(joiner.encode("utf-8")).hexdigest()
+    return {
+        "algorithm": "sha256",
+        "request_hash": request_hash,
+        "query_hash": query_hash,
+        "request_context_hash": context_hash,
+    }
+
+
 def compute_value_hash(value: Any) -> str:
     """SHA-256 over a value (string, bytes, or JSON-serializable structure).
 
@@ -752,6 +873,7 @@ class ReceiptBuilder:
             inclusion_proof=inclusion_proof,
             claims=list(claims) if claims else None,
             content_source=content_source,
+            entry_kind=getattr(entry, "entry_kind", None),
         )
         self._sources.append(record)
 
@@ -884,6 +1006,7 @@ class ReceiptBuilder:
         access_control: Optional[Dict[str, Any]] = None,
         tool_call_control: Optional[Dict[str, Any]] = None,
         caller_hash: Optional[str] = None,
+        request_binding: Optional[Dict[str, Any]] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -944,6 +1067,9 @@ class ReceiptBuilder:
                 dict(tool_call_control) if tool_call_control else None
             ),
             caller_hash=caller_hash,
+            request_binding=(
+                dict(request_binding) if request_binding else None
+            ),
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

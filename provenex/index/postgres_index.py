@@ -37,7 +37,14 @@ from __future__ import annotations
 
 import os
 
-from .base import IndexEntry, ProvenanceIndex, VerificationOutcome
+from .base import (
+    ENTRY_KIND_WHOLE_CHUNK,
+    ENTRY_KIND_WINDOW,
+    VALID_ENTRY_KINDS,
+    IndexEntry,
+    ProvenanceIndex,
+    VerificationOutcome,
+)
 from .sqlite_index import (
     _canonical_payload,
     _now_utc_iso,
@@ -59,6 +66,10 @@ def _require_psycopg():
     return ConnectionPool
 
 
+# v0.8.0: ``entry_kind`` distinguishes whole-chunk entries
+# (VERIFIED-eligible) from window locator entries (never
+# VERIFIED-eligible). Covered by the canonical signing payload so
+# flipping it out-of-band fails the row signature.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS provenex_documents (
     document_id TEXT PRIMARY KEY,
@@ -75,7 +86,9 @@ CREATE TABLE IF NOT EXISTS provenex_fingerprints (
     chunk_length INTEGER NOT NULL,
     superseded BOOLEAN NOT NULL DEFAULT FALSE,
     signature TEXT NOT NULL,
-    PRIMARY KEY (fingerprint, document_id, document_version)
+    entry_kind TEXT NOT NULL DEFAULT 'whole_chunk'
+        CHECK (entry_kind IN ('whole_chunk','window')),
+    PRIMARY KEY (fingerprint, document_id, document_version, entry_kind)
 );
 
 CREATE INDEX IF NOT EXISTS idx_provenex_fingerprint
@@ -163,8 +176,37 @@ class PostgresProvenanceIndex(ProvenanceIndex):
 
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
+                self._refuse_legacy_schema(cur)
                 cur.execute(_SCHEMA)
             conn.commit()
+
+    def _refuse_legacy_schema(self, cur) -> None:
+        """Fail fast if opening a pre-v0.8.0 Postgres index.
+
+        v0.8.0 added the ``entry_kind`` column to
+        ``provenex_fingerprints``. Existing rows in a pre-v0.8.0 index
+        were signed without that field, so silently auto-upgrading
+        would either downgrade safety or make every row TAMPERED.
+        """
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'provenex_fingerprints' LIMIT 1"
+        )
+        if cur.fetchone() is None:
+            return
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'provenex_fingerprints' "
+            "AND column_name = 'entry_kind' LIMIT 1"
+        )
+        if cur.fetchone() is None:
+            raise RuntimeError(
+                "This Provenex index was created by a pre-v0.8.0 release. "
+                "v0.8.0 closed the window-aligned splice gap by adding an "
+                "entry_kind column to the canonical signing payload, which "
+                "is not present in this index. Re-ingest your documents "
+                "with the v0.8.0 CLI / SDK against a fresh index to upgrade."
+            )
 
     # ------------------------------------------------------------------ add
 
@@ -176,6 +218,7 @@ class PostgresProvenanceIndex(ProvenanceIndex):
         chunk_offset: int,
         chunk_length: int,
         authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
     ) -> None:
         if not fingerprint.startswith("sha256:"):
             raise ValueError(
@@ -185,6 +228,11 @@ class PostgresProvenanceIndex(ProvenanceIndex):
             raise ValueError(
                 "document_version must be in the form 'sha256:<hex>', got "
                 f"{document_version!r}"
+            )
+        if entry_kind not in VALID_ENTRY_KINDS:
+            raise ValueError(
+                f"entry_kind must be one of {VALID_ENTRY_KINDS}, got "
+                f"{entry_kind!r}"
             )
 
         ingested_at = _now_utc_iso()
@@ -196,6 +244,7 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                 ingested_at=ingested_at,
                 chunk_offset=chunk_offset,
                 chunk_length=chunk_length,
+                entry_kind=entry_kind,
             ),
             self._secret,
         )
@@ -253,9 +302,11 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                 cur.execute(
                     "INSERT INTO provenex_fingerprints "
                     "(fingerprint, document_id, document_version, ingested_at, "
-                    " chunk_offset, chunk_length, superseded, signature) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, FALSE, %s) "
-                    "ON CONFLICT (fingerprint, document_id, document_version) "
+                    " chunk_offset, chunk_length, superseded, signature, "
+                    " entry_kind) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, FALSE, %s, %s) "
+                    "ON CONFLICT "
+                    "(fingerprint, document_id, document_version, entry_kind) "
                     "DO NOTHING",
                     (
                         fingerprint,
@@ -265,6 +316,7 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                         chunk_offset,
                         chunk_length,
                         signature,
+                        entry_kind,
                     ),
                 )
             conn.commit()
@@ -272,16 +324,20 @@ class PostgresProvenanceIndex(ProvenanceIndex):
     # --------------------------------------------------------------- lookup
 
     def lookup(self, fingerprint: str) -> IndexEntry | None:
+        # Prefer a whole-chunk row over a window row when both exist for
+        # the same fingerprint. See the SQLite analog for rationale.
         with self._pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT f.fingerprint, f.document_id, f.document_version, "
                     "       f.ingested_at, f.chunk_offset, f.chunk_length, "
-                    "       f.superseded, f.signature, d.authorized "
+                    "       f.superseded, f.signature, d.authorized, "
+                    "       f.entry_kind "
                     "FROM provenex_fingerprints f "
                     "JOIN provenex_documents d ON d.document_id = f.document_id "
                     "WHERE f.fingerprint = %s "
-                    "ORDER BY f.superseded ASC, f.ingested_at DESC "
+                    "ORDER BY CASE f.entry_kind WHEN 'whole_chunk' THEN 0 ELSE 1 END ASC, "
+                    "         f.superseded ASC, f.ingested_at DESC "
                     "LIMIT 1",
                     (fingerprint,),
                 )
@@ -298,6 +354,7 @@ class PostgresProvenanceIndex(ProvenanceIndex):
             authorized=bool(row[8]),
             superseded=bool(row[6]),
             signature=row[7],
+            entry_kind=row[9],
         )
 
     # ------------------------------------------------------ set_authorization
@@ -360,11 +417,20 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                 ingested_at=entry.ingested_at,
                 chunk_offset=entry.chunk_offset,
                 chunk_length=entry.chunk_length,
+                entry_kind=entry.entry_kind,
             ),
             self._secret,
         )
         if not hmac.compare_digest(expected, entry.signature):
             return VerificationOutcome.TAMPERED
+
+        # v0.8.0 splice control: window entries never promote to
+        # VERIFIED. UNAUTHORIZED still wins for locator-owning
+        # documents that have been revoked. See the SQLite analog.
+        if entry.entry_kind == ENTRY_KIND_WINDOW:
+            if not entry.authorized:
+                return VerificationOutcome.UNAUTHORIZED
+            return VerificationOutcome.UNVERIFIED
 
         if not entry.authorized:
             return VerificationOutcome.UNAUTHORIZED

@@ -40,6 +40,7 @@ from pathlib import Path
 from provenex.core.fingerprinter import Fingerprinter
 from provenex.core.merkle import verify_inclusion_proof
 from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
+from provenex.index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
 
@@ -119,18 +120,62 @@ def main() -> int:
 
     index = MerkleSQLiteProvenanceIndex(str(db_path))
     fp = Fingerprinter()
+
+    # v0.8.0 ingest discipline: an operator authorises specific chunks
+    # for retrieval. Here the operator chose to authorise four paragraph
+    # chunks AND keep the whole-document hash as a coarser-grained
+    # chunk. Each gets entry_kind=whole_chunk (the VERIFIED-eligible
+    # class). Sliding-window fingerprints over the same text get
+    # entry_kind=window (structural locators only; never promote).
+    authorized_chunks = [p.strip() for p in document_text.split("\n") if p.strip()]
+    # Default the split on sentence boundaries so the demo always has
+    # something to chunk even when the source has no paragraph breaks.
+    if len(authorized_chunks) < 2:
+        authorized_chunks = [
+            s.strip() + "."
+            for s in document_text.replace("?", ".").split(".")
+            if s.strip()
+        ]
     ingest_result = fp.fingerprint(document_text)
-    for f in ingest_result.fingerprints:
+    whole_doc_fp = fp.fingerprint_chunk(document_text)
+    index.add(
+        fingerprint=whole_doc_fp,
+        document_id="policy_v4",
+        document_version=ingest_result.document_version,
+        chunk_offset=0,
+        chunk_length=len(document_text),
+        authorized=True,
+        entry_kind=ENTRY_KIND_WHOLE_CHUNK,
+    )
+    for chunk_text in authorized_chunks:
+        chunk_fp = fp.fingerprint_chunk(chunk_text)
         index.add(
-            fingerprint=f.fingerprint,
+            fingerprint=chunk_fp,
             document_id="policy_v4",
             document_version=ingest_result.document_version,
-            chunk_offset=f.offset,
-            chunk_length=f.length,
+            chunk_offset=document_text.find(chunk_text),
+            chunk_length=len(chunk_text),
             authorized=True,
+            entry_kind=ENTRY_KIND_WHOLE_CHUNK,
+        )
+    for window in ingest_result.fingerprints:
+        if window.fingerprint == whole_doc_fp:
+            continue
+        index.add(
+            fingerprint=window.fingerprint,
+            document_id="policy_v4",
+            document_version=ingest_result.document_version,
+            chunk_offset=window.offset,
+            chunk_length=window.length,
+            authorized=True,
+            entry_kind=ENTRY_KIND_WINDOW,
         )
 
-    print(f"  {GREEN}✓ ingested{RESET} {len(ingest_result.fingerprints)} chunks")
+    print(
+        f"  {GREEN}✓ ingested{RESET} "
+        f"{len(authorized_chunks) + 1} authorized chunks + "
+        f"{len(ingest_result.fingerprints)} window locators"
+    )
     kv("tree size", str(index.tree_size()))
     kv("tree root", index.tree_root(), color=YELLOW)
     print(
@@ -142,8 +187,9 @@ def main() -> int:
     # ----------------------------------------------------------------- act 2
     banner("2. Verify a known chunk + pull its inclusion proof")
 
-    # Pretend a retriever returned the first ~120 chars of the document.
-    retrieved_chunk = document_text[: ingest_result.fingerprints[0].length]
+    # Retrieve the first authorized chunk (operator-blessed bytes,
+    # entry_kind=whole_chunk -> promotes to VERIFIED).
+    retrieved_chunk = authorized_chunks[0]
     chunk_fp = fp.fingerprint_chunk(retrieved_chunk)
     outcome = index.verify(chunk_fp)
     entry = index.lookup(chunk_fp)

@@ -21,6 +21,7 @@ pulling in any third-party crypto.
 from __future__ import annotations
 
 import hashlib
+import hmac as _hmac
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -64,7 +65,7 @@ class WindowHash:
     fingerprint: str
 
 
-def sha256_fingerprint(text: str) -> str:
+def sha256_fingerprint(text: str, pepper: bytes | None = None) -> str:
     """Compute the canonical SHA-256 fingerprint for a chunk of text.
 
     The text is encoded as UTF-8 before hashing. The output is prefixed with
@@ -72,11 +73,21 @@ def sha256_fingerprint(text: str) -> str:
 
     Args:
         text: The (already normalized) chunk of text to fingerprint.
+        pepper: Optional secret bytes turning the digest into
+            HMAC-SHA256(pepper, utf8(text)). Mitigates the confirmation
+            / dictionary attack on low-entropy corpora. Same output
+            width and prefix; identical semantics for indexing /
+            lookup as long as pepper is identical at ingest and at
+            verify. See :class:`FingerprinterConfig.pepper`.
 
     Returns:
         A string of the form ``"sha256:<64 hex chars>"``.
     """
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    payload = text.encode("utf-8")
+    if pepper is None:
+        digest = hashlib.sha256(payload).hexdigest()
+    else:
+        digest = _hmac.new(pepper, payload, hashlib.sha256).hexdigest()
     return f"sha256:{digest}"
 
 
@@ -173,7 +184,10 @@ class RollingHasher:
 
 
 def iter_window_hashes(
-    text: str, window_size: int, stride: int
+    text: str,
+    window_size: int,
+    stride: int,
+    pepper: bytes | None = None,
 ) -> Iterator[WindowHash]:
     """Yield a :class:`WindowHash` for each sliding window over ``text``.
 
@@ -216,7 +230,7 @@ def iter_window_hashes(
             offset=0,
             length=n,
             rolling_hash=rh.value,
-            fingerprint=sha256_fingerprint(text),
+            fingerprint=sha256_fingerprint(text, pepper=pepper),
         )
         return
 
@@ -228,7 +242,7 @@ def iter_window_hashes(
         offset=0,
         length=window_size,
         rolling_hash=hasher.value,
-        fingerprint=sha256_fingerprint(text[:window_size]),
+        fingerprint=sha256_fingerprint(text[:window_size], pepper=pepper),
     )
 
     # Slide. We roll one position at a time to keep the recurrence valid, but
@@ -240,5 +254,5 @@ def iter_window_hashes(
                 offset=i,
                 length=window_size,
                 rolling_hash=hasher.value,
-                fingerprint=sha256_fingerprint(text[i : i + window_size]),
+                fingerprint=sha256_fingerprint(text[i : i + window_size], pepper=pepper),
             )

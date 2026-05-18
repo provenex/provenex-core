@@ -4,6 +4,18 @@ The audience for this document is a security architect, a compliance reviewer, o
 
 If you only have time for one section, read the **what we don't protect against** part. Most of what kills software-security posture is a real attacker doing a thing the architecture was never designed to stop.
 
+## Trust root, stated up front
+
+Provenex's guarantees are rooted in **one piece of cryptographic key material** (HMAC secret or Ed25519 private key) and the **integrity of the index storage**. If either of those is fully compromised, no Provenex check catches it; defence at that point is operational (separation of duties, HSM-backed keys, witness gossip to a party the operator does not control). We say this first, in plain terms, because every detailed property below assumes this baseline. The OSS core ships the cryptographic primitives and a minimal local witness log ([Witness / checkpoint log (v0.8.0)](#witness--checkpoint-log-v080)); a hosted gossip cluster, transparency-log-backed policy bundles, and HSM key management are the commercial layer.
+
+Specific consequences operators should plan around:
+
+- A leaked signing key lets an attacker mint receipts that verify cleanly. Rotation and revocation are operational, not cryptographic; see [What if our signing key is compromised tomorrow?](#what-if-our-signing-key-is-compromised-tomorrow).
+- A read-write attacker who also has the index secret can append fake history that internally verifies. The Merkle log on its own catches insertions and removals to anyone who has previously seen a tree head; the witness log puts that property within the OSS layer. Split-view resistance against a key-holding operator additionally requires external publication of witness records.
+- The policy file is trust-rooted to the operator. The native YAML evaluator validates syntax, not business semantics. See [The policy file is trust-rooted to the operator](#the-policy-file-is-trust-rooted-to-the-operator).
+
+The rest of this document is precise about which threat each mechanism handles and which threat it does not.
+
 ## Attacker model
 
 Provenex is designed against three attackers with different capabilities. Throughout this doc, when we say "the attacker can detect / can't forge" we are stating that explicitly.
@@ -34,6 +46,16 @@ There are also non-adversarial threats: accidental corruption (a buggy script ov
 
 **Limitation:** the OSS reference implementation does not gossip tree heads to witnesses. That is a hosted-product feature. Self-hosted deployments need to publish tree heads themselves (signed, immutable, periodic) to gain the full benefit.
 
+### Window-aligned splice (substring promotion to VERIFIED)
+
+**Threat:** the ingest pipeline writes both a whole-document SHA-256 and many sliding-window fingerprints into the same provenance index. Pre-v0.8.0, both kinds of row were treated identically at verify time, so any 128-codepoint substring of an authorized document promoted to `VERIFIED` on its own. An attacker could carve a chunk that lines up with an indexed window and have it pass as authorized, even though no operator ever signed off on that substring as a discrete chunk. The strongest form of the same attack is to splice two authentic windows from two authorized documents and present the join as one authorized chunk.
+
+**Mechanism:** v0.8.0 added an `entry_kind` field on every index row, signed as part of the canonical row payload. Whole-chunk entries (`entry_kind="whole_chunk"`) are eligible for `VERIFIED` at verify time; sliding-window entries (`entry_kind="window"`) are retained only for structural locating and STALE reasoning, never for promotion. An attacker who flips the field via a storage-layer write invalidates the row signature and triggers `TAMPERED`.
+
+**Result:** a window-aligned substring returns `UNVERIFIED`; the receipt records the window locator metadata so an auditor can see that the bytes came from a known document at a known offset, but were not the operator-authorized chunk. Spliced concatenations of authentic windows also return `UNVERIFIED` because the splice's whole-chunk SHA-256 matches no whole-chunk row.
+
+**Reference:** [`tests/test_window_splice_redteam.py`](../tests/test_window_splice_redteam.py) carries the red-team coverage that asserts this property end-to-end.
+
 ### Injection of content that was never ingested
 
 **Mechanism:** any chunk that comes out of a retriever is re-fingerprinted and looked up in the provenance index. A chunk whose fingerprint isn't present in the index produces an `UNVERIFIED` outcome.
@@ -44,9 +66,17 @@ There are also non-adversarial threats: accidental corruption (a buggy script ov
 
 ### Tampering with the receipt itself
 
-**Mechanism:** the receipt is signed end-to-end. The signature covers the JSON canonical serialization of every field on the receipt (sources, policy, summary, transparency log head, output hash, timestamps) minus the signature block itself.
+**Mechanism:** the receipt is signed end-to-end. The signature covers the JSON canonical serialization of every field on the receipt (sources, policy, summary, transparency log head, output hash, timestamps, `request_binding`, `caller_hash`) minus the signature block itself.
 
 **Result:** any modification to the receipt body invalidates the signature. An auditor running `verify_receipt_signature` (or `provenex audit receipt.json`) detects the change and returns FAIL.
+
+### Re-presenting a receipt as evidence for a different query
+
+**Threat:** the link between a receipt and the request that produced it used to be implicit and operator-controlled. A valid signed receipt for query A could be presented downstream as evidence that query B was "grounded in authorized sources," because nothing on the receipt cryptographically committed to the actual triggering query.
+
+**Mechanism:** v0.8.0 added a top-level `request_binding` block to every receipt. The block carries `query_hash` (SHA-256 of the query / prompt text) and `request_context_hash` (SHA-256 of the canonical `request_context` minus session_id, which is excluded by the same rule used for `inputs_hash`), plus a combined `request_hash`. The block is part of the canonical signing payload, so an attacker who edits any of those fields invalidates the receipt signature. An auditor who has the original query and request_context re-derives the hashes and confirms a match.
+
+**Result:** a valid receipt is tied to one specific (query, request_context) pair. Re-presenting it as evidence for a different query is a forgery that any verifier with the originals will catch. The verbatim query text is never stored on the receipt; only its hash. Operators who omit `request_text` get `query_hash: null` recorded on the receipt so the absence is visible to an auditor reading the JSON.
 
 ### External verification without revealing the signing key
 
@@ -96,7 +126,7 @@ Schema 2.0.0 (Provenex v0.4) adds a unified `Policy` to receipts: a `policy.veri
 
 ### The policy file is trust-rooted to the operator
 
-The native YAML evaluator loads a policy file the operator configured. The evaluator does not validate that the policy is "correct" in any business sense — it only validates that the YAML parses and that no reserved-but-unimplemented features are present. An operator who controls the signing key AND the policy file can author any policy they want and produce decisions that verify cleanly under that policy.
+The native YAML evaluator loads a policy file the operator configured. The evaluator does not validate that the policy is "correct" in any business sense - it only validates that the YAML parses and that no reserved-but-unimplemented features are present. An operator who controls the signing key AND the policy file can author any policy they want and produce decisions that verify cleanly under that policy.
 
 The commercial transparency-log integration is the planned mitigation: `policy_version_hash` would be published to an append-only log, so an auditor handed a receipt can independently confirm the policy in effect at the time of the decision was the one the operator publicly committed to. In the open-source core, `policy_in_transparency_log` is always `false`. Until that field lights up, the policy file is trusted as configured by the operator, the same way the index signing key is trusted as configured by the operator.
 
@@ -109,6 +139,8 @@ Provenex's evaluator reads two kinds of input: chunk metadata (residency tags, c
 
 A defensible deployment binds as much policy-relevant metadata at ingest time as practical, and treats tag-at-evaluate as a separate audit concern.
 
+**Caller-predicated rules are necessarily at_evaluate.** Any rule that gates on `request.caller.role`, `request.caller.id`, `request.jurisdiction`, or `request.purpose` reads inputs that are inherently per-request and constructed at retrieval time. There is no at_ingest analog: the chunk did not "know" at ingest time who would later read it. So the tag-at-ingest story does not strengthen access-control rules of this shape; their trust class is fixed at `at_evaluate` regardless of how `chunk_metadata_binding` is declared. The receipt makes this explicit on every decision via `metadata_binding.request_context = "at_evaluate"`. Operators who want stronger guarantees over caller identity should harden the identity provider feeding `request_context.caller`, since that is the upstream trust root.
+
 **Schema 2.1.0** makes this distinction explicit on the receipt. Every decision record carries a `metadata_binding` field declaring the trust class of each input:
 
 ```json
@@ -118,7 +150,7 @@ A defensible deployment binds as much policy-relevant metadata at ingest time as
 }
 ```
 
-An auditor reading the receipt now sees, per chunk, whether the decision rested on signed-at-ingest tags or external-system-at-evaluate tags. `request_context` is always `at_evaluate` (the caller dict is constructed per-request). `chunk_metadata` is operator-declared via `verify_chunks(..., chunk_metadata_binding=...)`. The field is non-load-bearing for the decision itself — it does not change whether the chunk reaches the LLM — but it is load-bearing for *audit trust*: an auditor handed a receipt with everything `at_evaluate` is reading a weaker guarantee than one handed a receipt with `chunk_metadata: at_ingest`.
+An auditor reading the receipt now sees, per chunk, whether the decision rested on signed-at-ingest tags or external-system-at-evaluate tags. `request_context` is always `at_evaluate` (the caller dict is constructed per-request). `chunk_metadata` is operator-declared via `verify_chunks(..., chunk_metadata_binding=...)`. The field is non-load-bearing for the decision itself - it does not change whether the chunk reaches the LLM - but it is load-bearing for *audit trust*: an auditor handed a receipt with everything `at_evaluate` is reading a weaker guarantee than one handed a receipt with `chunk_metadata: at_ingest`.
 
 ### Operator-with-everything can produce any decision
 
@@ -174,7 +206,29 @@ A leaked Provenex database would let an attacker enumerate fingerprints (useless
 | Dependency | None (stdlib) | `cryptography>=42.0` (optional extra) |
 | Default for | In-house compliance: receipt producer and verifier are the same org | External auditors, cross-org provenance, regulator handoff |
 
-If in doubt, start with HMAC. Move to Ed25519 the moment a receipt needs to be verified by anyone outside your trust boundary.
+If in doubt, start with HMAC. Move to Ed25519 the moment a receipt needs to be verified by anyone outside your trust boundary. For receipts that may end up in a regulator's hands, Ed25519 is the right default; the OSS core ships it under the `[ed25519]` extra.
+
+### What security properties are in OSS vs commercial?
+
+We describe the split by property, not by feature, because operators need to know which threat is and is not addressed in the OSS layer before they pick a deployment shape.
+
+| Security property | OSS layer | Requires commercial |
+| --- | --- | --- |
+| Detect tampering with any single index row (without the index secret) | Yes (HMAC-signed rows, since v0.1). | n/a |
+| Detect insertion / removal of rows by an attacker WITHOUT the index secret | Yes (Merkle transparency log, optional). | n/a |
+| Detect insertion / removal of rows by an attacker WITH the index secret | Partial: an external party who has seen any earlier tree head detects divergence locally. The local witness log (v0.8.0) gives operators the signed checkpoint record. | **Split-view resistance against a key-holding operator requires external witness gossip:** publish witness records to a store the operator does not control, or use a hosted Provenex witness cluster that gossips signed tree heads. The OSS layer emits the producer-side artifact; closing the property end-to-end requires either operator-disciplined publication or the hosted cluster. |
+| **Non-repudiation against the operator (no plausible-deniability via retroactive history rewrite)** | Partial: the witness log + Ed25519 signing gives the cryptographic backbone. | Same as split-view: needs external gossip to a third party. HSM-backed key storage closes the "exfiltrate the key, rewrite anyway" residual. |
+| Verifiable offline by a regulator (no Provenex infrastructure dependency) | Yes (Ed25519 + signed receipts). | n/a |
+| Window-aligned splice control (substrings cannot promote to VERIFIED) | Yes (entry_kind, v0.8.0). | n/a |
+| Receipt-to-request binding (a receipt cannot be re-presented for a different query) | Yes (`request_binding`, v0.8.0). | n/a |
+| Five-outcome precedence (TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED) | Yes (codified in `OUTCOME_PRECEDENCE`, v0.8.0). | n/a |
+| Peppered fingerprints (blunts confirmation attack on low-entropy corpora) | Yes (`FingerprinterConfig.pepper`, v0.8.0). | n/a |
+| Trajectory-level rules / cross-decision aggregations / external-data lookups in the policy engine | No (deliberately refused, see [`docs/policy.md`](policy.md)). | Available via the Rego adapter; trade-off: trajectory rules in-engine give up the audit-anchor guarantees that per-decision purity provides. |
+| Compliance-grade export formats (PDF, CSV, JSON-LD) | No. | Yes. |
+| Hosted distributed signed-append-only index, Bloom-filter acceleration at 10M+ scale, transparency-log-backed policy bundle publication | No. | Yes. |
+| HSM-backed Ed25519 key custody, IdP integration, dedicated support / SLA | No. | Yes. |
+
+The OSS layer covers every cryptographic property a single-operator deployment needs to defend itself against external attackers and accidental corruption. The commercial layer adds the properties that require coordination outside the operator's own infrastructure: gossip witnesses, hosted append-only storage, HSM custody, and the policy-language layer (Rego / OPA service) that brings stateful enforcement at the cost of per-decision purity.
 
 ### What does Provenex *do* when it detects tampering?
 
@@ -197,13 +251,21 @@ The ingest API takes whatever bytes you give it. If your application calls `inge
 
 ### How does this interact with PII / GDPR / data residency?
 
-Provenex stores SHA-256 hashes of normalized chunk text plus caller-chosen identifiers. We do not consider one-way hashes to be PII in most regulatory frameworks (notably, GDPR Recital 26: pseudonymous data that cannot reasonably be linked back to a person without additional information). Consult your DPO / regulatory counsel.
+Provenex stores SHA-256 hashes of normalized chunk text plus caller-chosen identifiers. One-way SHA-256 hashes are not directly reversible, which is the property GDPR Recital 26 cites in the pseudonymisation guidance. That property is necessary but not sufficient: for a **low-entropy corpus**, an attacker who has plausible candidate plaintexts (an HR template library, a fixed policy boilerplate, an enumerable form) can recompute the unpeppered SHA-256 of each candidate and confirm presence in the index. The hash is not reversible, but it is testable, and a confirmation attack against an enumerable space can effectively re-link a hash to its plaintext given enough context. v0.8.0 added a per-deployment **pepper** ([Item 8 / `FingerprinterConfig.pepper`](how_it_works.md#peppered-fingerprint-mode-for-low-entropy-corpora)) that turns the hash into HMAC-SHA256(pepper, normalized) and blunts the confirmation channel, but the underlying point stands: regulatory categorisation of fingerprints in your corpus depends on the corpus's entropy and the specific test your regulator applies. **Consult your DPO / regulatory counsel.** Don't take a sentence in this README as a substitute for that conversation.
 
-Caller-chosen `document_id` is the variable here: if you encode PII into `document_id`, the provenance index now contains that PII. Don't do that. Use stable opaque identifiers (UUIDs, hashes of source URLs, etc.).
+Caller-chosen `document_id` is the variable that operators most often get wrong: if you encode PII into `document_id`, the provenance index now contains that PII. Don't do that. Use stable opaque identifiers (UUIDs, hashes of source URLs, etc.).
 
 ### Where is the audited reference implementation?
 
-[`provenex/`](../provenex/) is about 1,200 lines across normalizer, hasher, fingerprinter, index, policy, receipt, and ed25519. The algorithm is small enough to be reviewed end-to-end in an afternoon. That is the point of open-sourcing the core.
+[`provenex/`](../provenex/) is the OSS core. See [`docs/how_it_works.md`](how_it_works.md) for the line-by-line walkthrough with source pointers, and `provenex selftest` for a self-contained conformance check of the installed binary against the documented properties.
+
+## Witness / checkpoint log (v0.8.0)
+
+Source: [`provenex/core/witness.py`](../provenex/core/witness.py); tests: [`tests/test_witness_log.py`](../tests/test_witness_log.py).
+
+The witness log is a hash-chained, signed, append-only JSONL log of `(checkpoint_index, tree_size, tree_root, issued_at)` records. Each record's `previous_checkpoint_hash` is the SHA-256 over the prior record's canonical JSON including its signature, and the signature covers `previous_checkpoint_hash`, so retroactively editing record N requires also reforging every record after N (otherwise the chain link fails at N+1). The class is the producer-side artifact of the standard CT witness pattern: the operator publishes each line to a store the operator does not retroactively control, which is what closes split-view resistance against a key-holding attacker. The class docstring spells out which properties the local log alone provides (tamper-detection on past records, truncation detection if the verifier has seen any earlier record) and which require external publication (split-view across two parallel histories).
+
+`provenex selftest` includes a check that the chain integrity property still holds on the installed binary.
 
 ## Reference implementations of specific defences
 
@@ -211,5 +273,9 @@ Caller-chosen `document_id` is the variable here: if you encode PII into `docume
 - Merkle transparency log: [`provenex/index/merkle_sqlite_index.py`](../provenex/index/merkle_sqlite_index.py), [`provenex/core/merkle.py`](../provenex/core/merkle.py)
 - Receipt signing (HMAC + Ed25519 + signer interface): [`provenex/core/receipt.py`](../provenex/core/receipt.py), [`provenex/core/ed25519.py`](../provenex/core/ed25519.py)
 - Offline verification: [`provenex/core/merkle.py`](../provenex/core/merkle.py) `verify_inclusion_proof`, `provenex/cli/main.py` `_cmd_audit`
+- Window-splice control: [`provenex/index/base.py`](../provenex/index/base.py) `ENTRY_KIND_*` + [`provenex/index/sqlite_index.py`](../provenex/index/sqlite_index.py) `verify()`
+- Receipt-to-request binding: [`provenex/core/receipt.py`](../provenex/core/receipt.py) `compute_request_binding`
+- Witness / checkpoint log: [`provenex/core/witness.py`](../provenex/core/witness.py)
+- Conformance self-test: [`provenex/cli/main.py`](../provenex/cli/main.py) `_cmd_selftest`
 
 If you find a security issue, please report it privately to `security@provenex.ai` rather than via a public issue.

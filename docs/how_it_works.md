@@ -2,7 +2,7 @@
 
 This document is for someone who needs to audit the algorithm: a security reviewer, a regulator, an internal compliance team. It walks through every step from ingestion to receipt verification, with enough detail to reimplement the system from scratch.
 
-The matching source is in [`provenex/`](../provenex/) and is small: roughly 1,200 lines across normalizer, hasher, fingerprinter, index, policy, and receipt. Anyone reading this doc should also read the code.
+The matching source is in [`provenex/`](../provenex/). The security-critical surface (normalizer, hasher, fingerprinter, index, policy, receipt, ed25519, merkle, witness) is the part this document walks through; the source pointers below take you straight to it. Anyone reading this doc should also read the code. We deliberately keep this surface small and pure-stdlib for the same reason banks demand JSON-able policy files: a reviewer who needs to certify the algorithm should be able to read every load-bearing function in one sitting.
 
 ## The problem
 
@@ -10,7 +10,7 @@ A RAG pipeline retrieves chunks of text and passes them to an LLM. After the LLM
 
 Provenex fixes this by attaching a cryptographically signed receipt to every retrieval that records, per chunk: a one-way fingerprint, the source document's identity and version, when it was ingested, whether it was authorized at retrieval time, the verification outcome, and the per-chunk access-control decision. The receipt covers an LLM-output hash and is signed end-to-end.
 
-> **Decision and proof, not execution.** Provenex is an admission controller for AI data access — it evaluates each chunk against policy at the access point, records the decision, and returns allow / deny / verdict. It does NOT become the data path: the retriever still calls the vector DB; Provenex does not hold OAuth tokens, proxy network calls, or sit on the critical path between caller and storage. Kubernetes admission controllers do not run workloads; they decide whether workloads are admitted. That is the model. This scope discipline is what keeps Provenex a policy engine rather than an integration platform with the operational burden of one. (The same scope line applies to tool-call enforcement in a separate repo — it intercepts at the MCP boundary and emits a signed receipt, never brokers the actual tool call.)
+> **Decision and proof, not execution.** Provenex is an admission controller for AI data access - it evaluates each chunk against policy at the access point, records the decision, and returns allow / deny / verdict. It does NOT become the data path: the retriever still calls the vector DB; Provenex does not hold OAuth tokens, proxy network calls, or sit on the critical path between caller and storage. Kubernetes admission controllers do not run workloads; they decide whether workloads are admitted. That is the model. This scope discipline is what keeps Provenex a policy engine rather than an integration platform with the operational burden of one. (The same scope line applies to tool-call enforcement in a separate repo - it intercepts at the MCP boundary and emits a signed receipt, never brokers the actual tool call.)
 
 ## Four components
 
@@ -45,7 +45,7 @@ The rolling hash itself is **not cryptographic**. It exists to make windowing ch
 
 This two-stage design (fast rolling hash for windowing, cryptographic hash for identity) is a standard technique in content-defined chunking and document fingerprinting. We chose Rabin-Karp specifically over alternatives (Buzhash, polynomial hashing variants) because the recurrence is recognizable to any security reviewer; auditability beats microbenchmark wins on a non-bottleneck.
 
-The chunk's text content is also fingerprinted as a single SHA-256 over the whole normalized chunk. The provenance index stores both the chunk-level and the sliding-window fingerprints, so verification succeeds whether the retriever returns chunks shaped exactly as ingested or further re-chunked.
+The chunk's text content is also fingerprinted as a single SHA-256 over the whole normalized chunk. The provenance index stores both the chunk-level entry (with `entry_kind="whole_chunk"`) and the sliding-window entries (with `entry_kind="window"`). Only whole-chunk entries are eligible for `VERIFIED` at verify time; window entries are retained for structural locating only, and an auditor reading a window-locator UNVERIFIED outcome sees the offset and length of the locator that matched. This is the **window-aligned splice control**: a 128-codepoint substring of an authorized document does NOT promote to `VERIFIED` on its own, even though its hash is in the index, because the matched row is a window entry. Re-chunking robustness is therefore narrower than v0.7 advertised: a retriever that returns the operator-authorized chunks verifies cleanly, but a chunk shape that drifts to land on window boundaries is treated as unverified bytes rather than authorized content. The `entry_kind` field is part of the canonical row payload, so the classification is tamper-evident at the storage layer. See the threat-model section [Window-aligned splice (substring promotion to VERIFIED)](threat_model.md#window-aligned-splice-substring-promotion-to-verified) for the full control statement.
 
 ### 2. The provenance index
 
@@ -107,9 +107,25 @@ The result is one of five outcomes:
 
 A configurable `verification` gate (the verification half of the unified `Policy`) decides which outcomes block the chunk before reaching the next stage. The receipt records both the kept chunks and the blocked chunks, so the picture is complete regardless of policy.
 
+**Precedence among outcomes when several could apply.** A row may satisfy more than one outcome condition simultaneously: the signature is broken AND the document is unauthorized, the document is unauthorized AND the row is superseded, and so on. The engine picks a single dominant outcome via a fixed precedence:
+
+```
+TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED
+```
+
+The order encodes a defensive priority: an integrity break is the most important thing to surface, an authorisation revocation outranks a version-supersession concern, and `VERIFIED` is the only "all clear" state. UNVERIFIED is the absent-entry sentinel; it applies only when no row matched at all, so it cannot shadow any other outcome. The precedence is exposed as `OUTCOME_PRECEDENCE` and `reduce_outcomes()` in [`provenex.index.base`](../provenex/index/base.py) so callers and downstream tools reason about it the same way the engine does. The corresponding red-team coverage lives in [`tests/test_outcome_precedence.py`](../tests/test_outcome_precedence.py).
+
+**Supersession is an operational contract, not a heuristic.** When a document is re-ingested with new content, the index's `add()` (called with the same `document_id` and a new `document_version`) marks all older fingerprints as superseded automatically. The contract: **whoever owns the ingest path is responsible for invoking that call against every Provenex index that holds the old version**, every time the underlying document changes. If a document is re-ingested only to the vector store but the Provenex index never sees a new version, the old chunks stay `VERIFIED` forever and the access decision silently uses out-of-date content. The CLI's `provenex index audit --index <db>` command surfaces two failure modes the contract guards against (stale documents that have not been re-ingested in N days; unsuperseded older versions still flagged not-superseded after a re-ingest skipped the API). Wire that command into CI / cron at a cadence matching your re-ingest discipline.
+
+### Peppered fingerprint mode (for low-entropy corpora)
+
+Plain SHA-256 is one-way but not unguessable: an attacker with candidate plaintexts (HR template snippets, fixed policy boilerplate, an enumerable form) can recompute the SHA-256 of each candidate and confirm presence in the index. The hash is not reversible, but it is testable. For low-entropy corpora this re-links a hash to its plaintext given enough context.
+
+The pepper option turns the hash into `HMAC-SHA256(pepper, normalized_bytes)`. A per-deployment secret pepper means an attacker who guesses the plaintext also needs the pepper to confirm presence. Two deployments with different peppers produce different fingerprints for identical content (per-deployment unlinkability of fingerprints). The prefix on disk stays `sha256:` because the output is still a SHA-256-based digest of the same width; downstream tooling reads the same. **Pepper must be identical at ingest and at verify**, and rotating it requires re-ingesting the corpus. Source: [`provenex.core.fingerprinter.FingerprinterConfig.pepper`](../provenex/core/fingerprinter.py).
+
 ### 4. Data-access policy evaluation
 
-The verification outcome answers "did this chunk come from where we said, and is it intact?" A separate question — "is the caller allowed to see this chunk?" — is answered by the data-access policy evaluator (the `access_control` half of the unified `Policy`, schema 2.0.0).
+The verification outcome answers "did this chunk come from where we said, and is it intact?" A separate question - "is the caller allowed to see this chunk?" - is answered by the data-access policy evaluator (the `access_control` half of the unified `Policy`, schema 2.0.0).
 
 Provenex ships an evaluator-agnostic `PolicyEvaluator` protocol with one reference backend in the open-source core: the native YAML DSL ([`provenex/policy/yaml_evaluator.py`](../provenex/policy/yaml_evaluator.py)). The Rego adapter and the OPA-service adapter ship commercially. The decision shape on the receipt is the same regardless of backend.
 
@@ -119,7 +135,7 @@ The flow for each chunk:
 2. If `policy.access_control` is configured, build a `ChunkContext` (document_id, document_version, ingested_at, opaque metadata tags, content_source) and pass it with the operator-supplied `RequestContext` (caller, jurisdiction, purpose, timestamp) to `evaluator.evaluate(...)`. The evaluator returns `allow` or `deny` plus the names of rules that fired.
 3. The chunk reaches the LLM only if BOTH gates pass: the verification policy AND the access-control policy.
 
-The verification outcome and the policy decision are independent. A `VERIFIED` chunk can still be policy-denied (wrong jurisdiction, missing role). A `STALE` chunk can still be policy-allowed (the policy explicitly accepts stale chunks for non-critical contexts). The receipt records both verdicts on every chunk — `sources[i].verification_outcome` and `policy.access_control.decisions[i].decision` — so an auditor can reason about them independently.
+The verification outcome and the policy decision are independent. A `VERIFIED` chunk can still be policy-denied (wrong jurisdiction, missing role). A `STALE` chunk can still be policy-allowed (the policy explicitly accepts stale chunks for non-critical contexts). The receipt records both verdicts on every chunk - `sources[i].verification_outcome` and `policy.access_control.decisions[i].decision` - so an auditor can reason about them independently.
 
 The policy bundle is canonicalized (key-sorted JSON, no whitespace) and hashed with SHA-256 to produce the `policy_version_hash`. Two policies that differ only in formatting hash to the same value. This is the field that would be published to a transparency log in the commercial transparency-log integration, so auditors can independently confirm which policy was in effect at the time of a decision.
 
@@ -130,17 +146,35 @@ See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator prot
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `2.0.0`) and `issuer` (`provenex-core/0.4.0`)
+- `schema_version` (currently `2.4.0`) and `issuer` (`provenex-core/0.8.0`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
-- The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied)
+- The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied, `entry_kind`)
 - The unified `policy` block: `policy.verification` (always present) and `policy.access_control` (optional, with per-chunk decisions)
+- A `caller_hash` top-level field (schema 2.3.0+) and a `request_binding` block (schema 2.4.0+, see below)
 - A summary (`total_chunks`, counts per outcome, `overall_status` of `PASS` / `PARTIAL` / `FAIL`)
 - A signature block (`algorithm`, `value`)
 
 The signature is computed over the canonical JSON serialization of the receipt: keys sorted, no whitespace, the signature block itself omitted from the payload. Anyone with the receipt and the signing key can recompute the payload, recompute the signature, and confirm a match.
 
-The default signer is HMAC-SHA256 (`HmacSha256Signer`). For asymmetric verification (so auditors can verify without holding the signing key), use `Ed25519Signer` from the optional `[ed25519]` extra. Both implement the same `ReceiptSigner` interface; the receipt structure is identical. Source: [`provenex/core/receipt.py`](../provenex/core/receipt.py) and [`provenex/core/ed25519.py`](../provenex/core/ed25519.py).
+The default signer for in-house deployments is HMAC-SHA256 (`HmacSha256Signer`). For receipts that cross an organisational boundary (regulator handoff, cross-org provenance, external auditor), use `Ed25519Signer` from the optional `[ed25519]` extra so the verifier holds only the public key and cannot forge. Both implement the same `ReceiptSigner` interface; the receipt structure is identical. Source: [`provenex/core/receipt.py`](../provenex/core/receipt.py) and [`provenex/core/ed25519.py`](../provenex/core/ed25519.py).
+
+### Request-to-receipt binding (schema 2.4.0+)
+
+The link between a receipt and the request that produced it is no longer implicit: every receipt carries a top-level `request_binding` block that hashes the triggering query and the canonical request_context into the signed payload.
+
+```json
+"request_binding": {
+  "algorithm": "sha256",
+  "query_hash": "sha256:b7a1e09c...",
+  "request_context_hash": "sha256:31d8e94c...",
+  "request_hash": "sha256:c2f6a18d..."
+}
+```
+
+`query_hash` is `SHA-256(utf8(request_text))` when `verify_chunks(..., request_text=...)` or `admission_check(..., request_text=...)` is called; absent otherwise (recorded as `null` so the omission is explicit). `request_context_hash` is `SHA-256` over the canonical JSON of the request_context's `caller / jurisdiction / purpose / timestamp` (session_id is excluded by the same rule that excludes it from `inputs_hash`). `request_hash` is the SHA-256 join of the two so an auditor compares one value rather than two. The block is part of the canonical signing payload, so editing any of the three hashes invalidates the receipt signature. A regulator who holds the original query and request_context re-derives the hashes and confirms a match.
+
+The verbatim query text is never stored on the receipt. Operators who include `request_text` are buying receipt-to-request binding for their compliance posture; those who skip it leave the binding incomplete and the auditor can see exactly which half is missing.
 
 ## Determinism
 
@@ -166,5 +200,8 @@ For the full attacker model, defended and undefended threats, and the security F
 - [`provenex/index/merkle_sqlite_index.py`](../provenex/index/merkle_sqlite_index.py): SQLite index with an RFC 6962 transparency log layered over the same rows
 - [`provenex/core/merkle.py`](../provenex/core/merkle.py): RFC 6962 Merkle tree primitive and stateless inclusion-proof verifier
 - [`provenex/policy/policy.py`](../provenex/policy/policy.py): `VerificationPolicy`, block/flag matrix, status reduction
-- [`provenex/core/receipt.py`](../provenex/core/receipt.py): receipt model, builder, signer interface, signature verification
+- [`provenex/core/receipt.py`](../provenex/core/receipt.py): receipt model, builder, signer interface, signature verification, `compute_request_binding`
+- [`provenex/core/witness.py`](../provenex/core/witness.py): hash-chained signed checkpoint log over the Merkle tree head
+- [`provenex/cli/main.py`](../provenex/cli/main.py): CLI including `provenex selftest` (conformance), `provenex index audit` (supersession lint)
 
+Run `provenex selftest` after install to confirm the binary's pipeline matches every property this document describes.

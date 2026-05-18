@@ -25,11 +25,11 @@ What it shows, in order:
        "model_inference".
 
     4. All three linked into one trajectory. ``provenex audit
-       --trajectory`` validates the whole DAG end-to-end — mixed step
+       --trajectory`` validates the whole DAG end-to-end - mixed step
        kinds, one signed audit trail.
 
-The pitch: every action class an agent takes — read corpus, read
-memory, write memory, call a model, call a tool — produces one signed
+The pitch: every action class an agent takes - read corpus, read
+memory, write memory, call a model, call a tool - produces one signed
 receipt under one trajectory. The receipts are the source-of-record
 a downstream anomaly detector / SIEM consumes; we don't compete with
 the detector.
@@ -69,7 +69,7 @@ CYAN = "\033[36m" if _TTY else ""
 RESET = "\033[0m" if _TTY else ""
 
 
-# Synthetic memory entry — what the agent stored earlier in the session
+# Synthetic memory entry - what the agent stored earlier in the session
 # and is now reading back as context.
 MEMORY_ENTRY = (
     "User u_42 last reported the auth-gateway 5xx issue on 2026-05-13. "
@@ -91,7 +91,7 @@ def step(num: int, kind: str, title: str) -> None:
         "memory_write": YELLOW,
         "model_inference": CYAN,
     }.get(kind, GREEN)
-    print(f"{BOLD}{colour}STEP {num} — {kind.upper()}{RESET}  {DIM}{title}{RESET}")
+    print(f"{BOLD}{colour}STEP {num} - {kind.upper()}{RESET}  {DIM}{title}{RESET}")
 
 
 def summary_line(label: str, value: str) -> None:
@@ -150,7 +150,7 @@ def main() -> int:
         )
 
         # --- Step 0: memory_read --- #
-        banner("2. Step 0 — agent reads memory")
+        banner("2. Step 0 - agent reads memory")
         step(0, "memory_read", "verify_memory(...)")
         r0 = verify_memory(
             [MEMORY_ENTRY],
@@ -172,7 +172,7 @@ def main() -> int:
 
         # --- Step 1: memory_write --- #
         banner(
-            "3. Step 1 — agent persists an updated preference "
+            "3. Step 1 - agent persists an updated preference "
             "(value redacted on the receipt)"
         )
         step(1, "memory_write", "admit_memory_write(...)")
@@ -195,7 +195,7 @@ def main() -> int:
         summary_line("step_kind", d["trajectory"]["step_kind"])
         summary_line("action.name", action["name"])
         summary_line("action.operation", action["operation"])
-        summary_line("action.target_system", action.get("target_system", "—"))
+        summary_line("action.target_system", action.get("target_system", "-"))
         summary_line(
             "value redacted?",
             f"{GREEN}yes{RESET}" if "value" not in action["parameters"]
@@ -214,7 +214,7 @@ def main() -> int:
 
         # --- Step 2: model_inference --- #
         banner(
-            "4. Step 2 — agent invokes Claude Opus "
+            "4. Step 2 - agent invokes Claude Opus "
             "(prompt redacted on the receipt)"
         )
         step(2, "model_inference", "admit_model_inference(...)")
@@ -288,11 +288,11 @@ def main() -> int:
                 f"{DIM}3 receipts. 3 step kinds. One signed audit trail.{RESET}"
             )
         else:
-            print(f"  {RED}{BOLD}AUDIT FAILED — investigate above{RESET}")
+            print(f"  {RED}{BOLD}AUDIT FAILED - investigate above{RESET}")
 
         # --- Show that the verbatim values are recoverable from the hashes
         #     (when the detector has them out-of-band) --- #
-        banner("6. The hashes are the audit anchor — recoverable out-of-band")
+        banner("6. The hashes are the audit anchor - recoverable out-of-band")
         from provenex import compute_value_hash
 
         mem_value = {

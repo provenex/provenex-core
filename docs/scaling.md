@@ -106,8 +106,8 @@ still fit in 32 hashes.
 | Max observed | 64 µs |
 | Rules in policy | 3 (jurisdiction, PII gate, freshness) |
 
-The native YAML evaluator runs well under verification latency — the
-access-control gate is not the bottleneck. A typical 5–10 chunk
+The native YAML evaluator runs well under verification latency - the
+access-control gate is not the bottleneck. A typical 5-10 chunk
 retrieval adds <0.5 ms of policy overhead on top of verification.
 The policy is independent of corpus size: latency depends on the
 number of rules and the depth of metadata paths, not on the index.
@@ -174,7 +174,7 @@ bottleneck. None of this changes the headline claim.
 
 | Workload | Primary bottleneck | Secondary |
 |---|---|---|
-| Fingerprint | Python interpreter overhead (~50–60 µs) | SHA-256 compute (~5 µs software) |
+| Fingerprint | Python interpreter overhead (~50-60 µs) | SHA-256 compute (~5 µs software) |
 | Index add | SQLite write + Merkle tree update | Page cache pressure as DB grows |
 | Verify | SQLite point lookup | Five-outcome state machine (negligible) |
 | Proof gen | SQLite reads of Merkle internal nodes | Hash assembly |
@@ -185,7 +185,7 @@ the cryptographic work itself. An 800-char chunk needs roughly 12
 sliding-window hashes; each `hashlib.sha256()` call costs a few
 microseconds in interpreter dispatch alone. SHA-NI would shave the
 SHA-256 portion but leave the dispatch cost. **The realistic
-single-thread fingerprint ceiling on faster hardware is ~30–40 µs**, not
+single-thread fingerprint ceiling on faster hardware is ~30-40 µs**, not
 the 5× speedup the hash itself would imply.
 
 ### Index footprint
@@ -225,22 +225,22 @@ factors that move and gives a **range**.
 
 | Improvement source | Helps which workload | Expected magnitude |
 |---|---|---|
-| **Hardware SHA-256 (SHA-NI / ARMv8 crypto)** | Offline proof verify; minor on fingerprint | 2–3× on pure-SHA paths (offline verify); ~10–20% on fingerprint (mostly Python overhead) |
-| **Higher sustained clock** (4.5–5.0 GHz vs 2.2 GHz base) | All Python-bound paths | 1.5–2× on fingerprint, verify, proof gen |
+| **Hardware SHA-256 (SHA-NI / ARMv8 crypto)** | Offline proof verify; minor on fingerprint | 2-3× on pure-SHA paths (offline verify); ~10-20% on fingerprint (mostly Python overhead) |
+| **Higher sustained clock** (4.5-5.0 GHz vs 2.2 GHz base) | All Python-bound paths | 1.5-2× on fingerprint, verify, proof gen |
 | **Larger L3 + better mem bandwidth** | Verify and proof gen as index grows | Modest, single-digit % |
-| **Single-thread perf (IPC)** | All Python paths | ~10–30% generation-over-generation |
+| **Single-thread perf (IPC)** | All Python paths | ~10-30% generation-over-generation |
 
 A reasonable bound on a current-gen server CPU (Sapphire Rapids,
 Genoa, Graviton4, M3 Max) running the **same single-threaded code**:
-fingerprint ~30–45 µs, verify ~150–250 µs, proof gen ~150–250 µs,
-offline verify ~15–25 µs. Sustained ingest throughput **on a single
-process** likely lands in the **3,000–5,000 chunks/sec** range.
+fingerprint ~30-45 µs, verify ~150-250 µs, proof gen ~150-250 µs,
+offline verify ~15-25 µs. Sustained ingest throughput **on a single
+process** likely lands in the **3,000-5,000 chunks/sec** range.
 
 ### IO axis
 
 | Improvement source | Helps which workload | Expected magnitude |
 |---|---|---|
-| **Enterprise NVMe with battery-backed write cache** | Index add (SQLite WAL flushes) | 2–5× on the p999 tail of index_add |
+| **Enterprise NVMe with battery-backed write cache** | Index add (SQLite WAL flushes) | 2-5× on the p999 tail of index_add |
 | **More RAM (so the index page-caches fully)** | Verify and proof gen | Pulls p99 closer to p50 |
 
 ### Parallelism: the big lever, not yet enabled
@@ -251,8 +251,8 @@ parallelize ingest. The two natural cut points:
 1. **Per-document parallel fingerprinting.** Each chunk's SHA-256 is
    independent; a `concurrent.futures.ProcessPoolExecutor` over chunks
    would scale near-linearly in cores until SQLite write contention
-   dominates. On a 16-core box: expect **8–12× ingest speedup** from
-   this alone, dropping a 1M-chunk run from ~12 min to **~1–2 min**.
+   dominates. On a 16-core box: expect **8-12× ingest speedup** from
+   this alone, dropping a 1M-chunk run from ~12 min to **~1-2 min**.
 2. **Sharded indexes per document range.** For multi-tenant workloads
    where tenants don't share a tree, run N independent indexes. Scales
    linearly in cores and disks.
@@ -272,11 +272,11 @@ For an enterprise sizing the system, a defensible projection is:
 
 | | This laptop (measured) | Modern server, single-process (estimate) | Modern server, parallel (estimate) |
 |---|---|---|---|
-| Ingest (chunks/sec) | 1.4k | 3–5k | 15–40k |
-| Verify p99 | 599 µs | 250–400 µs | same (verify is per-request) |
-| Proof gen p99 | 444 µs | 200–300 µs | same |
-| Offline-verify p99 | 51 µs | 20–30 µs | same |
-| 1M-chunk ingest wall time | 12.2 min | 3–6 min | **~1–2 min** |
+| Ingest (chunks/sec) | 1.4k | 3-5k | 15-40k |
+| Verify p99 | 599 µs | 250-400 µs | same (verify is per-request) |
+| Proof gen p99 | 444 µs | 200-300 µs | same |
+| Offline-verify p99 | 51 µs | 20-30 µs | same |
+| 1M-chunk ingest wall time | 12.2 min | 3-6 min | **~1-2 min** |
 
 Verify, proof gen, and offline verify don't benefit from server-side
 parallelism because each is already a single request. They benefit
@@ -294,7 +294,7 @@ python -m bench.scale --scale 1m
 python -m bench.scale --scale 100k
 
 # Real text (Wikipedia snapshot, requires one-time fetch):
-python -m bench.wiki_fetch --count 8000  # ~10–15 min, one-time
+python -m bench.wiki_fetch --count 8000  # ~10-15 min, one-time
 python -m bench.scale --scale 100k --corpus wiki
 ```
 
@@ -359,7 +359,7 @@ The deltas are what we publish.
 ### What we'd expect
 
 - **Ingest overhead:** `provenex.add` at 184 µs vs an embedder at ~10 ms is **~2% extra latency**. The marketing-true sentence is "Provenex is a rounding error on your ingest pipeline."
-- **Query overhead:** verify at 371 µs × top-k (say k=10) = **~3.7 ms** added to a query that already costs ~10 ms (embed) + 1–5 ms (ANN). Roughly **30–50% additive on query latency**, which is honest. Verification isn't free, but it's bounded and predictable.
+- **Query overhead:** verify at 371 µs × top-k (say k=10) = **~3.7 ms** added to a query that already costs ~10 ms (embed) + 1-5 ms (ANN). Roughly **30-50% additive on query latency**, which is honest. Verification isn't free, but it's bounded and predictable.
 
 Those numbers are the prediction; the phase-2 bench is what turns them
 into measurements.
@@ -375,7 +375,7 @@ scale bench.
 
 ## Multi-node deployment shape (Postgres backend)
 
-The benchmarks above were run against `MerkleSQLiteProvenanceIndex` —
+The benchmarks above were run against `MerkleSQLiteProvenanceIndex` -
 single process, single file, the simplest possible deployment. Real
 enterprise deployments run multiple application pods across multiple
 clusters and need a backend that handles concurrent ingest and
@@ -391,7 +391,7 @@ index = PostgresProvenanceIndex(
 
 Same `ProvenanceIndex` interface as the SQLite backend, same canonical
 HMAC payload, same receipt schema. A receipt produced against one
-backend verifies identically against the other — so you can develop on
+backend verifies identically against the other - so you can develop on
 SQLite locally and run on Postgres in production without any signing
 or audit-trail discontinuity.
 
@@ -402,8 +402,8 @@ or audit-trail discontinuity.
 | **Verify** (per-request, latency-critical) | Postgres read replicas | Many | Verify is a point-lookup on the indexed `fingerprint` column. Scales horizontally across replicas. |
 | **Ingest** (batch, throughput-oriented) | Postgres primary | One ingester pod recommended | Postgres handles multi-writer ingest correctly (row-locked supersession), but the Merkle-augmented index keeps an in-process tree that is per-process. Single ingester avoids tree-divergence under multi-writer until that becomes a multi-process tree (commercial roadmap). |
 
-For deployments that only need the non-Merkle properties — verification,
-five outcomes, signed rows, no transparency log — multiple ingester pods
+For deployments that only need the non-Merkle properties - verification,
+five outcomes, signed rows, no transparency log - multiple ingester pods
 are fully supported on `PostgresProvenanceIndex`. The single-ingester
 recommendation only applies to `MerklePostgresProvenanceIndex`.
 
@@ -419,7 +419,7 @@ keep in mind when sizing:
    (verify p50 371 µs) are a useful floor; Postgres adds RTT but parallelises
    across pods.
 2. **Ingest throughput** on a single primary is bounded by
-   transaction commit and WAL flush — typically **5–15k commits/sec**
+   transaction commit and WAL flush - typically **5-15k commits/sec**
    on managed Postgres with the write cache enabled. Batching ingest
    across documents (multiple chunks per transaction) is the right
    tuning lever; we'll add a batched `add_many` to the interface in a
@@ -436,7 +436,7 @@ keep in mind when sizing:
   steady-state with the index hot in the OS page cache. A cold-start
   verify would be slower; bench doesn't isolate that yet.
 - **Concurrent reader-writer p99 under load.** What verify p99 looks
-  like while ingest is running into the same index — measured against
+  like while ingest is running into the same index - measured against
   Postgres, will be the more useful number than the current SQLite
   single-process figure.
 - **Network-attached storage.** All current measurements are on a

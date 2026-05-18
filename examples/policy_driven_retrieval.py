@@ -3,9 +3,9 @@
 This is the v0.4 showcase. It demonstrates BOTH halves of the policy
 enforcement layer:
 
-    * The verification gate — five-outcome check against the signed index
+    * The verification gate - five-outcome check against the signed index
       (VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED).
-    * The access-control gate — native YAML DSL evaluator with rules over
+    * The access-control gate - native YAML DSL evaluator with rules over
       chunk metadata (residency, classification, PII tags) and request
       context (caller, jurisdiction, purpose).
 

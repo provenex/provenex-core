@@ -23,9 +23,11 @@ from .core.receipt import (
     ReceiptBuilder,
     ReceiptSigner,
     compute_caller_hash,
+    compute_request_binding,
     compute_value_hash,
     verify_receipt_signature,
 )
+from .core.witness import WitnessLog, WitnessRecord
 from .core.trajectory import (
     TrajectoryAuditResult,
     TrajectoryCheck,
@@ -44,7 +46,15 @@ from .export import (
     StdoutJSONLSink,
     receipt_to_ocsf,
 )
-from .index.base import IndexEntry, ProvenanceIndex, VerificationOutcome
+from .index.base import (
+    ENTRY_KIND_WHOLE_CHUNK,
+    ENTRY_KIND_WINDOW,
+    OUTCOME_PRECEDENCE,
+    IndexEntry,
+    ProvenanceIndex,
+    VerificationOutcome,
+    reduce_outcomes,
+)
 from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
 from .index.postgres_index import PostgresProvenanceIndex
 from .index.sqlite_index import SQLiteProvenanceIndex
@@ -83,7 +93,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.7.2"
+__version__ = "0.8.0"
 
 __all__ = [
     # Core
@@ -99,6 +109,10 @@ __all__ = [
     "SQLiteProvenanceIndex",
     "PostgresProvenanceIndex",
     "VerificationOutcome",
+    "OUTCOME_PRECEDENCE",
+    "reduce_outcomes",
+    "ENTRY_KIND_WHOLE_CHUNK",
+    "ENTRY_KIND_WINDOW",
     # Bloom acceleration interface (stub in OSS; real impl is commercial)
     "BloomFilterIndex",
     "NoopBloomFilter",
@@ -136,6 +150,7 @@ __all__ = [
     "verify_receipt_signature",
     "compute_caller_hash",
     "compute_value_hash",
+    "compute_request_binding",
     "Claim",
     "CONTENT_SOURCE_INDEXED_CORPUS",
     "CONTENT_SOURCE_LIVE_TOOL_OUTPUT",
@@ -147,6 +162,9 @@ __all__ = [
     "TrajectoryCheck",
     "audit_trajectory_dag",
     "start_trajectory",
+    # Witness / checkpoint log (v0.8.0+)
+    "WitnessLog",
+    "WitnessRecord",
     # Framework-agnostic verification
     "VerifiedChunks",
     "verify_chunks",

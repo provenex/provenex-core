@@ -48,6 +48,50 @@ class VerificationOutcome(str, Enum):
     """Fingerprint found but its stored metadata signature fails verification."""
 
 
+# Schema 2.4.0 / v0.8.0: index entries are tagged with a "kind". Only
+# ``whole_chunk`` entries are eligible for promotion to VERIFIED at
+# verify time; ``window`` entries (sliding-window fingerprints written
+# during ingest) are retained for structural locating only and never
+# promote on a whole-chunk SHA-256 match. This closes the
+# window-aligned splice gap: a 128-codepoint substring of an authorized
+# document is no longer a VERIFIED chunk on its own.
+ENTRY_KIND_WHOLE_CHUNK = "whole_chunk"
+ENTRY_KIND_WINDOW = "window"
+VALID_ENTRY_KINDS = (ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW)
+
+
+# Schema 2.4.0 / v0.8.0: explicit precedence so an auditor reading a
+# denied chunk knows which condition shadowed which when multiple
+# could apply. Higher-precedence outcomes mask lower ones. UNVERIFIED
+# is the absent-entry sentinel and only applies when no row matched.
+# Read as a left-to-right priority list: TAMPERED beats UNAUTHORIZED
+# beats STALE beats VERIFIED for a row that exists; UNVERIFIED is the
+# fall-through for a row that does not.
+OUTCOME_PRECEDENCE = (
+    VerificationOutcome.TAMPERED,
+    VerificationOutcome.UNAUTHORIZED,
+    VerificationOutcome.STALE,
+    VerificationOutcome.UNVERIFIED,
+    VerificationOutcome.VERIFIED,
+)
+
+
+def reduce_outcomes(candidates) -> VerificationOutcome:
+    """Pick the highest-precedence outcome from a set of candidates.
+
+    Used by ``verify()`` implementations and exposed publicly so any
+    caller can reason about the precedence the same way the engine
+    does. Returns VERIFIED if no candidates are passed (the "all clear"
+    default), which is the right neutral element because adding more
+    candidates can only lower the result.
+    """
+    cs = set(candidates)
+    for outcome in OUTCOME_PRECEDENCE:
+        if outcome in cs:
+            return outcome
+    return VerificationOutcome.VERIFIED
+
+
 @dataclass(frozen=True)
 class IndexEntry:
     """A single row in the provenance index.
@@ -71,6 +115,14 @@ class IndexEntry:
         signature: HMAC-SHA256 over a canonical serialization of the other
             fields, keyed by the index's signing secret. Used to detect
             tampering with the index itself.
+        entry_kind: One of :data:`ENTRY_KIND_WHOLE_CHUNK` or
+            :data:`ENTRY_KIND_WINDOW` (schema 2.4.0 / v0.8.0). Whole-chunk
+            entries are the operator-authorized chunk texts; only they
+            are eligible for promotion to ``VERIFIED`` at verify time.
+            Window entries are sliding-window fingerprints written during
+            document ingestion for structural locating; they NEVER
+            promote to VERIFIED on a whole-chunk SHA-256 match. The
+            field is covered by ``signature`` so it is tamper-evident.
     """
 
     fingerprint: str
@@ -82,6 +134,7 @@ class IndexEntry:
     authorized: bool
     superseded: bool
     signature: str
+    entry_kind: str = ENTRY_KIND_WHOLE_CHUNK
 
 
 class ProvenanceIndex(ABC):
@@ -115,6 +168,7 @@ class ProvenanceIndex(ABC):
         chunk_offset: int,
         chunk_length: int,
         authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
     ) -> None:
         """Insert a fingerprint into the index.
 
@@ -128,9 +182,18 @@ class ProvenanceIndex(ABC):
             authorized: Initial authorization state for the chunk's document.
                 Applied to the document_id; subsequent calls with the same
                 document_id will use the latest authorization state.
+            entry_kind: ``ENTRY_KIND_WHOLE_CHUNK`` (default) or
+                ``ENTRY_KIND_WINDOW``. The default is whole-chunk: any
+                caller adding an operator-authorized chunk gets the
+                VERIFIED-eligible behavior. The ``window`` kind is for
+                sliding-window fingerprints written during document
+                ingestion to support structural locating; window entries
+                NEVER promote to VERIFIED at verify time, regardless of
+                whether their hash matches a chunk's whole-chunk SHA-256.
 
         Raises:
-            ValueError: If the fingerprint or document version is malformed.
+            ValueError: If the fingerprint or document version is malformed,
+                or if ``entry_kind`` is not one of the allowed values.
         """
 
     @abstractmethod
@@ -181,13 +244,25 @@ class ProvenanceIndex(ABC):
         Returns:
             One of :class:`VerificationOutcome`. The mapping is:
 
-                * UNVERIFIED — fingerprint not in index
-                * TAMPERED — fingerprint in index but signature check failed
-                * UNAUTHORIZED — fingerprint in index, signature ok, but
-                  document_id is not authorized
-                * STALE — fingerprint in index, signature ok, authorized, but
-                  the document version has been superseded
-                * VERIFIED — all checks pass
+                * UNVERIFIED - fingerprint not in index, OR the only
+                  matching row is a window (locator-only) entry. A
+                  window entry CANNOT promote a chunk to VERIFIED
+                  even if its hash matches the chunk's whole-chunk
+                  SHA-256; window fingerprints are for structural
+                  locating only.
+                * TAMPERED - fingerprint in index (whole-chunk entry)
+                  but signature check failed.
+                * UNAUTHORIZED - fingerprint in index, signature ok,
+                  but document_id is not authorized.
+                * STALE - fingerprint in index, signature ok,
+                  authorized, but the document version has been
+                  superseded.
+                * VERIFIED - all checks pass AND the matching row
+                  is a whole-chunk entry.
+
+            Precedence among outcomes that could apply simultaneously
+            is fixed by :data:`OUTCOME_PRECEDENCE` (TAMPERED >
+            UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED).
         """
 
     @abstractmethod

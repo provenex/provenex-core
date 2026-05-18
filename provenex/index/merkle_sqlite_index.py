@@ -31,6 +31,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..core.merkle import MerkleTree
+from .base import ENTRY_KIND_WHOLE_CHUNK
 from .sqlite_index import SQLiteProvenanceIndex, _canonical_payload
 
 
@@ -103,6 +104,7 @@ class MerkleSQLiteProvenanceIndex(SQLiteProvenanceIndex):
         chunk_offset: int,
         chunk_length: int,
         authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
     ) -> None:
         # Re-entrant lock so parent's add() can acquire it again without
         # deadlock. We check whether the row already exists *before*
@@ -113,8 +115,8 @@ class MerkleSQLiteProvenanceIndex(SQLiteProvenanceIndex):
                 self._conn.execute(
                     "SELECT 1 FROM fingerprints "
                     "WHERE fingerprint = ? AND document_id = ? "
-                    "AND document_version = ? LIMIT 1",
-                    (fingerprint, document_id, document_version),
+                    "AND document_version = ? AND entry_kind = ? LIMIT 1",
+                    (fingerprint, document_id, document_version, entry_kind),
                 ).fetchone()
                 is not None
             )
@@ -126,21 +128,22 @@ class MerkleSQLiteProvenanceIndex(SQLiteProvenanceIndex):
                 chunk_offset=chunk_offset,
                 chunk_length=chunk_length,
                 authorized=authorized,
+                entry_kind=entry_kind,
             )
 
             if existed:
                 return
 
             # Read back the row to get the ingested_at that the parent set,
-            # then build the canonical payload — the same bytes the HMAC
-            # signed. That payload is the Merkle leaf.
+            # then build the canonical payload (the same bytes the HMAC
+            # signed). That payload is the Merkle leaf.
             row = self._conn.execute(
                 "SELECT fingerprint, document_id, document_version, "
-                "       ingested_at, chunk_offset, chunk_length "
+                "       ingested_at, chunk_offset, chunk_length, entry_kind "
                 "FROM fingerprints "
                 "WHERE fingerprint = ? AND document_id = ? "
-                "AND document_version = ?",
-                (fingerprint, document_id, document_version),
+                "AND document_version = ? AND entry_kind = ?",
+                (fingerprint, document_id, document_version, entry_kind),
             ).fetchone()
             leaf_bytes = _canonical_payload(
                 fingerprint=row["fingerprint"],
@@ -149,6 +152,7 @@ class MerkleSQLiteProvenanceIndex(SQLiteProvenanceIndex):
                 ingested_at=row["ingested_at"],
                 chunk_offset=row["chunk_offset"],
                 chunk_length=row["chunk_length"],
+                entry_kind=row["entry_kind"],
             )
             leaf_index = self._tree.size()
             self._conn.execute(

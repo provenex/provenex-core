@@ -1,11 +1,11 @@
 """Example: configuring verification policies for different threat models.
 
 Three scenarios:
-    1. Development mode  — flag everything, block nothing. Lets the team see
+    1. Development mode  - flag everything, block nothing. Lets the team see
        what would happen in production.
-    2. Production mode   — block unauthorized and tampered, flag everything
+    2. Production mode   - block unauthorized and tampered, flag everything
        else. The reasonable default for most enterprise RAG.
-    3. High-assurance    — block every non-VERIFIED outcome. Used in
+    3. High-assurance    - block every non-VERIFIED outcome. Used in
        customer-facing answers where any deviation is unacceptable.
 """
 

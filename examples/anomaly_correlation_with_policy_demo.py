@@ -6,8 +6,8 @@ Run with:
     PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
         python examples/anomaly_correlation_with_policy_demo.py
 
-The shape mirrors ``anomaly_correlation_demo.py`` exactly — same three
-callers, same two sessions, same noisy-caller pattern — but every
+The shape mirrors ``anomaly_correlation_demo.py`` exactly - same three
+callers, same two sessions, same noisy-caller pattern - but every
 receipt also carries:
 
     * ``policy.access_control.decisions[]`` for the retrieval receipts,
@@ -18,18 +18,18 @@ receipt also carries:
 
 The point: ``caller_hash`` and ``trajectory.session_id`` are
 detector-side correlation tags that live alongside the per-decision
-policy artifacts the auditor cares about — not in tension with them.
+policy artifacts the auditor cares about - not in tension with them.
 Both fields stay out of ``inputs_hash``, so policy decisions are
 unchanged.
 
 What the detector half does is identical to the stdlib demo:
 
-    * Pattern 1 — GROUP BY caller_hash → per-caller action counts.
-    * Pattern 2 — GROUP BY session_id → per-session step shape.
-    * Pattern 3 — independent re-derivation of caller_hash from the
+    * Pattern 1 - GROUP BY caller_hash → per-caller action counts.
+    * Pattern 2 - GROUP BY session_id → per-session step shape.
+    * Pattern 3 - independent re-derivation of caller_hash from the
       verbatim caller embedded on each decision record. Cross-check
       against ``policy.access_control.decisions[0].inputs.request_context.caller``
-      AND ``policy.tool_call_control.decisions[0].inputs.request_context.caller`` —
+      AND ``policy.tool_call_control.decisions[0].inputs.request_context.caller`` -
       both must reproduce the same hash regardless of which gate fired.
 
 Pure stdlib + PyYAML (the ``[policy]`` extra). Total runtime ~2 s.
@@ -201,7 +201,7 @@ def main() -> int:
                 receipt.to_json(), encoding="utf-8"
             )
 
-        # u_42 incident — retrieval (allow by access_control) + a tool call.
+        # u_42 incident - retrieval (allow by access_control) + a tool call.
         traj = start_trajectory(agent_id="incident_agent")
         r = verify_chunks(
             chunks=[CORPUS_CHUNK], index=index, signer=signer,
@@ -231,7 +231,7 @@ def main() -> int:
         )
         save(ar.receipt)
 
-        # u_99 viewer incident — retrieval BLOCKED by access_control rule.
+        # u_99 viewer incident - retrieval BLOCKED by access_control rule.
         traj = start_trajectory(agent_id="support_agent")
         r = verify_chunks(
             chunks=[CORPUS_CHUNK], index=index, signer=signer,
@@ -242,7 +242,7 @@ def main() -> int:
         )
         save(r.receipt)
 
-        # u_777 noisy — 5x web_search in routine session.
+        # u_777 noisy - 5x web_search in routine session.
         traj = start_trajectory(agent_id="research_agent")
         for q in [
             "weather today", "weather paris", "weather london",
@@ -271,8 +271,9 @@ def main() -> int:
             f"{BOLD}policy.tool_call_control{RESET} decision records,"
         )
         print(
-            f"  plus the schema-2.3.0 correlation fields "
-            f"{BOLD}caller_hash{RESET} and {BOLD}trajectory.session_id{RESET}."
+            f"  plus the source-of-record correlation fields "
+            f"{BOLD}caller_hash{RESET}, {BOLD}trajectory.session_id{RESET}, "
+            f"and the schema-2.4.0 {BOLD}request_binding{RESET}."
         )
 
         hat_swap("Reading the receipts as a downstream anomaly detector")
@@ -282,7 +283,7 @@ def main() -> int:
             receipts.append(json.loads(path.read_text(encoding="utf-8")))
 
         # --- Pattern 1: per-caller action counts --- #
-        banner("2. Pattern 1 — GROUP BY caller_hash → per-caller action counts")
+        banner("2. Pattern 1 - GROUP BY caller_hash → per-caller action counts")
 
         actions_by_caller: Counter = Counter()
         denies_by_caller: Counter = Counter()
@@ -316,7 +317,7 @@ def main() -> int:
             )
 
         # --- Pattern 2: per-session step shape --- #
-        banner("3. Pattern 2 — GROUP BY session_id → per-session step shape")
+        banner("3. Pattern 2 - GROUP BY session_id → per-session step shape")
 
         session_shape: Dict[str, Counter] = defaultdict(Counter)
         for r in receipts:
@@ -332,12 +333,12 @@ def main() -> int:
             print(f"    {DIM}step shape:{RESET} {shape}")
             if len(counts) == 1:
                 print(
-                    f"    {RED}{BOLD}← single-shape session — investigate{RESET}"
+                    f"    {RED}{BOLD}← single-shape session - investigate{RESET}"
                 )
 
         # --- Pattern 3: independent re-derivation (across BOTH gate types) --- #
         banner(
-            "4. Pattern 3 — verify don't trust: recompute caller_hash from "
+            "4. Pattern 3 - verify don't trust: recompute caller_hash from "
             "BOTH gate types"
         )
 
@@ -383,7 +384,7 @@ def main() -> int:
             f"policy doesn't change{RESET}"
         )
         print(
-            f"  {DIM}what caller_hash / session_id are for — they remain "
+            f"  {DIM}what caller_hash / session_id are for - they remain "
             f"decision-and-proof{RESET}"
         )
         print(

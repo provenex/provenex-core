@@ -10,11 +10,11 @@ If you are evaluating Provenex alongside a UEBA / SIEM / agent-anomaly-detection
 
 A working integration spec for an anomaly-detection layer sitting downstream of Provenex. Three things you'll find here:
 
-1. **Architecture** — the per-decision admission layer (Provenex) and the sequence/pattern detection layer (your detector), and the receipt stream that connects them.
-2. **Schema field reference for detectors** — every field a detection rule typically reads, with a one-line "what to do with this in detection."
-3. **Worked detection patterns** — concrete examples, with the receipt fields each one consumes and SQL/pseudocode snippets a SIEM analyst can adapt.
+1. **Architecture** - the per-decision admission layer (Provenex) and the sequence/pattern detection layer (your detector), and the receipt stream that connects them.
+2. **Schema field reference for detectors** - every field a detection rule typically reads, with a one-line "what to do with this in detection."
+3. **Worked detection patterns** - concrete examples, with the receipt fields each one consumes and SQL/pseudocode snippets a SIEM analyst can adapt.
 
-Provenex deliberately does not implement these detections itself. The line between admission and detection is load-bearing — see [§ The line we don't cross](#the-line-we-dont-cross).
+Provenex deliberately does not implement these detections itself. The line between admission and detection is load-bearing - see [§ The line we don't cross](#the-line-we-dont-cross).
 
 ---
 
@@ -66,7 +66,7 @@ Every field below is on every receipt where it makes sense. Optional fields are 
 
 | Field | Type | What detectors do with it |
 | --- | --- | --- |
-| `caller_hash` | `"sha256:<hex>"` or `"hmac-sha256:<hex>"` | Primary GROUP BY for per-caller baselining. Stable across receipts; opaque to the detector. The prefix tags the algorithm — bare SHA-256 vs salted HMAC for per-deployment unlinkability. |
+| `caller_hash` | `"sha256:<hex>"` or `"hmac-sha256:<hex>"` | Primary GROUP BY for per-caller baselining. Stable across receipts; opaque to the detector. The prefix tags the algorithm - bare SHA-256 vs salted HMAC for per-deployment unlinkability. |
 | `trajectory.trajectory_id` | `"trj_<hex>"` | GROUP BY for within-trajectory correlation. Every receipt in one agent flow shares this. JOIN on it to reconstruct multi-step flows. |
 | `trajectory.session_id` | opaque caller-chosen string | GROUP BY for multi-trajectory correlation (a chat session, an incident-response engagement, a multi-day investigation). |
 | `trajectory.agent_id` | opaque string | Sub-grouping for multi-agent flows. Often combined with `caller_hash`. |
@@ -88,7 +88,7 @@ Every field below is on every receipt where it makes sense. Optional fields are 
 | `policy.access_control.policy_id` | string | Which retrieval policy was in effect. Useful for "this caller suddenly hit a different policy" anomalies. |
 | `policy.access_control.policy_version_hash` | `"sha256:<hex>"` | Canonical policy version. Detect "policy version changed" silently. |
 | `policy.access_control.decisions[i].decision` | `allow` / `deny` | Per-chunk decision. Aggregate to per-caller deny rates. |
-| `policy.access_control.decisions[i].rules_fired[]` | list of string | The rules whose `when` clauses matched. Even allowed decisions list rules — this is the **near-miss** signal: rule fired but `require` passed. |
+| `policy.access_control.decisions[i].rules_fired[]` | list of string | The rules whose `when` clauses matched. Even allowed decisions list rules - this is the **near-miss** signal: rule fired but `require` passed. |
 | `policy.tool_call_control.*` | mirror of access_control | tool-call admission equivalent. Same fields, parallel semantics. |
 
 ### Verification (retrieval-side integrity)
@@ -105,7 +105,7 @@ Every field below is on every receipt where it makes sense. Optional fields are 
 | Field | Type | What detectors do with it |
 | --- | --- | --- |
 | `actions[i].name` | string | Tool / memory key class / model identifier. For memory writes the constant `"memory.write"`; for model inferences the model name (`"claude-opus-4-7"`). Primary group-by for per-tool / per-model detection. |
-| `actions[i].operation` | string | The operation on the tool (`"create_issue"`, `"query"`). For memory writes the memory key itself — write-rate-per-key falls out naturally. For model inferences the verb (`"complete"` / `"stream"` / `"embed"`). |
+| `actions[i].operation` | string | The operation on the tool (`"create_issue"`, `"query"`). For memory writes the memory key itself - write-rate-per-key falls out naturally. For model inferences the verb (`"complete"` / `"stream"` / `"embed"`). |
 | `actions[i].target_system` | string | Logical target (`"acme.atlassian.net"`, `"anthropic"`). Provider-allowlist detection grouping. |
 | `actions[i].parameters_hash` | `"sha256:<hex>"` | The audit anchor over the verbatim parameters. Detect "same exact parameters submitted N times" (replay-shape) patterns; cross-check independently if the detector has the verbatim values out-of-band. |
 
@@ -146,15 +146,15 @@ The five patterns below cover most of what an AI-agent anomaly detector looks fo
 | eval severity = "high"
 ```
 
-**Why this works.** `caller_hash` is the deliberate group-by key — stable across schema changes, opaque to the detector, no PII. The 5× threshold is illustrative; tune to your environment.
+**Why this works.** `caller_hash` is the deliberate group-by key - stable across schema changes, opaque to the detector, no PII. The 5× threshold is illustrative; tune to your environment.
 
 **Refinements.**
 - Add `tool.name` to the group-by for per-tool baselines (`per-(caller, claude-opus-4-7)` rate).
-- For multi-tenant deployments using salted `caller_hash`, the detection works the same — `hmac-sha256:<hex>` is just a different prefix.
+- For multi-tenant deployments using salted `caller_hash`, the detection works the same - `hmac-sha256:<hex>` is just a different prefix.
 
 ### Pattern 2: Trajectory shape drift
 
-**The signal.** An agent's mix of step kinds shifts — suddenly 90% tool calls vs. a baseline of 60% retrievals.
+**The signal.** An agent's mix of step kinds shifts - suddenly 90% tool calls vs. a baseline of 60% retrievals.
 
 **Receipt fields.** `trajectory.trajectory_id`, `trajectory.step_kind`.
 
@@ -187,7 +187,7 @@ def detect_shape_drift(window_receipts, baseline_distribution):
 
 ### Pattern 3: Policy near-miss
 
-**The signal.** A rule's `when` clause fires often but the `require` clause keeps passing — i.e. the caller keeps brushing against the rule without tripping it. Provenex records both: every rule whose `when` matched lands in `rules_fired`, even on allows. Frequent near-misses are a leading indicator that someone is probing the edges of the policy.
+**The signal.** A rule's `when` clause fires often but the `require` clause keeps passing - i.e. the caller keeps brushing against the rule without tripping it. Provenex records both: every rule whose `when` matched lands in `rules_fired`, even on allows. Frequent near-misses are a leading indicator that someone is probing the edges of the policy.
 
 **Receipt fields.** `caller_hash`, `policy.access_control.decisions[i].rules_fired[]`, `policy.access_control.decisions[i].decision`.
 
@@ -212,7 +212,7 @@ def detect_shape_drift(window_receipts, baseline_distribution):
 
 ### Pattern 4: Cross-trajectory correlation (memory-write → external tool-call)
 
-**The signal.** A caller writes to memory then immediately does an external tool call within K seconds — a possible data-exfiltration sequence.
+**The signal.** A caller writes to memory then immediately does an external tool call within K seconds - a possible data-exfiltration sequence.
 
 **Receipt fields.** `caller_hash`, `trajectory.session_id`, `trajectory.step_kind`, `actions[i].name`, `issued_at`.
 
@@ -239,15 +239,15 @@ def detect_memwrite_then_external_call(session_receipts, K_seconds=10):
             )
 ```
 
-**Why this works.** `session_id` is the multi-trajectory correlator — exactly the boundary across which this pattern needs to look. Without it, the detector would have to reconstruct sessions from `caller_hash` + time-bucketing, which is fragile.
+**Why this works.** `session_id` is the multi-trajectory correlator - exactly the boundary across which this pattern needs to look. Without it, the detector would have to reconstruct sessions from `caller_hash` + time-bucketing, which is fragile.
 
 **Refinements.**
 - Filter to `memory_write` operations on sensitive keys (`actions[0].operation in {"customer_pii", "incident_data"}`).
-- Define `is_external(target_system)` per your tenant — `"acme.atlassian.net"` is internal; `"google_custom_search"` is external.
+- Define `is_external(target_system)` per your tenant - `"acme.atlassian.net"` is internal; `"google_custom_search"` is external.
 
 ### Pattern 5: Content-source anomaly
 
-**The signal.** An agent's mix of `content_source` values shifts — suddenly 40% `live_tool_output` vs a baseline of 5%. Implication: the agent is relying more on live retrieval than its grounded corpus, which is a quality/safety signal.
+**The signal.** An agent's mix of `content_source` values shifts - suddenly 40% `live_tool_output` vs a baseline of 5%. Implication: the agent is relying more on live retrieval than its grounded corpus, which is a quality/safety signal.
 
 **Receipt fields.** `caller_hash` or `agent_id`, `sources[i].content_source`.
 
@@ -266,7 +266,7 @@ def detect_memwrite_then_external_call(session_receipts, K_seconds=10):
                    + round(ratio * 100, 1) + "% of retrievals"
 ```
 
-**Why this works.** `content_source` was added in schema 1.4.0 precisely to make this distinction auditable. It's a free-form classifier from the agent's side (the caller declares it), but it's covered by the receipt signature — an attacker can't dampen the alarm by retroactively rewriting it.
+**Why this works.** `content_source` was added in schema 1.4.0 precisely to make this distinction auditable. It's a free-form classifier from the agent's side (the caller declares it), but it's covered by the receipt signature - an attacker can't dampen the alarm by retroactively rewriting it.
 
 ---
 
@@ -274,12 +274,12 @@ def detect_memwrite_then_external_call(session_receipts, K_seconds=10):
 
 Receipts ship in two formats:
 
-### Raw JSONL — one signed Provenex receipt per line
+### Raw JSONL - one signed Provenex receipt per line
 
 Used when the detector reads receipts directly (custom UEBA tools, in-house pipelines, batch analytics).
 
 ```bash
-# Tail the raw receipt stream — one signed receipt per line
+# Tail the raw receipt stream - one signed receipt per line
 tail -F /var/log/provenex/receipts-*.jsonl | jq -c '
   select(.summary.overall_status == "FAIL")
   | {receipt_id, caller_hash, decision: .policy.tool_call_control.decisions[0].decision, rules: .policy.tool_call_control.decisions[0].rules_fired}
@@ -288,7 +288,7 @@ tail -F /var/log/provenex/receipts-*.jsonl | jq -c '
 
 The signature on every line lets the detector independently verify that the receipt was emitted by Provenex (and not a forged event). See [`streaming_export.md`](streaming_export.md) for `FileJSONLSink` / `KafkaSink` / `SQSSink` / `S3AppendSink` / `PubSubSink` configuration.
 
-### OCSF v1.3 events — one or more per receipt
+### OCSF v1.3 events - one or more per receipt
 
 Used when the detector is an OCSF-aware SIEM (Splunk, Datadog, Elastic, Microsoft Sentinel). `OCSFAdapter` wraps any `ReceiptSink` so receipts are translated to OCSF events before publishing:
 
@@ -323,20 +323,20 @@ Provenex is the admission layer. The anomaly detector is the SIEM that reads adm
 **Why this matters operationally.**
 
 Per-decision admission and cross-decision detection have different engineering requirements. The admission layer must be:
-- **Deterministic** — same `(input, policy)` produces the same decision, every time, forever.
-- **Per-decision-pure** — no trajectory state, no aggregations, no external lookups during evaluation. This is what makes `inputs_hash` an audit anchor a regulator can reproduce years later.
-- **Side-effect-free** — logging, emission, sink shipping all happen *after* the decision, not inside it.
-- **Synchronous and fast** — sub-millisecond at the 99th percentile (see [`scaling.md`](scaling.md)).
+- **Deterministic** - same `(input, policy)` produces the same decision, every time, forever.
+- **Per-decision-pure** - no trajectory state, no aggregations, no external lookups during evaluation. This is what makes `inputs_hash` an audit anchor a regulator can reproduce years later.
+- **Side-effect-free** - logging, emission, sink shipping all happen *after* the decision, not inside it.
+- **Synchronous and fast** - sub-millisecond at the 99th percentile (see [`scaling.md`](scaling.md)).
 
 The detector layer needs the opposite shape:
-- **Stateful** — windows, baselines, cohorts.
-- **Cross-decision** — sequence patterns, ratio drifts, near-miss frequencies.
-- **External-data-aware** — IdP lookups, asset inventory, threat intel feeds.
-- **Asynchronous** — millisecond or second latency is fine; minutes is often fine.
+- **Stateful** - windows, baselines, cohorts.
+- **Cross-decision** - sequence patterns, ratio drifts, near-miss frequencies.
+- **External-data-aware** - IdP lookups, asset inventory, threat intel feeds.
+- **Asynchronous** - millisecond or second latency is fine; minutes is often fine.
 
 **One engine doing both is worse at each.** Bundling sequence detection into a per-decision admission engine breaks the audit guarantees and the latency budget. Bundling per-decision purity into a sequence detector breaks the detector's expressivity and forces it to swallow Provenex's design constraints. Each is better-engineered because it doesn't try to be the other.
 
-**The receipt is the API.** Receipts have stable correlation keys (`caller_hash`, `trajectory_id`, `session_id`, `step_kind`), explicit decision metadata (`rules_fired`, `decision`, `verification_outcome`), and time with millisecond precision. They are deliberately the right shape for a detector to consume — and deliberately not the right shape to mutate during detection. See [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
+**The receipt is the API.** Receipts have stable correlation keys (`caller_hash`, `trajectory_id`, `session_id`, `step_kind`), explicit decision metadata (`rules_fired`, `decision`, `verification_outcome`), and time with millisecond precision. They are deliberately the right shape for a detector to consume - and deliberately not the right shape to mutate during detection. See [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
 
 **Strategically, this is the same line as firewall / SIEM.** A firewall enforces per-packet rules deterministically. A SIEM correlates across packets. Nobody asks the firewall to also be the SIEM; the firewall would be worse at firewalling and the operator would have one tool to debug instead of two. Provenex is the firewall (for AI access); the detector is the SIEM. Two categories, two budget lines, two vendors. By design.
 
@@ -349,13 +349,13 @@ The receipt is the cryptographic source-of-truth. The detector's downstream guar
 ### What the receipt guarantees
 
 - **Receipt integrity.** Every receipt is signed (HMAC-SHA256 default; Ed25519 optional). Modify any field, the signature fails. A detector that verifies signatures detects forged events.
-- **Decision integrity.** `inputs_hash` covers the verbatim inputs the policy evaluator looked at. Two regulators with the original inputs + the original policy bundle reproduce `inputs_hash` exactly — the receipt's claim about *what was decided* is non-repudiable.
+- **Decision integrity.** `inputs_hash` covers the verbatim inputs the policy evaluator looked at. Two regulators with the original inputs + the original policy bundle reproduce `inputs_hash` exactly - the receipt's claim about *what was decided* is non-repudiable.
 - **Per-action identity.** `parameters_hash` covers the verbatim tool-call parameters; `value_hash` / `prompt_hash` cover memory writes / model inferences. The audit anchor survives redaction (`parameters: null` on the receipt is fine; the hash stays).
 
 ### What the receipt does NOT guarantee
 
-- **Sequence ordering** — a malicious transport can drop, duplicate, or reorder receipts in transit. Detectors that rely on sequence reconstruction need a transport with delivery guarantees (Kafka with min.insync.replicas, SQS FIFO queues, the transparency-log integration on the commercial Provenex roadmap) — or they need to reconstruct ordering from `issued_at` + `trajectory.parent_step_ids[]` and accept that a sophisticated attacker can manipulate either.
-- **Completeness** — the receipt asserts what *was* decided. It does not assert that *every* decision the agent made resulted in a receipt. An agent that bypasses Provenex (calls a tool without going through `admission_check`) produces no receipt at all; the detector cannot detect what was never recorded. Mitigation: framework-level wrappers (LangChain `ProvenexToolWrapper`, LangGraph nodes, MCP middleware) that make bypass syntactically inconvenient.
+- **Sequence ordering** - a malicious transport can drop, duplicate, or reorder receipts in transit. Detectors that rely on sequence reconstruction need a transport with delivery guarantees (Kafka with min.insync.replicas, SQS FIFO queues, the transparency-log integration on the commercial Provenex roadmap) - or they need to reconstruct ordering from `issued_at` + `trajectory.parent_step_ids[]` and accept that a sophisticated attacker can manipulate either.
+- **Completeness** - the receipt asserts what *was* decided. It does not assert that *every* decision the agent made resulted in a receipt. An agent that bypasses Provenex (calls a tool without going through `admission_check`) produces no receipt at all; the detector cannot detect what was never recorded. Mitigation: framework-level wrappers (LangChain `ProvenexToolWrapper`, LangGraph nodes, MCP middleware) that make bypass syntactically inconvenient.
 
 ### Recommended detector posture
 
@@ -376,10 +376,10 @@ When OCSF stabilizes AI-specific event classes, this document is updated; receip
 
 ## See also
 
-- [`streaming_export.md`](streaming_export.md) — `ReceiptSink` Protocol and the reference sinks
-- [`ocsf_mapping.md`](ocsf_mapping.md) — OCSF v1.3 field-by-field mapping
-- [`receipt_format.md`](receipt_format.md) — the receipt schema
-- [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) — the per-decision-purity design rationale
-- [`threat_model.md`](threat_model.md) — the cryptographic trust model
-- [`../examples/anomaly_correlation_demo.py`](../examples/anomaly_correlation_demo.py) — runnable demo of Pattern 1 + 2 + 5 over a synthetic event stream (stdlib only)
-- [`../examples/ocsf_export_demo.py`](../examples/ocsf_export_demo.py) — runnable demo of OCSF translation + SIEM-side group-bys
+- [`streaming_export.md`](streaming_export.md) - `ReceiptSink` Protocol and the reference sinks
+- [`ocsf_mapping.md`](ocsf_mapping.md) - OCSF v1.3 field-by-field mapping
+- [`receipt_format.md`](receipt_format.md) - the receipt schema
+- [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) - the per-decision-purity design rationale
+- [`threat_model.md`](threat_model.md) - the cryptographic trust model
+- [`../examples/anomaly_correlation_demo.py`](../examples/anomaly_correlation_demo.py) - runnable demo of Pattern 1 + 2 + 5 over a synthetic event stream (stdlib only)
+- [`../examples/ocsf_export_demo.py`](../examples/ocsf_export_demo.py) - runnable demo of OCSF translation + SIEM-side group-bys

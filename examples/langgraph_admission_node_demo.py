@@ -28,7 +28,7 @@ What it shows, in order:
        graph runs, ``provenex audit --trajectory`` validates the
        whole flow.
 
-Pure stdlib. We simulate a minimal LangGraph state-machine loop —
+Pure stdlib. We simulate a minimal LangGraph state-machine loop -
 the Provenex integration imports nothing from langgraph by design
 (it produces plain callables), so the demo runs without the
 optional ``[langgraph]`` extra.
@@ -193,7 +193,7 @@ def main() -> int:
 
         Real apps might page on-call, write to the audit log, etc.
         Note: the admission *receipt* is in ``state["receipts"]``
-        regardless of the deny — denies are auditable.
+        regardless of the deny - denies are auditable.
         """
         rules = state.get("tool_rules_fired", [])
         return {
@@ -235,7 +235,7 @@ def main() -> int:
     }
     edges = {
         "shape_request": "admit_jira",
-        # The conditional edge — this is the load-bearing pattern:
+        # The conditional edge - this is the load-bearing pattern:
         # Provenex never invokes the tool; the graph routes on the
         # boolean ``tool_admitted`` flag the admission node wrote
         # into state.
@@ -262,7 +262,7 @@ def main() -> int:
     )
 
     # --- Scenario 1: engineer creates a Jira issue → admit → execute --- #
-    banner("2. Scenario 1 — engineer → jira.create_issue (expect: ALLOW)")
+    banner("2. Scenario 1 - engineer → jira.create_issue (expect: ALLOW)")
 
     state1 = {
         # Application data
@@ -287,7 +287,7 @@ def main() -> int:
     summary("Receipt id", final1["receipts"][-1].receipt_id)
 
     # --- Scenario 2: viewer attempts a Jira write → admit → deny --- #
-    banner("3. Scenario 2 — viewer → jira.create_issue (expect: DENY)")
+    banner("3. Scenario 2 - viewer → jira.create_issue (expect: DENY)")
 
     state2 = {
         "caller": {"id": "u_99", "role": "viewer"},
@@ -308,11 +308,11 @@ def main() -> int:
     summary("Receipts collected", str(len(final2["receipts"])))
     summary(
         "Note",
-        f"{DIM}Receipt was still recorded — denies are auditable.{RESET}",
+        f"{DIM}Receipt was still recorded - denies are auditable.{RESET}",
     )
 
     # --- Audit both trajectories --- #
-    banner("4. Trajectory audit — provenex audit --trajectory")
+    banner("4. Trajectory audit - provenex audit --trajectory")
 
     with tempfile.TemporaryDirectory() as tmp:
         receipts_dir = Path(tmp) / "receipts"
@@ -362,7 +362,7 @@ def main() -> int:
         f"{RESET}"
     )
     print(
-        f"  {DIM}allow — never inside Provenex. Two graph patterns, one"
+        f"  {DIM}allow - never inside Provenex. Two graph patterns, one"
         f"{RESET}"
     )
     print(

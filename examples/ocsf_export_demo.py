@@ -16,7 +16,7 @@ What it shows, in order:
        ``receipt_to_ocsf(receipt_dict)`` transformation. Print one
        sample event per class so the wire format is visible.
 
-    3. Switch hats. Show the SIEM-side perspective — grouping
+    3. Switch hats. Show the SIEM-side perspective - grouping
        events by ``metadata.correlation_uid`` (the trajectory),
        ``metadata.session_uid`` (the session), and
        ``actor.user.uid`` (the caller).
@@ -232,7 +232,7 @@ def main() -> int:
         print(f"\n  Total OCSF events emitted: {BOLD}{len(all_events)}{RESET}")
 
         # --- Show sample of each event class --- #
-        banner("3. Sample OCSF events — one per class")
+        banner("3. Sample OCSF events - one per class")
 
         seen = set()
         for event in all_events:
@@ -287,7 +287,7 @@ def main() -> int:
             print(f"  {colour}{s:<14}{RESET}  →  {n}")
 
         # --- 5. Streaming via OCSFAdapter --- #
-        banner("5. Streaming variant — OCSFAdapter wraps any ReceiptSink")
+        banner("5. Streaming variant - OCSFAdapter wraps any ReceiptSink")
 
         import io
         buf = io.StringIO()
@@ -296,7 +296,7 @@ def main() -> int:
             extra_metadata={"organization_uid": "demo-corp", "environment": "demo"},
         )
 
-        # The exact same admission_check call — only sink= changed.
+        # The exact same admission_check call - only sink= changed.
         admission_check(
             tool=ToolCallContext(
                 name="github", operation="create_pr",
@@ -329,7 +329,7 @@ def main() -> int:
             f"{RESET}"
         )
         print(
-            f"  {DIM}SIEM ingests. Provenex emits both — the audit-grade source"
+            f"  {DIM}SIEM ingests. Provenex emits both - the audit-grade source"
             f"{RESET}"
         )
         print(

@@ -8,11 +8,11 @@ Before reading this, you may want the architectural framing in [`how_it_works.md
 
 A Provenex `Policy` has three halves:
 
-- **`verification`** — the five-outcome gate. Decides which of `VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED` block a chunk before the next stage. Applies to retrieved content only.
-- **`access_control`** — the data-access policy. A pluggable `PolicyEvaluator` that runs declarative rules over chunk metadata and the request context. Applies to retrieved content only.
-- **`tool_call_control`** *(schema 2.2.0+)* — the tool-call admission policy. A pluggable `ToolCallPolicyEvaluator` that runs declarative rules over tool-call parameters and the request context. Applies to agentic tool calls only.
+- **`verification`** - the five-outcome gate. Decides which of `VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED` block a chunk before the next stage. Applies to retrieved content only.
+- **`access_control`** - the data-access policy. A pluggable `PolicyEvaluator` that runs declarative rules over chunk metadata and the request context. Applies to retrieved content only.
+- **`tool_call_control`** *(schema 2.2.0+)* - the tool-call admission policy. A pluggable `ToolCallPolicyEvaluator` that runs declarative rules over tool-call parameters and the request context. Applies to agentic tool calls only.
 
-A chunk reaches the LLM only if **both** retrieval-side halves allow it. A tool call is admitted only if the tool-call half allows it. The verification half is always present (with sensible defaults if the caller doesn't override). The access-control and tool-call-control halves are independent — early-stage deployments can ship with verification only.
+A chunk reaches the LLM only if **both** retrieval-side halves allow it. A tool call is admitted only if the tool-call half allows it. The verification half is always present (with sensible defaults if the caller doesn't override). The access-control and tool-call-control halves are independent - early-stage deployments can ship with verification only.
 
 ```python
 from provenex import (
@@ -20,13 +20,13 @@ from provenex import (
     Policy, VerificationPolicy,
 )
 
-# Explicit construction — native-DSL only (no tool calls)
+# Explicit construction - native-DSL only (no tool calls)
 policy = Policy(
     verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
     access_control=NativeYamlEvaluator.from_path("hr_policy.yaml"),
 )
 
-# Explicit construction — all three halves (retrieval + tool-call admission)
+# Explicit construction - all three halves (retrieval + tool-call admission)
 policy = Policy(
     verification=VerificationPolicy(block_unauthorized=True, block_tampered=True),
     access_control=NativeYamlEvaluator.from_path("agent_policy.yaml"),
@@ -41,13 +41,13 @@ policy = Policy.from_yaml("provenex_policy.yaml")
 
 In scope:
 
-- **Origin / provenance** — flows through the existing five-outcome verification policy.
-- **Freshness / recency** — `chunk.ingested_at` against a duration window (`not_older_than: 90d`).
-- **Access control** — fields under `request.caller.*` against rule expectations. Identity-provider integration is your concern; Provenex consumes the caller dict you supply.
-- **Jurisdiction / data residency** — `chunk.metadata.residency` against `request.jurisdiction`.
-- **Sensitivity / classification** — `chunk.metadata.classification` against caller role or purpose.
-- **PII presence and handling** — `chunk.metadata.contains_pii` (or any tag your upstream PII tool sets) against caller role.
-- **Authorization scope** — `request.purpose` and arbitrary combinations.
+- **Origin / provenance** - flows through the existing five-outcome verification policy.
+- **Freshness / recency** - `chunk.ingested_at` against a duration window (`not_older_than: 90d`).
+- **Access control** - fields under `request.caller.*` against rule expectations. Identity-provider integration is your concern; Provenex consumes the caller dict you supply.
+- **Jurisdiction / data residency** - `chunk.metadata.residency` against `request.jurisdiction`.
+- **Sensitivity / classification** - `chunk.metadata.classification` against caller role or purpose.
+- **PII presence and handling** - `chunk.metadata.contains_pii` (or any tag your upstream PII tool sets) against caller role.
+- **Authorization scope** - `request.purpose` and arbitrary combinations.
 
 ## What policy cannot express (the refusal list)
 
@@ -62,7 +62,7 @@ Provenex's `PolicyEvaluator` explicitly does **NOT**:
 - **Detect PII** (it enforces tags from upstream PII detectors).
 - **Evaluate quality** (it enforces decisions made by upstream data governance).
 
-If a policy rule needs one of these, the right answer is to fix the upstream system that should be producing the tag — not extend Provenex.
+If a policy rule needs one of these, the right answer is to fix the upstream system that should be producing the tag - not extend Provenex.
 
 ## Unified YAML config file
 
@@ -162,8 +162,8 @@ tool_call_control:
 | `policy_id` | yes if any rule section is present | Non-empty string. Appears on every receipt produced under this policy. |
 | `description` | no | Free-form text. |
 | `verification` | no | Verification gate config. Omitting it uses dataclass defaults. |
-| `access_control` | no | Chunk-level access-control rules. Omitting it means no chunk evaluator is configured — only the verification gate applies to retrieval. |
-| `tool_call_control` *(schema 2.2.0+)* | no | Tool-call admission rules. Omitting it means no tool-call policy is configured — admission defaults to allow. |
+| `access_control` | no | Chunk-level access-control rules. Omitting it means no chunk evaluator is configured - only the verification gate applies to retrieval. |
+| `tool_call_control` *(schema 2.2.0+)* | no | Tool-call admission rules. Omitting it means no tool-call policy is configured - admission defaults to allow. |
 
 Unknown top-level keys raise a parse error. A typo is a load-time failure, not a silent allow.
 
@@ -184,7 +184,7 @@ A flat map of booleans. Recognised keys:
 
 Unknown keys raise. Non-boolean values raise.
 
-### `access_control` subsection — Native YAML DSL
+### `access_control` subsection - Native YAML DSL
 
 The native DSL is intentionally small. Each rule:
 
@@ -215,8 +215,8 @@ Two domains use distinct roots; cross-domain references fail at parse time.
 | Path root | Resolves to |
 | --- | --- |
 | `tool.name` | Tool identifier (e.g. `"web_search"`, `"jira"`, `"jira/issues"` for MCP). For **memory writes** (0.6.5 `admit_memory_write`) this is the constant `"memory.write"`. For **model-inference calls** (0.6.5 `admit_model_inference`) this is the model identifier (e.g. `"claude-opus-4-7"`). |
-| `tool.operation` | The specific operation on the tool (e.g. `"create_issue"`, `"query"`). For memory writes, this is the **memory key being written** — the natural per-key gate axis (`when: { tool.name: "memory.write", tool.operation: "user_profile" }`). For model inference, the verb (`"complete"`, `"stream"`, `"embed"`, `"chat"`). |
-| `tool.parameters.<key>` | The caller-supplied parameter value at `<key>`. Memory writes always have `value_hash`; model inferences always have `prompt_hash`. Both classes default to redacting the verbatim value/prompt — write rules against the hash for content-shape gates, against extras like `tool.parameters.max_tokens` for parameter gates. |
+| `tool.operation` | The specific operation on the tool (e.g. `"create_issue"`, `"query"`). For memory writes, this is the **memory key being written** - the natural per-key gate axis (`when: { tool.name: "memory.write", tool.operation: "user_profile" }`). For model inference, the verb (`"complete"`, `"stream"`, `"embed"`, `"chat"`). |
+| `tool.parameters.<key>` | The caller-supplied parameter value at `<key>`. Memory writes always have `value_hash`; model inferences always have `prompt_hash`. Both classes default to redacting the verbatim value/prompt - write rules against the hash for content-shape gates, against extras like `tool.parameters.max_tokens` for parameter gates. |
 | `tool.target_system` | Logical target system the call would reach (e.g. `"google_custom_search"`, `"acme.atlassian.net"`, `"anthropic"`, `"openai"`, `"crewai_memory"`). |
 | `tool.invocation_id` | Caller-chosen correlation ID (not load-bearing for the decision). |
 
@@ -229,7 +229,7 @@ Two domains use distinct roots; cross-domain references fail at parse time.
 | `request.purpose` | Free-form purpose string. |
 | `request.timestamp` | ISO-8601 UTC timestamp of the request. Also the "now" used for freshness comparisons. |
 
-A missing path in a `when` clause means the rule's scope does not apply — the rule does not fire. A missing path in a `require` clause is governed by `defaults.unknown_metadata` (defaults to `deny`).
+A missing path in a `when` clause means the rule's scope does not apply - the rule does not fire. A missing path in a `require` clause is governed by `defaults.unknown_metadata` (defaults to `deny`).
 
 #### When operators *(schema 2.2.0+ for `in`)*
 
@@ -240,7 +240,7 @@ A missing path in a `when` clause means the rule's scope does not apply — the 
 | `<path>: <value>` | Direct equality. The path resolves to a value equal to the RHS. |
 | `<path>: { in: [a, b, c] }` | Path resolves to a value in the list. Added in schema 2.2.0 so CRUD-style rules don't need three near-identical duplicates. |
 
-No richer operators in `when` — move complex logic into `require`.
+No richer operators in `when` - move complex logic into `require`.
 
 #### Require operators
 
@@ -250,7 +250,7 @@ No richer operators in `when` — move complex logic into `require`.
 | `in` | `<path>: { in: [a, b, c] }` | The path resolves to a value in the list. |
 | `not_in` | `<path>: { not_in: [a, b, c] }` | The path resolves to a value NOT in the list. |
 | `not_older_than` | `<path>: { not_older_than: 90d }` | The path resolves to an ISO-8601 timestamp whose age (relative to `request.timestamp`) is at most the duration. Supported units: `s`, `m`, `h`, `d`. |
-| `matches_pattern` *(2.2.0+)* | `<path>: { matches_pattern: "*.example.com/*" }` | The path resolves to a string matching a POSIX `fnmatch` **glob**. Globs are auditable; regexes are not — by design. |
+| `matches_pattern` *(2.2.0+)* | `<path>: { matches_pattern: "*.example.com/*" }` | The path resolves to a string matching a POSIX `fnmatch` **glob**. Globs are auditable; regexes are not - by design. |
 | `not_matches_pattern` *(2.2.0+)* | `<path>: { not_matches_pattern: "*api*key*" }` | The path resolves to a string NOT matching the glob. |
 | `length_at_most` *(2.2.0+)* | `<path>: { length_at_most: 500 }` | The path resolves to a string of at most this length. Cheapest defense against "agent gets prompt-injected into a 50KB query." |
 
@@ -267,11 +267,11 @@ Unknown operators raise at load time.
 
 The following raise `UnsupportedPolicyFeature` at load time:
 
-- `any_of`, `all_of`, `not` — boolean composition.
-- `nested` — nested rules.
+- `any_of`, `all_of`, `not` - boolean composition.
+- `nested` - nested rules.
 - Custom functions and external data lookups.
 - Unknown `require` operators.
-- **Trajectory-level rules** — see [What the native DSL deliberately doesn't do](#what-the-native-dsl-deliberately-doesnt-do-and-why) below. The native DSL is per-decision-pure by design; cross-decision rules live in the commercial Rego adapter or in the downstream anomaly detector reading receipts.
+- **Trajectory-level rules** - see [What the native DSL deliberately doesn't do](#what-the-native-dsl-deliberately-doesnt-do-and-why) below. The native DSL is per-decision-pure by design; cross-decision rules live in the commercial Rego adapter or in the downstream anomaly detector reading receipts.
 
 The Rego adapter and OPA service adapter are commercial.
 
@@ -285,27 +285,27 @@ Three things you might reach for that the native DSL refuses, **on purpose**:
 
 3. **External data lookups during evaluation.** "Check the user's current entitlement in Okta before deciding." "Resolve this document's classification from the live catalog service." Calls to external systems at decision time are out.
 
-**Why it's a design choice, not a missing feature.** `PolicyEvaluator.evaluate(chunk_or_tool, request) → PolicyDecision` is contractually pure: same inputs, same decision, same `inputs_hash`. Two regulators, two months apart, with the original `(chunk, request)` inputs and the original policy bundle MUST reproduce the receipt's `inputs_hash` exactly. That property is what makes Provenex receipts auditable years after they were issued. The moment a rule reads hidden state outside `(chunk_or_tool, request)` — trajectory history, aggregations, external lookups — `inputs_hash` becomes path-dependent. The audit story collapses.
+**Why it's a design choice, not a missing feature.** `PolicyEvaluator.evaluate(chunk_or_tool, request) → PolicyDecision` is contractually pure: same inputs, same decision, same `inputs_hash`. Two regulators, two months apart, with the original `(chunk, request)` inputs and the original policy bundle MUST reproduce the receipt's `inputs_hash` exactly. That property is what makes Provenex receipts auditable years after they were issued. The moment a rule reads hidden state outside `(chunk_or_tool, request)` - trajectory history, aggregations, external lookups - `inputs_hash` becomes path-dependent. The audit story collapses.
 
 **Where the load-bearing reasons go:**
 
 - `policy_version_hash` is canonical: two bundles that parse to the same Python structure produce the same hash. Trajectory rules would require canonicalising trajectory state into the bundle, which is incoherent (trajectories are runtime artifacts, not config).
-- `inputs_hash` per decision is the audit anchor. Path-dependent inputs mean an auditor can't reproduce it from the recorded inputs alone — they'd need the entire trajectory state, which is exactly what the receipt was supposed to summarise.
+- `inputs_hash` per decision is the audit anchor. Path-dependent inputs mean an auditor can't reproduce it from the recorded inputs alone - they'd need the entire trajectory state, which is exactly what the receipt was supposed to summarise.
 - The five verification outcomes are sacred. Adding a sixth ("denied by trajectory rule") would erode the discrete-cryptographic-states discipline.
 
 **Where to put trajectory rules instead.**
 
-- **Commercial Rego adapter** — the [Rego language](https://www.openpolicyagent.org/docs/latest/policy-language/) is general-purpose and can express trajectory rules cleanly. The Rego adapter is opt-in; operators who use it accept the audit-anchor trade-off explicitly (the `inputs_hash` discipline still applies per decision, but Rego policies can reference trajectory state if the operator authors them that way). Available under the commercial license — see [provenex.ai](https://provenex.ai).
+- **Commercial Rego adapter** - the [Rego language](https://www.openpolicyagent.org/docs/latest/policy-language/) is general-purpose and can express trajectory rules cleanly. The Rego adapter is opt-in; operators who use it accept the audit-anchor trade-off explicitly (the `inputs_hash` discipline still applies per decision, but Rego policies can reference trajectory state if the operator authors them that way). Available under the commercial license - see [provenex.ai](https://provenex.ai).
 
-- **Downstream anomaly detector reading receipts** — this is the recommended path for almost every customer. Provenex emits one signed receipt per decision; an anomaly detector / SIEM / UEBA tool reads the receipt stream and does the sequence / pattern detection there. That's the OCSF export's whole purpose (see [`ocsf_mapping.md`](ocsf_mapping.md)) — receipts become the source-of-record events the detector consumes. The detector is a different tool category (SIEM / UEBA), with different budgets and different vendors. Provenex is the firewall; the detector is the SIEM that correlates across firewall events.
+- **Downstream anomaly detector reading receipts** - this is the recommended path for almost every customer. Provenex emits one signed receipt per decision; an anomaly detector / SIEM / UEBA tool reads the receipt stream and does the sequence / pattern detection there. That's the OCSF export's whole purpose (see [`ocsf_mapping.md`](ocsf_mapping.md)) - receipts become the source-of-record events the detector consumes. The detector is a different tool category (SIEM / UEBA), with different budgets and different vendors. Provenex is the firewall; the detector is the SIEM that correlates across firewall events.
 
 The firewall doesn't ship a SIEM. The SIEM doesn't ship a firewall. Each is better-engineered because it doesn't try to be the other. See [`anomaly_detection.md`](anomaly_detection.md) for the canonical positioning, including worked anomaly-detection patterns over the receipt stream.
 
 ## Evaluator interface
 
-Two parallel Protocols — one for chunks, one for tool calls. Same shape; the discriminator is the type of the context argument. A single `NativeYamlEvaluator` instance satisfies the chunk Protocol; a single `NativeYamlToolCallEvaluator` instance satisfies the tool-call Protocol. A unified bundle that declares both sections produces both evaluator instances under one `Policy`.
+Two parallel Protocols - one for chunks, one for tool calls. Same shape; the discriminator is the type of the context argument. A single `NativeYamlEvaluator` instance satisfies the chunk Protocol; a single `NativeYamlToolCallEvaluator` instance satisfies the tool-call Protocol. A unified bundle that declares both sections produces both evaluator instances under one `Policy`.
 
-### `PolicyEvaluator` — chunk decisions
+### `PolicyEvaluator` - chunk decisions
 
 Backends implement the `PolicyEvaluator` protocol from `provenex.policy.evaluator`:
 
@@ -333,9 +333,9 @@ Contracts every backend must hold:
 - **Side-effect-free per evaluation.** Logging and audit emission are the caller's job.
 - **Stable `policy_version_hash`.** Two bundles that parse to equal Python structures produce the same hash. Whitespace and key reordering do not change the hash.
 
-The native YAML backend (`provenex.NativeYamlEvaluator`) is the reference implementation. Rego and OPA-service implementations of the same protocol ship commercially and emit the same receipt shape — the `evaluator` field on the receipt distinguishes them.
+The native YAML backend (`provenex.NativeYamlEvaluator`) is the reference implementation. Rego and OPA-service implementations of the same protocol ship commercially and emit the same receipt shape - the `evaluator` field on the receipt distinguishes them.
 
-### `ToolCallPolicyEvaluator` — tool-call decisions *(schema 2.2.0+)*
+### `ToolCallPolicyEvaluator` - tool-call decisions *(schema 2.2.0+)*
 
 ```python
 from typing import Protocol
@@ -358,7 +358,7 @@ class ToolCallPolicyEvaluator(Protocol):
 
 Same contracts as `PolicyEvaluator` (deterministic, side-effect-free, stable hash). The native YAML backend (`provenex.NativeYamlToolCallEvaluator`) is the reference implementation. The Rego and OPA-service adapters for tool-call rules are commercial.
 
-`policy_version_hash` covers only the tool-call subset — the two halves of a unified file version independently, the same way `access_control` does. An auditor reading a chunk receipt and a tool-call receipt produced under the same unified file will see two different hashes; modifying one half does not invalidate prior receipts that referenced the other half.
+`policy_version_hash` covers only the tool-call subset - the two halves of a unified file version independently, the same way `access_control` does. An auditor reading a chunk receipt and a tool-call receipt produced under the same unified file will see two different hashes; modifying one half does not invalidate prior receipts that referenced the other half.
 
 ## Receipt block reference
 
@@ -396,19 +396,19 @@ Full field reference is in [`receipt_format.md`](receipt_format.md#policy).
 Key points:
 
 - The `verification` half is **always present**.
-- The `access_control` half is **optional** — receipts produced without a configured evaluator omit it.
+- The `access_control` half is **optional** - receipts produced without a configured evaluator omit it.
 - `policy_version_hash` is canonical: two policies that differ only in formatting hash to the same value. Use `provenex policy hash <policy.yaml>` to print the hash a policy will produce.
 - `inputs_hash` is computed over the canonical inputs object regardless of whether `inputs` itself is recorded. An operator can redact `inputs: null` while keeping the hash, so an auditor with the original inputs can verify them independently.
 - **`metadata_binding`** (schema 2.1.0+) records the trust class of each input. `chunk_metadata` is `"at_ingest"` (signed by the index row) or `"at_evaluate"` (looked up at decision time). `request_context` is always `"at_evaluate"`. Declare via `verify_chunks(..., chunk_metadata_binding=...)`; default is `"at_evaluate"` for safety. See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model.
-- **`caller_hash` (top-level) and `trajectory.session_id` (schema 2.3.0+) are correlation fields, NOT policy inputs.** They appear on the receipt for downstream anomaly detectors / SIEMs to group events by caller and session. Neither field resolves under `request.*` in a rule's `when` or `require` clause. `session_id` is excluded from `inputs_hash` by design — two otherwise-identical requests differing only in `session_id` produce identical decisions and identical input hashes. This preserves the deterministic-per-evaluation contract: per-decision purity stays intact, and sequence / pattern detection is the downstream detector's job. See [`receipt_format.md`](receipt_format.md#top-level-caller_hash-schema-230) for the full reference.
+- **`caller_hash` (top-level) and `trajectory.session_id` (schema 2.3.0+) are correlation fields, NOT policy inputs.** They appear on the receipt for downstream anomaly detectors / SIEMs to group events by caller and session. Neither field resolves under `request.*` in a rule's `when` or `require` clause. `session_id` is excluded from `inputs_hash` by design - two otherwise-identical requests differing only in `session_id` produce identical decisions and identical input hashes. This preserves the deterministic-per-evaluation contract: per-decision purity stays intact, and sequence / pattern detection is the downstream detector's job. See [`receipt_format.md`](receipt_format.md#top-level-caller_hash-schema-230) for the full reference.
 
 ## Worked examples
 
-### Example 1 — HR corpus with PII gating and EU residency
+### Example 1 - HR corpus with PII gating and EU residency
 
 See the file at the top of this document. EU jurisdiction only sees EU-resident chunks; PII-tagged chunks are gated to HR roles; policy-documents corpus has a 90-day freshness window.
 
-### Example 2 — Classification-by-role for a research assistant
+### Example 2 - Classification-by-role for a research assistant
 
 A simpler policy that gates a research-assistant retriever on classification level.
 
@@ -443,7 +443,7 @@ access_control:
 
 The `secret_blocked_entirely` rule shows a pattern for "absolute denylist" with the v0.4 operator set: the `require` clause is intentionally unsatisfiable so the rule always denies for chunks where the `when` clause matches.
 
-### Example 3 — Tool-call admission for an agentic flow *(schema 2.2.0+)*
+### Example 3 - Tool-call admission for an agentic flow *(schema 2.2.0+)*
 
 A policy authored for an agent that uses `web_search` and `jira`. Note how the same unified file expresses chunk policy *and* tool-call policy under one `policy_id` and one canonical document.
 
@@ -505,9 +505,9 @@ tool_call_control:
     unknown_metadata: deny
 ```
 
-### Example 4 — Memory writes and model-inference gates *(0.6.5+)*
+### Example 4 - Memory writes and model-inference gates *(0.6.5+)*
 
-The same `tool_call_control` DSL handles memory writes (admission shape with `name="memory.write"` and the memory key carried in `tool.operation`) and model-inference calls (admission shape with `name=<model_name>` and the provider in `tool.target_system`). Same grammar, same operators, same receipt shape — no new DSL surface to learn.
+The same `tool_call_control` DSL handles memory writes (admission shape with `name="memory.write"` and the memory key carried in `tool.operation`) and model-inference calls (admission shape with `name=<model_name>` and the provider in `tool.target_system`). Same grammar, same operators, same receipt shape - no new DSL surface to learn.
 
 ```yaml
 version: 1
@@ -515,7 +515,7 @@ policy_id: agent-memory-and-models-v1
 
 tool_call_control:
   rules:
-    # Memory-write gate by key — only HR roles can write to user_profile.
+    # Memory-write gate by key - only HR roles can write to user_profile.
     - name: hr_only_for_user_profile_writes
       when:
         tool.name: memory.write
@@ -538,7 +538,7 @@ tool_call_control:
           in: [60, 300, 3600]
       on_violation: deny
 
-    # Model-inference allowlist — only allow these two providers.
+    # Model-inference allowlist - only allow these two providers.
     - name: model_provider_allowlist
       when:
         tool.operation: { in: [complete, stream, chat] }
@@ -547,7 +547,7 @@ tool_call_control:
           in: [anthropic, openai]
       on_violation: deny
 
-    # Token-count cap on Claude Opus — protects budget.
+    # Token-count cap on Claude Opus - protects budget.
     - name: claude_opus_token_cap
       when:
         tool.name: claude-opus-4-7
@@ -560,9 +560,9 @@ tool_call_control:
     unknown_metadata: deny
 ```
 
-Detectors can group by `caller_hash + tool.name="memory.write" + tool.operation=<key>` for per-key write rate baselines, and by `caller_hash + tool.name=<model>` for per-model usage baselines. Anomalies — a caller writing to a key 100× their normal rate, or calling Claude Opus 100× the baseline — fall out of standard SIEM aggregations.
+Detectors can group by `caller_hash + tool.name="memory.write" + tool.operation=<key>` for per-key write rate baselines, and by `caller_hash + tool.name=<model>` for per-model usage baselines. Anomalies - a caller writing to a key 100× their normal rate, or calling Claude Opus 100× the baseline - fall out of standard SIEM aggregations.
 
-### Example 5 — Verification-only, no access control
+### Example 5 - Verification-only, no access control
 
 For early-stage deployments. The access_control section is omitted entirely; only the verification gate applies. This is `verify_chunks` behaviour from v0.1 through v0.3.
 
@@ -579,7 +579,7 @@ verification:
 
 ## Wiring
 
-### Retrieval — `verify_chunks`
+### Retrieval - `verify_chunks`
 
 A complete retrieval call with policy enforcement:
 
@@ -617,9 +617,9 @@ The verification gate and the access-control gate are independent. A chunk reach
 
 For v0.4, `RequestContext` is constructed explicitly by the caller. Identity-provider integration (so the caller dict comes from your IdP rather than your code) is commercial.
 
-### Tool-call admission — `admission_check` *(schema 2.2.0+)*
+### Tool-call admission - `admission_check` *(schema 2.2.0+)*
 
-The tool-call admission analog of `verify_chunks`. Same policy object, same request context, same trajectory cursor. Same receipt format — the receipt carries an `actions[]` block instead of (or alongside) `sources[]`.
+The tool-call admission analog of `verify_chunks`. Same policy object, same request context, same trajectory cursor. Same receipt format - the receipt carries an `actions[]` block instead of (or alongside) `sources[]`.
 
 ```python
 from provenex import (
@@ -651,11 +651,11 @@ if result.allowed:
 save_receipt(result.receipt)             # signed, verifiable offline
 ```
 
-The receipt records the action AND the decision — denials are auditable too. The actual tool call is the caller's responsibility; Provenex returns a decision, not an execution. This is the load-bearing "decision and proof, not execution" line: the moment Provenex starts holding tokens or proxying calls it has become a different product.
+The receipt records the action AND the decision - denials are auditable too. The actual tool call is the caller's responsibility; Provenex returns a decision, not an execution. This is the load-bearing "decision and proof, not execution" line: the moment Provenex starts holding tokens or proxying calls it has become a different product.
 
-**Convenience.** For callers that want "raise on deny, return on allow," use `provenex.enforce_admission(...)` — same signature, raises `ToolCallDenied` (which carries the receipt) instead of returning a deny result.
+**Convenience.** For callers that want "raise on deny, return on allow," use `provenex.enforce_admission(...)` - same signature, raises `ToolCallDenied` (which carries the receipt) instead of returning a deny result.
 
-### Multi-step flows — trajectory composition
+### Multi-step flows - trajectory composition
 
 A mixed retrieve → tool-call → retrieve trajectory produces three signed receipts that link into one DAG:
 
@@ -676,7 +676,7 @@ if r1.allowed:
 r2 = verify_chunks(..., trajectory=r1.next_trajectory)
 ```
 
-`provenex audit --trajectory <dir>` validates the full DAG in one pass — shared `trajectory_id`, no dangling parents, every signature verifies, mixed `step_kind` values (retrieval / tool_call) accepted natively. See [`receipt_format.md`](receipt_format.md) for the trajectory block schema.
+`provenex audit --trajectory <dir>` validates the full DAG in one pass - shared `trajectory_id`, no dangling parents, every signature verifies, mixed `step_kind` values (retrieval / tool_call) accepted natively. See [`receipt_format.md`](receipt_format.md) for the trajectory block schema.
 
 ## CLI
 
@@ -689,7 +689,7 @@ provenex audit --trajectory ./receipts/   # validate a whole agentic trajectory 
 
 Use `provenex policy validate` in CI to catch typos before a broken policy is deployed.
 
-`provenex policy hash` on a single-section file prints one bare `sha256:...` hash (the original contract — pipeline scripts that grep for that prefix continue working). On a unified file with both `access_control` and `tool_call_control`, it prints two lines, one per section, so the auditor can see at a glance which half changed. The `--section` flag filters to one half if needed.
+`provenex policy hash` on a single-section file prints one bare `sha256:...` hash (the original contract - pipeline scripts that grep for that prefix continue working). On a unified file with both `access_control` and `tool_call_control`, it prints two lines, one per section, so the auditor can see at a glance which half changed. The `--section` flag filters to one half if needed.
 
 ## Commercial evaluators (Rego, OPA service)
 
@@ -698,7 +698,7 @@ The `PolicyEvaluator` protocol is the integration point. Two backends ship comme
 - **Rego adapter.** Loads a Rego policy and routes evaluation to an embedded OPA engine. Targets teams who author authorization in Rego elsewhere and want one language across the stack.
 - **OPA service adapter.** Delegates each decision to a running OPA instance over HTTP. Targets teams who run OPA as a service.
 
-Both produce the same `policy.access_control` block shape on the receipt. The `evaluator` field distinguishes them (`rego`, `opa_service`). The decision semantics — allow / deny / `rules_fired` — are evaluator-agnostic by design, so an auditor reading a receipt does not need to know which backend was in use.
+Both produce the same `policy.access_control` block shape on the receipt. The `evaluator` field distinguishes them (`rego`, `opa_service`). The decision semantics - allow / deny / `rules_fired` - are evaluator-agnostic by design, so an auditor reading a receipt does not need to know which backend was in use.
 
 The transparency-log integration for policy bundles (`policy_in_transparency_log: true`) is also commercial.
 
@@ -707,6 +707,6 @@ The transparency-log integration for policy bundles (`policy_in_transparency_log
 See [`threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model for policy decisions specifically. Two important boundaries:
 
 1. **A policy decision is only as trustworthy as the metadata feeding it.** Tag-at-ingest (the tag is signed alongside the fingerprint) and tag-at-evaluate (the tag is read from an external system at decision time) have different trust properties.
-2. **The operator who controls the signing key and the policy file can produce any decision they want.** The commercial transparency-log integration is the mitigation — it forces the operator to commit to the policy publicly.
+2. **The operator who controls the signing key and the policy file can produce any decision they want.** The commercial transparency-log integration is the mitigation - it forces the operator to commit to the policy publicly.
 
 These are limits an honest deployment should understand.

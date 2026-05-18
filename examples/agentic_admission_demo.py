@@ -10,25 +10,25 @@ What it shows, in order:
     1. Load one unified policy file covering chunk access AND tool-call
        admission. One file, two halves, independently versioned hashes.
 
-    2. Step 0 — RETRIEVAL. The agent pulls chunks for an incident-response
+    2. Step 0 - RETRIEVAL. The agent pulls chunks for an incident-response
        query. verify_chunks emits a signed receipt with the
        access_control decisions block; chunks are filtered by the
        classification gate.
 
-    3. Step 1 — TOOL CALL. The agent decides to call `web_search` to
+    3. Step 1 - TOOL CALL. The agent decides to call `web_search` to
        supplement the corpus content. admission_check enforces the
        allowlisted-provider rule and the PII-pattern rule. ALLOWED.
        Signed receipt records the action + decision.
 
-    4. Step 2 — TOOL CALL (denied). The agent tries to call `jira` with
+    4. Step 2 - TOOL CALL (denied). The agent tries to call `jira` with
        a parameter that triggers the role gate. DENIED. The receipt
-       still records the attempt — denials are auditable.
+       still records the attempt - denials are auditable.
 
-    5. Step 3 — RETRIEVAL. Another chunk pull, this time linked into
+    5. Step 3 - RETRIEVAL. Another chunk pull, this time linked into
        the trajectory as a child of step 2.
 
     6. Audit the whole trajectory in one CLI invocation:
-       `provenex audit --trajectory <dir>` — all four receipts validate
+       `provenex audit --trajectory <dir>` - all four receipts validate
        end-to-end. Mixed step_kinds (retrieval / tool_call) are
        first-class.
 
@@ -95,7 +95,7 @@ access_control:
 
 tool_call_control:
   rules:
-    # Demo 1 — domain allowlist on the search tool.
+    # Demo 1 - domain allowlist on the search tool.
     - name: web_search_provider_allowlist
       when: { tool.name: web_search }
       require:
@@ -103,7 +103,7 @@ tool_call_control:
           in: [google_custom_search, bing_v7]
       on_violation: deny
 
-    # Demo 5 — PII / secrets pattern on the query string.
+    # Demo 5 - PII / secrets pattern on the query string.
     - name: no_secrets_in_query
       when: { tool.name: web_search }
       require:
@@ -119,7 +119,7 @@ tool_call_control:
           length_at_most: 500
       on_violation: deny
 
-    # Demo 2 — CRUD-style role gate using `in:` in when.
+    # Demo 2 - CRUD-style role gate using `in:` in when.
     - name: jira_writes_require_role
       when:
         tool.name: jira
@@ -151,7 +151,7 @@ def banner(s: str) -> None:
 
 def step_header(num: int, kind: str, title: str) -> None:
     colour = GREEN if kind == "retrieval" else YELLOW
-    print(f"{BOLD}{colour}STEP {num} — {kind.upper()}{RESET}  {DIM}{title}{RESET}")
+    print(f"{BOLD}{colour}STEP {num} - {kind.upper()}{RESET}  {DIM}{title}{RESET}")
 
 
 def summary_line(label: str, value: str) -> None:
@@ -187,7 +187,7 @@ def main() -> int:
             f"  Policy: {DIM}{policy_path}{RESET}  "
             f"({DIM}provenex policy validate {policy_path}{RESET})"
         )
-        # Show the dual-section hash output — one of the demo moments.
+        # Show the dual-section hash output - one of the demo moments.
         result = subprocess.run(
             [
                 sys.executable,
@@ -230,7 +230,7 @@ def main() -> int:
         )
 
         # --- Step 0: retrieval ---
-        banner("2. Step 0 — retrieve corpus content")
+        banner("2. Step 0 - retrieve corpus content")
         trj = start_trajectory(agent_id="incident_agent")
         step_header(0, "retrieval", "agent pulls one corpus chunk")
 
@@ -256,7 +256,7 @@ def main() -> int:
         )
 
         # --- Step 1: tool call (allowed) ---
-        banner("3. Step 1 — agent calls `web_search` (ALLOWED)")
+        banner("3. Step 1 - agent calls `web_search` (ALLOWED)")
         step_header(1, "tool_call", "search supplemental info")
 
         r1 = admission_check(
@@ -286,8 +286,8 @@ def main() -> int:
         )
 
         # --- Step 2: tool call (denied) ---
-        banner("4. Step 2 — agent calls `jira.create_issue` as wrong role")
-        step_header(2, "tool_call", "deliberately denied — role gate fires")
+        banner("4. Step 2 - agent calls `jira.create_issue` as wrong role")
+        step_header(2, "tool_call", "deliberately denied - role gate fires")
 
         viewer_request = RequestContext(
             caller={"id": "u_99", "role": "viewer"},  # not allowed for writes
@@ -324,14 +324,14 @@ def main() -> int:
             f"  {DIM}# Caller does NOT make the actual Jira call. Decision and{RESET}"
         )
         print(
-            f"  {DIM}# proof, not execution — the receipt is the audit record.{RESET}"
+            f"  {DIM}# proof, not execution - the receipt is the audit record.{RESET}"
         )
         (receipts_dir / "step2_jira_deny.json").write_text(
             r2.receipt.to_json(), encoding="utf-8"
         )
 
         # --- Step 3: another retrieval ---
-        banner("5. Step 3 — retrieve a second corpus chunk")
+        banner("5. Step 3 - retrieve a second corpus chunk")
         step_header(3, "retrieval", "agent gathers more context")
 
         r3 = verify_chunks(
@@ -378,7 +378,7 @@ def main() -> int:
                 f"One signed audit trail.{RESET}"
             )
         else:
-            print(f"  {RED}{BOLD}AUDIT FAILED — investigate above{RESET}")
+            print(f"  {RED}{BOLD}AUDIT FAILED - investigate above{RESET}")
 
         # --- Per-receipt detail (one example, --show-policy) ---
         banner("7. Inspect the denied tool-call receipt")

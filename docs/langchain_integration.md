@@ -145,7 +145,7 @@ next_ctx = traj.next_step(parent_receipts=[r1.receipt], step_kind="retrieval")
 r2 = retriever.get_relevant_documents_with_receipt(q2, trajectory=next_ctx)
 ```
 
-Each receipt records its position in the trajectory. After the run, `provenex audit --trajectory <dir>` validates the entire DAG end-to-end. For LangGraph DAGs or CrewAI multi-agent crews, use the framework-specific wrappers in `provenex.integrations.langgraph` and `provenex.integrations.crewai` — they thread the trajectory through framework state automatically.
+Each receipt records its position in the trajectory. After the run, `provenex audit --trajectory <dir>` validates the entire DAG end-to-end. For LangGraph DAGs or CrewAI multi-agent crews, use the framework-specific wrappers in `provenex.integrations.langgraph` and `provenex.integrations.crewai` - they thread the trajectory through framework state automatically.
 
 ### LangChain retriever versions
 

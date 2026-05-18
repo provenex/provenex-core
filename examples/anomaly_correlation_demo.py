@@ -7,7 +7,7 @@ Run with:
 
 What it shows, in order:
 
-    1. Generate a small synthetic event stream — ~10 signed receipts
+    1. Generate a small synthetic event stream - ~10 signed receipts
        across three callers and two sessions. Mix of verify_chunks
        (retrieval) and admission_check (tool calls). One caller is
        deliberately noisy in one session: 5x web_search in a row.
@@ -15,19 +15,19 @@ What it shows, in order:
     2. Switch hats. The same script then plays the role of a downstream
        anomaly detector reading the on-disk receipts.
 
-    3. Pattern 1 — group by caller_hash. Per-caller tool-call counts.
+    3. Pattern 1 - group by caller_hash. Per-caller tool-call counts.
        The noisy caller pops out: 5 web_search vs everyone else's 1.
 
-    4. Pattern 2 — group by session_id. Per-session step shape (count
+    4. Pattern 2 - group by session_id. Per-session step shape (count
        of retrieval / tool_call). The synthetic incident-response
        session interleaves retrievals and tool calls; the noisy
        "routine search" session is all tool calls.
 
-    5. Pattern 3 — independent verification. The detector re-derives
+    5. Pattern 3 - independent verification. The detector re-derives
        the top-level caller_hash from the verbatim caller dict embedded
        on a decision record. Match → receipt is self-consistent.
        Mismatch (impossible without a signing-key compromise) would
-       mean tampering — and the signature would also have failed.
+       mean tampering - and the signature would also have failed.
 
 Decision-and-proof, not execution. Provenex emits the source-of-record;
 this demo's "detector" half is what a real UEBA / SIEM would do
@@ -214,9 +214,9 @@ def main() -> int:
             f"{DIM}{receipts_dir}{RESET}"
         )
         print(
-            f"  Schema {DIM}2.3.0{RESET}; every receipt carries "
+            f"  Schema {DIM}2.4.0{RESET}; every receipt carries "
             f"{BOLD}caller_hash{RESET} + (where applicable) "
-            f"{BOLD}trajectory.session_id{RESET}."
+            f"{BOLD}trajectory.session_id{RESET} + {BOLD}request_binding{RESET}."
         )
 
         # --- 2. Switch hats --- #
@@ -228,7 +228,7 @@ def main() -> int:
             receipts.append(json.loads(path.read_text(encoding="utf-8")))
 
         # --- 3. Pattern 1: per-caller tool-call counts --- #
-        banner("2. Pattern 1 — GROUP BY caller_hash → per-caller action counts")
+        banner("2. Pattern 1 - GROUP BY caller_hash → per-caller action counts")
 
         actions_by_caller: Counter = Counter()
         retrievals_by_caller: Counter = Counter()
@@ -254,7 +254,7 @@ def main() -> int:
             )
 
         # --- 4. Pattern 2: per-session step-kind shape --- #
-        banner("3. Pattern 2 — GROUP BY session_id → per-session step shape")
+        banner("3. Pattern 2 - GROUP BY session_id → per-session step shape")
 
         session_shape: Dict[str, Counter] = defaultdict(Counter)
         for r in receipts:
@@ -270,12 +270,12 @@ def main() -> int:
             print(f"    {DIM}step shape:{RESET} {shape}")
             if len(counts) == 1:
                 print(
-                    f"    {RED}{BOLD}← single-shape session — investigate{RESET}"
+                    f"    {RED}{BOLD}← single-shape session - investigate{RESET}"
                 )
 
         # --- 5. Pattern 3: independent re-derivation + signature check --- #
         banner(
-            "4. Pattern 3 — verify don't trust: recompute caller_hash + "
+            "4. Pattern 3 - verify don't trust: recompute caller_hash + "
             "verify signatures"
         )
 
@@ -326,7 +326,7 @@ def main() -> int:
             f"don't compete with the detector;{RESET}"
         )
         print(
-            f"  {DIM}we're the substrate that makes detection possible — "
+            f"  {DIM}we're the substrate that makes detection possible - "
             f"and offline-verifiable.{RESET}"
         )
 

@@ -12,8 +12,9 @@ is what makes the provenance receipt independently verifiable.
 from __future__ import annotations
 
 import hashlib
+import hmac
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from .hasher import WindowHash, iter_window_hashes
 from .normalizer import NormalizationOptions, TextNormalizer
@@ -33,11 +34,28 @@ class FingerprinterConfig:
             window_size`` for overlapping windows (recommended). A stride of
             ``window_size // 2`` is a reasonable default.
         normalization: Normalization options to apply before windowing.
+        pepper: Optional secret bytes (a "pepper") that turns the
+            content hash into HMAC-SHA256(pepper, normalized_bytes)
+            instead of plain SHA-256. Mitigates the confirmation /
+            dictionary attack against low-entropy corpora: without a
+            pepper, an attacker who guesses a chunk's plaintext can
+            recompute its SHA-256 and confirm presence in the index
+            (or run a dictionary across an entire HR template). With a
+            pepper, the attacker also needs the pepper bytes, which
+            live in the operator's secret store. Same byte width
+            (``sha256:<hex>``), same identity properties; the hash
+            prefix stays ``sha256:`` so existing tooling reads
+            unchanged. Two deployments with different peppers produce
+            different fingerprints for the same content (the GDPR
+            posture argument). **Set at ingest, identical at verify.**
+            Rotating the pepper requires re-ingesting the corpus
+            because the index stores the peppered fingerprints.
     """
 
     window_size: int = 128
     stride: int = 64
     normalization: NormalizationOptions = field(default_factory=NormalizationOptions)
+    pepper: Optional[bytes] = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +130,23 @@ class Fingerprinter:
         """The configuration in effect for this fingerprinter."""
         return self._config
 
+    def _hash_bytes(self, b: bytes) -> str:
+        """SHA-256 or HMAC-SHA256(pepper, b), prefixed ``sha256:``.
+
+        The prefix stays ``sha256:`` regardless of whether a pepper is
+        in use, because the output IS still a SHA-256-based digest of
+        the same byte width. The semantic difference (peppered vs not)
+        is a deployment-time fact, not a per-fingerprint marker, and
+        records on the index disclose it via the operator's
+        configuration rather than via the prefix.
+        """
+        if self._config.pepper is None:
+            return f"sha256:{hashlib.sha256(b).hexdigest()}"
+        return (
+            "sha256:"
+            + hmac.new(self._config.pepper, b, hashlib.sha256).hexdigest()
+        )
+
     def fingerprint(self, text: str) -> FingerprintingResult:
         """Normalize ``text`` and return its sliding-window fingerprints.
 
@@ -129,6 +164,7 @@ class Fingerprinter:
                 text=norm.text,
                 window_size=self._config.window_size,
                 stride=self._config.stride,
+                pepper=self._config.pepper,
             )
         )
         fingerprints = [
@@ -140,9 +176,7 @@ class Fingerprinter:
             )
             for w in windows
         ]
-        document_version = (
-            f"sha256:{hashlib.sha256(norm.text.encode('utf-8')).hexdigest()}"
-        )
+        document_version = self._hash_bytes(norm.text.encode("utf-8"))
         return FingerprintingResult(
             fingerprints=fingerprints,
             document_version=document_version,
@@ -160,7 +194,11 @@ class Fingerprinter:
             text: The chunk text. Will be normalized before hashing.
 
         Returns:
-            The SHA-256 fingerprint string (``"sha256:<hex>"``).
+            The SHA-256 fingerprint string (``"sha256:<hex>"``). When the
+            fingerprinter is configured with a ``pepper``, the value is
+            HMAC-SHA256(pepper, normalized_bytes); without one it is
+            plain SHA-256. The prefix is unchanged so downstream
+            tooling reads the same.
         """
         norm = self._normalizer.normalize(text)
-        return f"sha256:{hashlib.sha256(norm.text.encode('utf-8')).hexdigest()}"
+        return self._hash_bytes(norm.text.encode("utf-8"))

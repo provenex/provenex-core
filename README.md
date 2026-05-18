@@ -1,17 +1,17 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.7.2)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.7.2)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.8.0)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.8.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
 
 Platform engineering champions Provenex (a runtime guardrail they don't have to build). Security signs off (cryptographic enforcement, not promises). Compliance consumes the output (a queryable, exportable, regulator-ready record). 
 
-Provenex is the policy enforcement layer for AI data access. You declare your security policy once — in our native YAML config (or OPA/Rego, commercial) — and Provenex enforces it on every retrieval **and on every agentic tool call**, then emits a cryptographically signed receipt that proves which chunks reached the LLM, which tool calls were admitted, and under what policy.
+Provenex is the policy enforcement layer for AI data access. You declare your security policy once - in our native YAML config (or OPA/Rego, commercial) - and Provenex enforces it on every retrieval **and on every agentic tool call**, then emits a cryptographically signed receipt that proves which chunks reached the LLM, which tool calls were admitted, and under what policy.
 
-> **Scope of this repo.** `provenex-core` covers both enforcement fronts on one policy-and-proof spine: **retrieval enforcement** (what the AI *reads*) and **agentic tool-call admission** (what the AI is allowed to *do*, including MCP-shaped tool calls and the "can this agent access Jira / Salesforce / this connector" question). Provenex is always **decision and proof, not execution** — an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
+> **Scope of this repo.** `provenex-core` covers both enforcement fronts on one policy-and-proof spine: **retrieval enforcement** (what the AI *reads*) and **agentic tool-call admission** (what the AI is allowed to *do*, including MCP-shaped tool calls and the "can this agent access Jira / Salesforce / this connector" question). Provenex is always **decision and proof, not execution** - an admission controller for AI data access, not a proxy that brokers calls or holds tokens.
 
 This repository contains the open source core: fingerprinting, a Postgres-backed production index (SQLite for development), the native YAML policy DSL, receipt generation, the tool-call admission primitive, and integrations for LangChain / LangGraph / LlamaIndex / CrewAI / MCP. The algorithm is open so it can be audited. Hosted infrastructure, the Rego adapter, the OPA service adapter, Bloom-filter acceleration, compliance-grade exports, and cross-enterprise policy interoperability are available separately at [provenex.ai](https://provenex.ai).
 
@@ -89,14 +89,20 @@ tool_call_control:
     unknown_metadata: deny
 ```
 
-A signed receipt per retrieval **or per tool-call** — verifiable offline by anyone with the public key. Retrieval receipts carry `sources[]` and `policy.access_control`; tool-call receipts carry `actions[]` and `policy.tool_call_control`; mixed agentic flows link both into one trajectory.
+A signed receipt per retrieval **or per tool-call** - verifiable offline by anyone with the public key. Retrieval receipts carry `sources[]` and `policy.access_control`; tool-call receipts carry `actions[]` and `policy.tool_call_control`; mixed agentic flows link both into one trajectory.
 
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "2.3.0",
-  "issuer": "provenex-core/0.7.2",
+  "schema_version": "2.4.0",
+  "issuer": "provenex-core/0.8.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
+  "request_binding": {
+    "algorithm": "sha256",
+    "query_hash": "sha256:b7a1e09c...",
+    "request_context_hash": "sha256:31d8e94c...",
+    "request_hash": "sha256:c2f6a18d..."
+  },
   "output": { "hash": "sha256:...", "hash_algorithm": "sha256" },
   "sources": [
     { "chunk_index": 0, "fingerprint": "sha256:1ebcde39...",
@@ -143,13 +149,15 @@ A signed receipt per retrieval **or per tool-call** — verifiable offline by an
                   "parent_step_ids": ["prx_c5d8e1f2..."], "step_kind": "tool_call",
                   "agent_id": "incident_agent",
                   "session_id": "session-2026-001" },
-  "signature": { "algorithm": "hmac-sha256", "value": "fc5d40895ca2..." }
+  "signature": { "algorithm": "ed25519", "value": "fc5d40895ca2..." }
 }
 ```
 
-A chunk reaches the LLM only if it clears **both** gates: the verification policy AND the access-control policy. The receipt records both verdicts per chunk so an auditor can reason about them independently — and the signature covers everything.
+A chunk reaches the LLM only if it clears **both** gates: the verification policy AND the access-control policy. The receipt records both verdicts per chunk so an auditor can reason about them independently - and the signature covers everything, including the `request_binding` that ties the receipt cryptographically to the triggering query.
 
-**Source-of-record fields for downstream anomaly detectors / SIEMs (schema 2.3.0).** `caller_hash` is the SHA-256 over the canonical JSON of `request_context.caller` — a stable group-by key so a detector can baseline a single user's activity across receipts without crawling per-decision input blobs. `trajectory.session_id` is a caller-chosen opaque string that correlates multiple trajectories under one logical session (a chat conversation, an incident-response engagement, a multi-day investigation). Both fields are decision-and-proof artifacts: they don't influence policy decisions (so `inputs_hash` stays deterministic), they just make receipts joinable downstream. Provenex emits the source-of-record; your detector / SIEM is the SIEM that reads it.
+> **Signing algorithm in this showcase.** This receipt is signed with **Ed25519** (asymmetric) - the right default for any receipt that may be handed to a regulator, external auditor, or downstream party who must verify but should not be able to forge. The OSS core also ships `HmacSha256Signer` for internal-only deployments where producer and verifier share a trust boundary; both implement the same `ReceiptSigner` interface, so receipts are structurally identical. Pick HMAC if simplicity matters more than non-forgeability by the verifier; pick Ed25519 the moment a receipt crosses an org boundary.
+
+**Source-of-record fields for downstream anomaly detectors / SIEMs (schema 2.3.0).** `caller_hash` is the SHA-256 over the canonical JSON of `request_context.caller` - a stable group-by key so a detector can baseline a single user's activity across receipts without crawling per-decision input blobs. `trajectory.session_id` is a caller-chosen opaque string that correlates multiple trajectories under one logical session (a chat conversation, an incident-response engagement, a multi-day investigation). Both fields are decision-and-proof artifacts: they don't influence policy decisions (so `inputs_hash` stays deterministic), they just make receipts joinable downstream. Provenex emits the source-of-record; your detector / SIEM is the SIEM that reads it.
 
 ## Where Provenex fits in your stack
 
@@ -163,27 +171,29 @@ Standard RAG:
 Same pipeline with Provenex:
   documents ─┬─▶ chunker ─▶ embedder ─▶ vector DB
              │
-             └─▶ provenex.add()   (parallel signed write)
+             └─▶ provenex.add(entry_kind=whole_chunk)   (parallel signed write)
 
   user query ─▶ embedder ─▶ vector DB.search() ─▶ retriever ─┐
-                                                              ▼
-                                ┌───────────────────────────────────────┐
-                                │  policy.verification (5-outcome gate) │
-                                │  policy.access_control (rule engine)  │
-                                │      BOTH must allow                  │
-                                └────────────┬──────────────────────────┘
-                                             ▼
-                                    surviving chunks ─▶ LLM ─▶ answer
-                                             │
-                                             ▼
-                              signed policy-decision receipt ─▶ audit / compliance
+       │                                                      ▼
+       │                        ┌───────────────────────────────────────┐
+       │                        │  policy.verification (5-outcome gate) │
+       │                        │  policy.access_control (rule engine)  │
+       │                        │  whole-chunk match only → VERIFIED    │
+       │                        │      BOTH must allow                  │
+       │                        └────────────┬──────────────────────────┘
+       │                                     ▼
+       │                            surviving chunks ─▶ LLM ─▶ answer
+       │                                     │
+       └─────── request_text ──▶  signed receipt + request_binding
+                                  ▼
+                       audit / compliance / SIEM
 ```
 
 ### The pieces
 
 | Piece | What it does |
 | --- | --- |
-| **Provenex index** | A separate database that stores **cryptographic fingerprints** of every chunk you ingested, plus metadata: document ID, version, ingestion timestamp, authorization state, residency / classification / PII tags supplied by upstream tools. Not the embeddings. Not the chunk text. SHA-256 hashes and metadata only. Ships with two backends: **Postgres** for multi-node production deployments (point at your own RDS / Aurora / Cloud SQL / on-prem cluster), and **SQLite** for single-node development. Same `ProvenanceIndex` interface, identical canonical signing payload — receipts produced against one backend verify bit-identically against the other. |
+| **Provenex index** | A separate database that stores **cryptographic fingerprints** of every chunk you ingested, plus metadata: document ID, version, ingestion timestamp, authorization state, residency / classification / PII tags supplied by upstream tools. Not the embeddings. Not the chunk text. SHA-256 hashes and metadata only. Ships with two backends: **Postgres** for multi-node production deployments (point at your own RDS / Aurora / Cloud SQL / on-prem cluster), and **SQLite** for single-node development. Same `ProvenanceIndex` interface, identical canonical signing payload - receipts produced against one backend verify bit-identically against the other. |
 | **Ingester** | At document-write time, alongside the code that writes embeddings to your vector DB, this writes fingerprints to the Provenex index. Two writes, both committed before "ingest" is done. |
 | **Policy evaluator** | At query time, after your retriever pulls chunks from the vector DB, Provenex re-fingerprints each chunk and runs it through both gates: the verification policy (origin, freshness, tampering) and the access-control policy (jurisdiction, classification, PII tags, freshness windows, caller role). |
 | **Receipt** | A signed JSON record of the whole transaction: chunks, verification outcomes, the unified policy, per-chunk decisions, the rules that fired, a hash of the LLM output, and a signature over the whole thing. |
@@ -201,13 +211,13 @@ The integration lives in your **application code**, the same RAG glue layer that
 
 In scope, in the open-source core:
 
-- **Origin / provenance** — was this chunk ingested through Provenex (`VERIFIED` vs `UNVERIFIED`), is the document version current (`STALE`), is it authorized (`UNAUTHORIZED`), did the stored signature survive (`TAMPERED`).
-- **Freshness / recency** — `chunk.ingested_at` against a duration window.
-- **Access control** — fields under `request.caller.*` against rule expectations.
-- **Jurisdiction / data residency** — `chunk.metadata.residency` against `request.jurisdiction`.
-- **Sensitivity / classification** — `chunk.metadata.classification` against caller role or purpose.
-- **PII presence and handling** — `chunk.metadata.contains_pii` (or any tag your upstream PII tool sets) against caller role.
-- **Authorization scope** — `request.purpose` and arbitrary policy-defined combinations of the above.
+- **Origin / provenance** - was this chunk ingested through Provenex (`VERIFIED` vs `UNVERIFIED`), is the document version current (`STALE`), is it authorized (`UNAUTHORIZED`), did the stored signature survive (`TAMPERED`).
+- **Freshness / recency** - `chunk.ingested_at` against a duration window.
+- **Access control** - fields under `request.caller.*` against rule expectations.
+- **Jurisdiction / data residency** - `chunk.metadata.residency` against `request.jurisdiction`.
+- **Sensitivity / classification** - `chunk.metadata.classification` against caller role or purpose.
+- **PII presence and handling** - `chunk.metadata.contains_pii` (or any tag your upstream PII tool sets) against caller role.
+- **Authorization scope** - `request.purpose` and arbitrary policy-defined combinations of the above.
 
 Out of scope, deliberately:
 
@@ -243,7 +253,7 @@ See [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/
 ```python
 from provenex import (
     verify_chunks, Policy, RequestContext,
-    HmacSha256Signer, PostgresProvenanceIndex,
+    Ed25519Signer, PostgresProvenanceIndex,
 )
 
 index = PostgresProvenanceIndex(
@@ -256,17 +266,21 @@ request = RequestContext(
 )
 result = verify_chunks(
     chunks=retrieved_chunks, index=index,
-    signer=HmacSha256Signer(),
+    signer=Ed25519Signer.from_private_key_file("audit-signing.pem"),
     policy=policy, request_context=request,
+    request_text=query,           # binds the receipt to this specific query
     chunk_metadata=[doc.metadata for doc in retrieved_documents],
 )
 feed_to_llm(result.kept)            # only chunks that cleared BOTH gates
-save_receipt(result.receipt)        # signed, verifiable offline
+save_receipt(result.receipt)        # signed, verifiable offline by anyone
+                                    # with the public key
 ```
 
-Many verify pods plus one ingester pod is the recommended deployment shape — bulk ingest is a batch job; verify is per-request and scales horizontally via Postgres read replicas. Multi-writer ingest into the same index is supported and serialized at the document-row level. Bring your own Postgres (RDS, Aurora, Cloud SQL, Crunchy, Supabase, or self-managed) — Provenex doesn't host it.
+> **Why Ed25519 here, not HMAC?** This example produces a receipt that may be handed to a regulator, an external auditor, or any party outside your operations team. Ed25519 lets them verify the receipt without giving them anything they could forge with - they hold only the public key. The internal-only deployment path uses `HmacSha256Signer` for the symmetric-fast case; see [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md) for when each is the right tool.
 
-> **Default for `block_unverified` is `False`.** Chunks whose fingerprint isn't in the Provenex index (`UNVERIFIED` outcome) pass through to the LLM by default — the receipt records the outcome, but the chunk is not removed. For strict enforcement where every chunk must be Provenex-tracked, set `block_unverified=True` in your `VerificationPolicy`. Constructing `VerificationPolicy()` without an explicit value emits a `DeprecationWarning` so the choice is visible; pass `block_unverified=False` explicitly to acknowledge the advisory stance. The default will flip to `True` in a future major release.
+Many verify pods plus one ingester pod is the recommended deployment shape - bulk ingest is a batch job; verify is per-request and scales horizontally via Postgres read replicas. Multi-writer ingest into the same index is supported and serialized at the document-row level. Bring your own Postgres (RDS, Aurora, Cloud SQL, Crunchy, Supabase, or self-managed) - Provenex doesn't host it.
+
+> **Default for `block_unverified` is `False`.** Chunks whose fingerprint isn't in the Provenex index (`UNVERIFIED` outcome) pass through to the LLM by default - the receipt records the outcome, but the chunk is not removed. For strict enforcement where every chunk must be Provenex-tracked, set `block_unverified=True` in your `VerificationPolicy`. Constructing `VerificationPolicy()` without an explicit value emits a `DeprecationWarning` so the choice is visible; pass `block_unverified=False` explicitly to acknowledge the advisory stance. The default will flip to `True` in a future major release.
 
 ### Development (SQLite, single-node)
 
@@ -276,7 +290,7 @@ index = SQLiteProvenanceIndex("provenance.db")
 # ... rest is identical to the Postgres example
 ```
 
-Stdlib-only, no service to stand up. Same interface, same canonical signing payload, same receipt format — a receipt produced against SQLite verifies identically against Postgres and vice versa.
+Stdlib-only, no service to stand up. Same interface, same canonical signing payload, same receipt format - a receipt produced against SQLite verifies identically against Postgres and vice versa.
 
 Your existing vector store is untouched. Provenex runs alongside as a parallel signed index plus a policy gate. Whether you use **Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas Vector Search, Elasticsearch with vectors, Vespa, or a Postgres table you wrote yourself**, Provenex doesn't know and doesn't care.
 
@@ -303,14 +317,14 @@ result = admission_check(
 )
 if result.allowed:
     jira_client.create_issue(...)        # YOUR code, YOUR credentials
-save_receipt(result.receipt)             # signed, verifiable offline — denies too
+save_receipt(result.receipt)             # signed, verifiable offline - denies too
 ```
 
 **Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call against the target system using its own credentials. Provenex never holds OAuth tokens, never proxies traffic, and never sits on the response-data path. Use [`ProvenexToolWrapper`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/langchain.py) to wrap any LangChain tool; use [`provenex_mcp_admission`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/mcp.py) to decorate any MCP `tools/call` handler.
 
 ### Memory reads, memory writes, and model-inference (0.6.5+)
 
-Every class of action an agent takes lands on a receipt under the right `trajectory.step_kind` classifier — not just retrieval (`step_kind="retrieval"`) and tool calls (`step_kind="tool_call"`). Three convenience entrypoints close the loop so a downstream anomaly detector / SIEM gets a complete event stream:
+Every class of action an agent takes lands on a receipt under the right `trajectory.step_kind` classifier - not just retrieval (`step_kind="retrieval"`) and tool calls (`step_kind="tool_call"`). Three convenience entrypoints close the loop so a downstream anomaly detector / SIEM gets a complete event stream:
 
 ```python
 from provenex import (
@@ -324,19 +338,19 @@ request = RequestContext(caller={"id": "u_42", "role": "engineer"},
                          jurisdiction="US", purpose="incident_response",
                          timestamp="2026-05-14T11:30:00Z")
 
-# Memory read — emits a receipt with step_kind="memory_read" and
+# Memory read - emits a receipt with step_kind="memory_read" and
 # content_source="memory_store" on every source. Same five outcomes
 # (VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED) apply.
 r1 = verify_memory(["last user message: ..."], index=index, signer=signer,
                    request_context=request)
 
-# Memory write — emits an admission receipt with name="memory.write",
+# Memory write - emits an admission receipt with name="memory.write",
 # operation=<memory_key>. By default the verbatim value is redacted
 # (memory values often contain PII); value_hash is always recorded.
 r2 = admit_memory_write(memory_key="user_profile", value={"prefers": "dark_mode"},
                         request=request, store_id="crewai_memory", signer=signer)
 
-# Model inference — emits an admission receipt with name=<model_name>,
+# Model inference - emits an admission receipt with name=<model_name>,
 # target_system=<provider>, parameters={prompt_hash, **extras}. Verbatim
 # prompt redacted by default. Enables detection on "this user is calling
 # claude-opus 100x baseline" or "prompts contain pattern X".
@@ -346,11 +360,11 @@ r3 = admit_model_inference(model_name="claude-opus-4-7",
                            extra_parameters={"max_tokens": 4000}, signer=signer)
 ```
 
-All three reuse the existing receipt schema unchanged (still 2.3.0). They produce admission-shaped receipts (`actions[]` + `policy.tool_call_control`) for `memory_write` / `model_inference`, and retrieval-shaped receipts (`sources[]` + `policy.access_control`) for `memory_read`. The unified YAML policy gates all of them the same way — a tool-call rule like `when: { tool.name: "memory.write", tool.operation: "user_profile" }` enforces per-key gates; a rule like `when: { tool.name: "claude-opus-4-7" }` gates model usage by provider/allowlist.
+All three reuse the existing receipt schema unchanged (now 2.4.0; the v0.8.0 additions are additive). They produce admission-shaped receipts (`actions[]` + `policy.tool_call_control`) for `memory_write` / `model_inference`, and retrieval-shaped receipts (`sources[]` + `policy.access_control`) for `memory_read`. The unified YAML policy gates all of them the same way - a tool-call rule like `when: { tool.name: "memory.write", tool.operation: "user_profile" }` enforces per-key gates; a rule like `when: { tool.name: "claude-opus-4-7" }` gates model usage by provider/allowlist.
 
 ### Streaming receipts to a SIEM / firehose (0.6.6+)
 
-Every receipt-emitting entrypoint accepts an optional `sink=` parameter. Provenex publishes to the sink after the receipt is finalised — your hot path stays the same; the firehose runs alongside.
+Every receipt-emitting entrypoint accepts an optional `sink=` parameter. Provenex publishes to the sink after the receipt is finalised - your hot path stays the same; the firehose runs alongside.
 
 ```python
 from provenex import (
@@ -372,11 +386,11 @@ result = admission_check(..., sink=sink)   # the only line that changes
 
 **Reference sinks shipped:** `StdoutJSONLSink`, `FileJSONLSink` (date-rotated), `MultiSink` (fan-out), `RetryQueueSink` (bounded in-process retry queue) in the stdlib core; `KafkaSink`, `SQSSink`, `S3AppendSink` (date-hour-partitioned), `PubSubSink` behind optional extras. Define-your-own via the `ReceiptSink` Protocol.
 
-**Error semantics — load-bearing.** Sink failures are swallowed and logged via `warnings.warn`. **Provenex never breaks the agent's hot path because export is degraded.** A misconfigured Kafka cluster writes a warning to stderr; the receipt is still returned through the function value; the agent keeps running. See [`docs/streaming_export.md`](https://github.com/provenex/provenex-core/blob/main/docs/streaming_export.md) for the full reference including retry queue semantics and custom-sink implementation.
+**Error semantics - load-bearing.** Sink failures are swallowed and logged via `warnings.warn`. **Provenex never breaks the agent's hot path because export is degraded.** A misconfigured Kafka cluster writes a warning to stderr; the receipt is still returned through the function value; the agent keeps running. See [`docs/streaming_export.md`](https://github.com/provenex/provenex-core/blob/main/docs/streaming_export.md) for the full reference including retry queue semantics and custom-sink implementation.
 
-### OCSF export — receipts as cross-vendor security events (0.6.7+)
+### OCSF export - receipts as cross-vendor security events (0.6.7+)
 
-Provenex maps signed receipts to **OCSF v1.3** events — the emerging cross-vendor schema (Splunk, Datadog, Elastic, Microsoft Sentinel) for security events. One function transforms; one adapter streams.
+Provenex maps signed receipts to **OCSF v1.3** events - the emerging cross-vendor schema (Splunk, Datadog, Elastic, Microsoft Sentinel) for security events. One function transforms; one adapter streams.
 
 ```python
 from provenex import OCSFAdapter, MultiSink, FileJSONLSink, receipt_to_ocsf
@@ -404,22 +418,22 @@ events = receipt_to_ocsf(result.receipt.to_dict())
 | Verification block (TAMPERED, UNAUTHORIZED, etc.) | Detection Finding | **2004** | **Critical** |
 | Policy deny (access_control or tool_call_control) | Detection Finding | **2004** | **High** |
 
-Correlation fields land where SIEMs expect them: `caller_hash` → `actor.user.uid`, `trajectory_id` → `metadata.correlation_uid`, `session_id` → `metadata.session_uid`, `step_kind` → `metadata.labels[]`. The full field-by-field spec is in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md) — the public artifact for SIEM vendors and enterprise security architects.
+Correlation fields land where SIEMs expect them: `caller_hash` → `actor.user.uid`, `trajectory_id` → `metadata.correlation_uid`, `session_id` → `metadata.session_uid`, `step_kind` → `metadata.labels[]`. The full field-by-field spec is in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md) - the public artifact for SIEM vendors and enterprise security architects.
 
 ### Provenex is the firewall. Your detector is the SIEM.
 
-Provenex enforces per-decision admission and emits signed receipts. Your anomaly detector / UEBA / SIEM reads the receipt stream and does sequence / pattern detection. Two categories, two budgets, two vendors — by design.
+Provenex enforces per-decision admission and emits signed receipts. Your anomaly detector / UEBA / SIEM reads the receipt stream and does sequence / pattern detection. Two categories, two budgets, two vendors - by design.
 
 - **Provenex side:** deterministic, per-decision-pure, side-effect-free, sub-millisecond. `inputs_hash` is reproducible by a regulator years later from the recorded inputs + the original policy bundle.
 - **Detector side:** stateful, cross-decision, external-data-aware. Reads receipts via `ReceiptSink` (or OCSF events via `OCSFAdapter`), groups by `caller_hash` / `trajectory_id` / `session_id` / `step_kind`, baselines normal behaviour, alerts on drift.
 
-The native YAML DSL **deliberately refuses** trajectory-level rules, cross-decision aggregations, and external-data lookups during evaluation. Putting those inside a per-decision admission engine breaks the audit-anchor guarantees and the latency budget. They belong downstream — in your detector reading the receipt stream. Customers who need trajectory rules in-engine use the commercial Rego adapter; the trade-off is explicit. See [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
+The native YAML DSL **deliberately refuses** trajectory-level rules, cross-decision aggregations, and external-data lookups during evaluation. Putting those inside a per-decision admission engine breaks the audit-anchor guarantees and the latency budget. They belong downstream - in your detector reading the receipt stream. Customers who need trajectory rules in-engine use the commercial Rego adapter; the trade-off is explicit. See [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
 
-**The canonical positioning doc, including worked detection patterns:** [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md) — what fields a detector reads, five worked patterns (per-caller rate, trajectory shape drift, policy near-miss, cross-trajectory correlation, content-source anomaly), trust model, and the operational reasoning for the firewall / SIEM split.
+**The canonical positioning doc, including worked detection patterns:** [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md) - what fields a detector reads, five worked patterns (per-caller rate, trajectory shape drift, policy near-miss, cross-trajectory correlation, content-source anomaly), trust model, and the operational reasoning for the firewall / SIEM split.
 
 ### Per-deployment unlinkability for `caller_hash` (0.6.5+)
 
-By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sha256:<hex>` prefix) — anyone with the verbatim caller dict can reproduce the hash. For multi-tenant deployments that want two of their customers' detectors to NOT be able to cross-correlate users via shared `caller_hash` buckets, pass `caller_hash_salt=b"..."` to `verify_chunks` / `admission_check` / `verify_memory` / `admit_memory_write` / `admit_model_inference`. The hash becomes HMAC-SHA256 keyed by the salt (`hmac-sha256:<hex>` prefix); two deployments with different salts produce different `caller_hash` for the same caller. Same algorithm family (SHA-256), same wire format — the prefix tells consumers which mode produced the hash. Salting is **opt-in**; no caller-side migration needed for the bare-SHA-256 default.
+By default, `caller_hash` is a plain SHA-256 over the canonical caller dict (`sha256:<hex>` prefix) - anyone with the verbatim caller dict can reproduce the hash. For multi-tenant deployments that want two of their customers' detectors to NOT be able to cross-correlate users via shared `caller_hash` buckets, pass `caller_hash_salt=b"..."` to `verify_chunks` / `admission_check` / `verify_memory` / `admit_memory_write` / `admit_model_inference`. The hash becomes HMAC-SHA256 keyed by the salt (`hmac-sha256:<hex>` prefix); two deployments with different salts produce different `caller_hash` for the same caller. Same algorithm family (SHA-256), same wire format - the prefix tells consumers which mode produced the hash. Salting is **opt-in**; no caller-side migration needed for the bare-SHA-256 default.
 
 ## Agentic and multi-step flows
 
@@ -434,12 +448,12 @@ Modern RAG isn't always one retrieve-then-answer cycle. Agents reason, retrieve,
 | **MCP** | n/a (retrieval is upstream of MCP) | `provenex_mcp_admission(...)` decorator wraps a `tools/call` handler. Standard JSON-RPC error code on deny. |
 | **Anything else** | `provenex.verify_chunks(chunks, index=..., policy=..., request_context=..., trajectory=...)` | `provenex.admission_check(tool=..., request=..., policy=..., signer=..., trajectory=...)` |
 
-Every retrieval, tool-call admission, **memory read, memory write, and model-inference** step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. **Mixed step kinds — `retrieval` / `tool_call` / `memory_read` / `memory_write` / `model_inference` — are first-class** under one signed audit trail. One CLI invocation covers the whole agent run.
+Every retrieval, tool-call admission, **memory read, memory write, and model-inference** step emits its own signed receipt with a `trajectory` block linking it to its parents in a DAG. After the agent finishes, `provenex audit --trajectory <dir>` validates the entire trajectory end-to-end: signatures, inclusion proofs, no dangling parents, no cycles, shared trajectory id, at least one root step. **Mixed step kinds - `retrieval` / `tool_call` / `memory_read` / `memory_write` / `model_inference` - are first-class** under one signed audit trail. One CLI invocation covers the whole agent run.
 
 Receipts also carry two optional per-chunk fields useful in agent flows:
 
-- **`claims[]`** — self-attribution claims from the agent ("I used this chunk", "this supports the answer", "this is relevant"). Cryptographically bound to the receipt so the agent cannot deny what it asserted. Provenex does not verify the claim itself — that is the agent operator's compliance burden, made auditable by the signature.
-- **`content_source`** — origin classifier (`indexed_corpus`, `live_tool_output`, `memory_store`, `compiled_artifact`). Lets an auditor reading an `UNVERIFIED` outcome distinguish "this chunk was supposed to be in the index and wasn't" (alarm) from "this came from a live web search" (expected).
+- **`claims[]`** - self-attribution claims from the agent ("I used this chunk", "this supports the answer", "this is relevant"). Cryptographically bound to the receipt so the agent cannot deny what it asserted. Provenex does not verify the claim itself - that is the agent operator's compliance burden, made auditable by the signature.
+- **`content_source`** - origin classifier (`indexed_corpus`, `live_tool_output`, `memory_store`, `compiled_artifact`). Lets an auditor reading an `UNVERIFIED` outcome distinguish "this chunk was supposed to be in the index and wasn't" (alarm) from "this came from a live web search" (expected).
 
 See [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md) for a runnable agentic example.
 
@@ -455,7 +469,7 @@ Four components:
 
 **4. Receipt.** After verification and policy evaluation, a JSON receipt is issued that records the chunks, their verification outcomes, the policy that was in effect (both halves), the per-chunk decisions and rules fired, a SHA-256 of the LLM output, and a signature over the whole thing.
 
-For iterative agentic flows, each retrieval step emits its own receipt with a `trajectory` block linking it to its parents — see [Agentic and multi-step flows](#agentic-and-multi-step-flows). The five verification outcomes and the policy framework are unchanged; the trajectory metadata sits alongside them.
+For iterative agentic flows, each retrieval step emits its own receipt with a `trajectory` block linking it to its parents - see [Agentic and multi-step flows](#agentic-and-multi-step-flows). The five verification outcomes and the policy framework are unchanged; the trajectory metadata sits alongside them.
 
 See [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md) for the full algorithm, including the architectural distinction between fingerprint-based identity and embedding-based similarity. See [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md) for the schema spec.
 
@@ -477,11 +491,11 @@ The expected enterprise deployment is **both**: vector DB for retrieval performa
 
 ### Composing with OPA and existing data governance tools
 
-Provenex sits **above** your existing governance plumbing, not in place of it. PII detection happens in your data pipeline; classification happens in your data catalog; identity is owned by your IdP; authorization rules are authored in OPA / Rego if that's your house language. Provenex consumes the tags and identity those systems produce, applies the policy at retrieval time, and emits the signed record. The Rego adapter (commercial) lets you reuse Rego policies you already have; the OPA service adapter (commercial) lets you delegate decisions to a running OPA instance. The native YAML DSL exists for teams who don't already run OPA — it covers the common retrieval policies without forcing a new platform commitment.
+Provenex sits **above** your existing governance plumbing, not in place of it. PII detection happens in your data pipeline; classification happens in your data catalog; identity is owned by your IdP; authorization rules are authored in OPA / Rego if that's your house language. Provenex consumes the tags and identity those systems produce, applies the policy at retrieval time, and emits the signed record. The Rego adapter (commercial) lets you reuse Rego policies you already have; the OPA service adapter (commercial) lets you delegate decisions to a running OPA instance. The native YAML DSL exists for teams who don't already run OPA - it covers the common retrieval policies without forcing a new platform commitment.
 
 ### Why vendor-agnostic matters
 
-If you run more than one vector DB across the enterprise — common for cost or latency reasons — you have separate audit stories with separate vendor trust roots, and no way to produce a single signed record that says "this chunk, wherever it came from, was bit-exact identical to the one we authorized AND passed the policy in effect for this caller."
+If you run more than one vector DB across the enterprise - common for cost or latency reasons - you have separate audit stories with separate vendor trust roots, and no way to produce a single signed record that says "this chunk, wherever it came from, was bit-exact identical to the one we authorized AND passed the policy in effect for this caller."
 
 Provenex works the same way against all of them, because it never talks to the vector DB. It re-fingerprints the chunks the retriever returns, runs the same unified policy across every retrieval path, and emits the same receipt schema. One signed index, one policy engine, one verifiable artifact across every retrieval path in the enterprise. **Migration risk between vector DBs goes to zero.**
 
@@ -514,11 +528,11 @@ python provenex-core/examples/standalone_demo.py
 
 For the integration-pattern story, run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store, bypassing Provenex ingest, get caught at the retrieval boundary and blocked from reaching the LLM.
 
-For the **tool-call admission** headline demo — a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation — run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
+For the **tool-call admission** headline demo - a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation - run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
 
-For **MCP** servers: [`examples/mcp_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/mcp_admission_demo.py) — the `provenex_mcp_admission` decorator on a JSON-RPC `tools/call` handler. Three live requests (allow + deny + allow), the `on_deny` callback pattern emitting a structured JSON-RPC error response, plus the lower-level `wrap_mcp_request` for routers. Pure stdlib — no MCP server library needed.
+For **MCP** servers: [`examples/mcp_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/mcp_admission_demo.py) - the `provenex_mcp_admission` decorator on a JSON-RPC `tools/call` handler. Three live requests (allow + deny + allow), the `on_deny` callback pattern emitting a structured JSON-RPC error response, plus the lower-level `wrap_mcp_request` for routers. Pure stdlib - no MCP server library needed.
 
-For **LangGraph** state graphs: [`examples/langgraph_admission_node_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/langgraph_admission_node_demo.py) — the conditional-edge pattern (`admit_jira → execute_jira` on allow vs `admit_jira → denied_handler` on deny). Two scenarios (engineer-allowed + viewer-denied), both audited end-to-end. Pure stdlib — the integration imports nothing from langgraph, so the demo runs without `[langgraph]` installed.
+For **LangGraph** state graphs: [`examples/langgraph_admission_node_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/langgraph_admission_node_demo.py) - the conditional-edge pattern (`admit_jira → execute_jira` on allow vs `admit_jira → denied_handler` on deny). Two scenarios (engineer-allowed + viewer-denied), both audited end-to-end. Pure stdlib - the integration imports nothing from langgraph, so the demo runs without `[langgraph]` installed.
 
 ## CLI
 
@@ -531,9 +545,11 @@ provenex audit   receipt.json --show-policy          # render the unified policy
 provenex audit   --trajectory ./receipts/            # validate a whole agentic trajectory at once (mixed step kinds)
 provenex policy  validate hr_policy.yaml             # parse + validate a policy file (chunk + tool-call rules)
 provenex policy  hash     hr_policy.yaml             # print canonical policy_version_hash(es)
+provenex index   audit --index prov.db --threshold-days 180   # supersession lint: stale docs + unsuperseded older versions
+provenex selftest                                              # conformance check: every documented property re-derived in-process
 ```
 
-`provenex policy validate` is the CI-time check for policy files: a typo or a reserved-but-unimplemented feature fails the build instead of silently allowing at runtime. `provenex policy hash` prints the canonical `policy_version_hash` that will appear on every receipt produced under that policy.
+`provenex policy validate` is the CI-time check for policy files: a typo or a reserved-but-unimplemented feature fails the build instead of silently allowing at runtime. `provenex policy hash` prints the canonical `policy_version_hash` that will appear on every receipt produced under that policy. `provenex index audit` is the cron-style check that catches a re-ingest path that skipped Provenex (and would otherwise leave stale chunks marked VERIFIED). `provenex selftest` is the one-command conformance check security teams ask for: it asserts every property the docs claim against the installed binary.
 
 For receipts signed with **Ed25519** (asymmetric), pass `--public-key audit.pub` instead of relying on `PROVENEX_SIGNING_SECRET`. An auditor with only the public key can verify but cannot forge: the strongest version of the "verifiable by anyone" guarantee, suitable for handing receipts to external regulators.
 
@@ -552,25 +568,32 @@ Security teams won't trust a black box. If a regulator asks how your access-poli
 - **Native YAML policy DSL** for both chunk decisions and tool-call admission: pluggable `PolicyEvaluator` and `ToolCallPolicyEvaluator` protocols with the YAML evaluators as the reference backends; operators include `in` / `not_in` / `not_older_than` / `matches_pattern` / `not_matches_pattern` / `length_at_most`
 - **`metadata_binding`** per decision: each `chunk_metadata` block on the receipt declares whether it was tag-at-ingest (signed by the index row) or tag-at-evaluate (looked up at decision time). Lets an auditor see the trust class of every input at a glance.
 - **Bloom-filter acceleration interface** (`BloomFilterIndex` ABC + `BloomAcceleratedIndex` wrapper). High-throughput Bloom-filter acceleration available commercially.
-- **Tool-call admission primitive** (schema 2.2.0+): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution — the wrapper never holds tokens or proxies the call.
-- **Source-of-record correlation fields** (schema 2.3.0): top-level `caller_hash` (SHA-256 over the canonical caller dict; or HMAC-SHA256 with an opt-in deployment salt for per-deployment unlinkability) and optional `trajectory.session_id` (multi-trajectory correlation key). Decision-and-proof artifacts — they don't influence policy decisions, just make receipts joinable downstream by a SIEM / anomaly detector.
-- **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` — convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
+- **Tool-call admission primitive** (schema 2.2.0+): `provenex.admission_check(...)` returns a signed receipt with `actions[]` + `policy.tool_call_control`. Reference MCP middleware (`provenex.tool_call.integrations.mcp`) and LangChain wrapper (`ProvenexToolWrapper`). Decision and proof, not execution - the wrapper never holds tokens or proxies the call.
+- **Source-of-record correlation fields** (schema 2.3.0): top-level `caller_hash` (SHA-256 over the canonical caller dict; or HMAC-SHA256 with an opt-in deployment salt for per-deployment unlinkability) and optional `trajectory.session_id` (multi-trajectory correlation key). Decision-and-proof artifacts - they don't influence policy decisions, just make receipts joinable downstream by a SIEM / anomaly detector.
+- **Step-kind coverage entrypoints** (0.6.5+): `verify_memory(...)`, `admit_memory_write(...)`, `admit_model_inference(...)` - convenience wrappers that produce admission-shaped receipts for the full agent surface (`memory_read` / `memory_write` / `model_inference` step kinds). Default `redact_value=True` / `redact_prompt=True` so verbatim values stay off the receipt by default; the hash anchor (`value_hash` / `prompt_hash`) is always recorded.
 - **Streaming export sinks** (0.6.6+): `ReceiptSink` Protocol + reference sinks for `StdoutJSONLSink` / `FileJSONLSink` (date-rotated) / `MultiSink` (fan-out) / `RetryQueueSink` (bounded in-process retry) in the stdlib core. `KafkaSink` / `SQSSink` / `S3AppendSink` (date-hour-partitioned) / `PubSubSink` behind optional `[export-kafka]` / `[export-aws]` / `[export-gcp]` extras. Every emission entrypoint accepts `sink=`; failures are swallowed-and-logged so the agent's hot path is never broken by export degradation.
-- **OCSF v1.3 mapping** (0.6.7+, stdlib core): `provenex.receipt_to_ocsf(receipt_dict)` transforms one signed receipt into one or more OCSF events (Application Activity / API Activity / Detection Finding). `OCSFAdapter` wraps any `ReceiptSink` so the stream emits OCSF events instead of raw receipts — instantly compatible with Splunk / Datadog / Elastic / Microsoft Sentinel. Full mapping spec in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md).
-- **Source-of-record positioning + detection patterns** (0.6.8+): [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md) — the canonical reference for how receipts integrate with downstream anomaly detectors / UEBA / SIEM. Schema field reference for detectors, five worked detection patterns, trust model, and the operational reasoning for the firewall / SIEM split. **The native DSL deliberately refuses** trajectory-level rules so per-decision purity (and the audit-anchor guarantees that depend on it) stays intact — see [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why).
+- **OCSF v1.3 mapping** (0.6.7+, stdlib core): `provenex.receipt_to_ocsf(receipt_dict)` transforms one signed receipt into one or more OCSF events (Application Activity / API Activity / Detection Finding). `OCSFAdapter` wraps any `ReceiptSink` so the stream emits OCSF events instead of raw receipts - instantly compatible with Splunk / Datadog / Elastic / Microsoft Sentinel. Full mapping spec in [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md).
+- **Source-of-record positioning + detection patterns** (0.6.8+): [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md) - the canonical reference for how receipts integrate with downstream anomaly detectors / UEBA / SIEM. Schema field reference for detectors, five worked detection patterns, trust model, and the operational reasoning for the firewall / SIEM split. **The native DSL deliberately refuses** trajectory-level rules so per-decision purity (and the audit-anchor guarantees that depend on it) stays intact - see [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why).
+- **Window-aligned splice control** (v0.8.0): `entry_kind` on every index row, signed as part of the canonical payload. Whole-chunk entries promote to `VERIFIED`; sliding-window entries are structural locators that never promote. A 128-codepoint substring of an authorized document, or a splice across two documents, returns `UNVERIFIED`. Red-team coverage: [`tests/test_window_splice_redteam.py`](https://github.com/provenex/provenex-core/blob/main/tests/test_window_splice_redteam.py).
+- **Request-to-receipt binding** (schema 2.4.0, v0.8.0): top-level `request_binding` block hashes the triggering query + canonical request_context into the signed payload, so a valid receipt cannot be presented as evidence for a different query. Pass `request_text=` to `verify_chunks(...)` / `admission_check(...)`. The verbatim query is never recorded; only its hash.
+- **Five-outcome precedence** (v0.8.0): `OUTCOME_PRECEDENCE = (TAMPERED, UNAUTHORIZED, STALE, UNVERIFIED, VERIFIED)` codified in code with `reduce_outcomes()` helper. An auditor reading a denied chunk knows which condition shadowed which.
+- **Peppered fingerprint mode** (v0.8.0): `FingerprinterConfig(pepper=b"...")` turns the content hash into HMAC-SHA256(pepper, normalized). Blunts the confirmation / dictionary attack against low-entropy corpora (HR templates, policy boilerplate) and gives per-deployment unlinkability of fingerprints across tenants.
+- **OSS witness / checkpoint log** (v0.8.0): `WitnessLog` is a hash-chained, signed, append-only JSONL log of `(tree_size, tree_root, issued_at)` records. The producer-side artifact of the standard CT witness pattern. Operators publish each line to a store they cannot retroactively edit to close split-view resistance against a key-holding operator. See [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md#witness--checkpoint-log-v080).
+- **Conformance self-test** (v0.8.0): `provenex selftest` runs an in-process set of checks that match every property the docs claim. Exits 0 on every check passing; 1 on any failure. Suitable for CI / pre-deploy.
+- **Index audit** (v0.8.0): `provenex index audit --index <db>` surfaces documents that have not been re-ingested in the threshold window AND any older versions still flagged not-superseded after a re-ingest skipped the API. The supersession operational contract is in [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md).
 - Trajectory receipts (schema 1.3.0+): per-step receipts linked into a DAG for agentic / multi-step flows, mixing retrieval, tool-call, memory, and model-inference steps
 - Self-attribution claims (schema 1.4.0+): signed but unverified records of what the agent said it used
 - Content-source classifier (schema 1.4.0+): distinguish indexed-corpus chunks from live-tool / memory-store chunks
 - LangChain / LangGraph / LlamaIndex / CrewAI / MCP integrations
 - Framework-agnostic `verify_chunks` / `verify_memory` / `admission_check` / `admit_memory_write` / `admit_model_inference` for everything else
 - Public hash helpers: `compute_caller_hash(caller, salt=...)` and `compute_value_hash(value)` so downstream consumers can independently re-derive the hashes embedded on receipts
-- CLI: `provenex ingest / verify / receipt / audit / policy`
+- CLI: `provenex ingest / verify / receipt / audit / policy / selftest / index audit`
 - Python SDK: `pip install provenex-core`
 
 ### Commercial (at provenex.ai)
 
-- **Rego adapter** — load Rego bundles into the same `PolicyEvaluator` protocol; emit the same receipt shape
-- **OPA service adapter** — delegate evaluation to a running OPA instance over HTTP
+- **Rego adapter** - load Rego bundles into the same `PolicyEvaluator` protocol; emit the same receipt shape
+- **OPA service adapter** - delegate evaluation to a running OPA instance over HTTP
 - Hosted provenance index with distributed signed append-only storage
 - Transparency-log-backed policy bundle records (so `policy_in_transparency_log: true` lights up)
 - **Bloom-filter acceleration** for high-throughput verification at 10M+ chunk scale
@@ -583,7 +606,7 @@ The interfaces (`ProvenanceIndex`, `PolicyEvaluator`, `BloomFilterIndex`) are th
 
 ## Privacy and data sovereignty
 
-The index stores fingerprints (one-way SHA-256 hashes) and metadata. **No document content, no PII, no chunk text is ever written.** Anyone with the index can verify retrieval, but no one can recover document content from it. The `policy.access_control.decisions[].inputs` field on the receipt records the metadata the evaluator looked at (residency tags, classification, caller role) — operators who want to redact those can set `inputs: null` while keeping the `inputs_hash` for offline verification.
+The index stores fingerprints (one-way SHA-256 hashes) and metadata. **No document content, no PII, no chunk text is ever written.** Anyone with the index can verify retrieval, but no one can recover document content from it. The `policy.access_control.decisions[].inputs` field on the receipt records the metadata the evaluator looked at (residency tags, classification, caller role) - operators who want to redact those can set `inputs: null` while keeping the `inputs_hash` for offline verification.
 
 ## License
 

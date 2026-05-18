@@ -173,7 +173,7 @@ def answer_with_provenance(
     return result.kept, result.receipt.to_dict()
 ```
 
-The merkle-log inclusion proofs are attached automatically when the index is a `MerkleSQLiteProvenanceIndex` — no extra plumbing needed on the caller side.
+The merkle-log inclusion proofs are attached automatically when the index is a `MerkleSQLiteProvenanceIndex` - no extra plumbing needed on the caller side.
 
 ## What this gets you
 
