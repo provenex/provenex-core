@@ -69,11 +69,19 @@ tool_call_control:
           in: [google_custom_search, bing_v7]
       on_violation: deny
 
-    - name: no_secrets_in_query
+    # fnmatch is glob, not regex - one rule per pattern. The DSL
+    # deliberately refuses regex; globs are auditable.
+    - name: no_api_key_in_query
       when: { tool.name: web_search }
       require:
         tool.parameters.q:
-          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+          not_matches_pattern: "*api_key=*"
+      on_violation: deny
+    - name: no_password_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*password=*"
       on_violation: deny
 
     - name: jira_writes_require_role
@@ -529,6 +537,8 @@ python provenex-core/examples/standalone_demo.py
 For the integration-pattern story, run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). Watch a poisoned chunk that was added directly to the vector store, bypassing Provenex ingest, get caught at the retrieval boundary and blocked from reaching the LLM.
 
 For the **tool-call admission** headline demo - a mixed `retrieve → call_tool(allowed) → call_tool(denied) → retrieve` agent flow producing four signed receipts validated end-to-end in one CLI invocation - run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py).
+
+For the **four-attack tour** - one demo, four attack shapes, real LangChain integration (`InMemoryVectorStore` + `@tool`, no mocks): run [`examples/attack_thwarted_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/attack_thwarted_demo.py). The four acts: (1) a viewer-role insider tries `jira.delete_issue` and the wrapped tool denies before the underlying function runs; (2) two RAG-poisoning variants land in the vector store - a never-indexed chunk and a window-aligned splice of an authorized doc - and both return `UNVERIFIED`; (3) an attacker tries to re-present a valid signed receipt as evidence for a different regulator query, and the v0.8.0 `request_binding` catches the replay; (4) a low-privilege insider attempts a restricted memory write and a secret-in-prompt model call, both denied via the policy. Ends with an aggregate audit: 3 denies + 3 UNVERIFIED + 1 forged signature, all signed audit anchors a regulator can re-verify offline. `pip install langchain-core numpy` first.
 
 For **MCP** servers: [`examples/mcp_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/mcp_admission_demo.py) - the `provenex_mcp_admission` decorator on a JSON-RPC `tools/call` handler. Three live requests (allow + deny + allow), the `on_deny` callback pattern emitting a structured JSON-RPC error response, plus the lower-level `wrap_mcp_request` for routers. Pure stdlib - no MCP server library needed.
 

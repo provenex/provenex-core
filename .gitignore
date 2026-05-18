@@ -25,9 +25,12 @@ htmlcov/
 # Release notes live outside the repo (private notes folder).
 meta/release_v*.md
 
-# Benchmarking artifacts — local-only; numbers are summarized in docs/scaling.md
+# Benchmarking artifacts - local-only; numbers are summarized in docs/scaling.md
 bench_reports/
 bench/wiki_cache/
+
+# Demo working directories (auto-generated on each run; not source).
+_attack_thwarted_demo/
 
 .DS_Store
 .idea/

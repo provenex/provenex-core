@@ -250,8 +250,8 @@ No richer operators in `when` - move complex logic into `require`.
 | `in` | `<path>: { in: [a, b, c] }` | The path resolves to a value in the list. |
 | `not_in` | `<path>: { not_in: [a, b, c] }` | The path resolves to a value NOT in the list. |
 | `not_older_than` | `<path>: { not_older_than: 90d }` | The path resolves to an ISO-8601 timestamp whose age (relative to `request.timestamp`) is at most the duration. Supported units: `s`, `m`, `h`, `d`. |
-| `matches_pattern` *(2.2.0+)* | `<path>: { matches_pattern: "*.example.com/*" }` | The path resolves to a string matching a POSIX `fnmatch` **glob**. Globs are auditable; regexes are not - by design. |
-| `not_matches_pattern` *(2.2.0+)* | `<path>: { not_matches_pattern: "*api*key*" }` | The path resolves to a string NOT matching the glob. |
+| `matches_pattern` *(2.2.0+)* | `<path>: { matches_pattern: "*.example.com/*" }` | The path resolves to a string matching a POSIX `fnmatch` **glob**. Globs are auditable; regexes are not - by design. The only metacharacters are `*` (zero or more chars), `?` (one char), and `[abc]` / `[!abc]` (character classes). **`(a\|b\|c)` is NOT a glob construct** - it matches the literal characters `(a|b|c)`. To express "matches A OR B," write one rule per pattern. |
+| `not_matches_pattern` *(2.2.0+)* | `<path>: { not_matches_pattern: "*api_key=*" }` | The path resolves to a string NOT matching the glob. Same glob constraints as `matches_pattern`. |
 | `length_at_most` *(2.2.0+)* | `<path>: { length_at_most: 500 }` | The path resolves to a string of at most this length. Cheapest defense against "agent gets prompt-injected into a 50KB query." |
 
 Unknown operators raise at load time.
@@ -474,12 +474,21 @@ tool_call_control:
         tool.target_system: { in: [google_custom_search, bing_v7] }
       on_violation: deny
 
-    # PII / secrets pattern check on the query string.
-    - name: no_secrets_in_query
+    # PII / secrets pattern check on the query string. fnmatch is
+    # glob, NOT regex (by design - globs are auditable). One rule
+    # per literal pattern; the disjunction lives across rules, not
+    # inside a single glob.
+    - name: no_api_key_in_query
       when: { tool.name: web_search }
       require:
         tool.parameters.q:
-          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+          not_matches_pattern: "*api_key=*"
+      on_violation: deny
+    - name: no_password_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*password=*"
       on_violation: deny
 
     # Length cap. Cheapest defense against prompt-injection-via-long-query.

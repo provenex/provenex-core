@@ -391,13 +391,21 @@ tool_call_control:
         tool.target_system: { in: [google_custom_search, bing_v7] }
       on_violation: deny
 
-    - name: no_secrets_in_query
+    # fnmatch is glob, not regex; one rule per pattern. Pair with a
+    # length cap so a giant query can't burn pattern cycles.
+    - name: no_api_key_in_query
       when: { tool.name: web_search }
       require:
         tool.parameters.q:
-          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+          not_matches_pattern: "*api_key=*"
         tool.parameters.q:
           length_at_most: 500
+      on_violation: deny
+    - name: no_password_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*password=*"
       on_violation: deny
 
     - name: jira_writes_require_role
