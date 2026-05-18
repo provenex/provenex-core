@@ -95,7 +95,7 @@ from .trajectory import TrajectoryContext
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
 SCHEMA_VERSION = "2.4.0"
-ISSUER = "provenex-core/0.8.0"
+ISSUER = "provenex-core/0.8.1"
 
 
 # --------------------------------------------------------------------------- #

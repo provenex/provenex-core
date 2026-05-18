@@ -99,6 +99,41 @@ _RESERVED_RULE_KEYS = frozenset({"any_of", "all_of", "not", "nested"})
 _DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
 _DURATION_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
+# Characters that look like regex but are LITERAL in fnmatch globs. An
+# operator who writes ``"*(api_key|password)*"`` almost certainly means
+# regex-style disjunction; fnmatch will silently treat the parens and
+# pipe as literal characters and the rule will never fire. Fail at
+# policy-load time with a clear message so the operator either
+# rewrites as multiple rules or escapes the ambiguity intentionally.
+# The frozenset is small on purpose - brackets ``[`` / ``]`` are
+# legitimate glob character-class syntax and stay allowed.
+_REGEX_LIKE_PATTERN_CHARS: FrozenSet[str] = frozenset({"|", "(", ")"})
+
+
+def _reject_regex_confusion(*, pattern: str, where: str) -> None:
+    """Raise PolicyParseError if a glob pattern contains regex-only syntax.
+
+    The DSL's ``matches_pattern`` / ``not_matches_pattern`` operators
+    use Python's ``fnmatch`` (glob), not ``re`` (regex). ``|`` / ``(`` /
+    ``)`` are not glob constructs; in a glob they match the literal
+    characters. Operators who write a regex-like alternation get a
+    silently-broken rule. Refuse it at parse time.
+    """
+    bad = sorted(set(pattern) & _REGEX_LIKE_PATTERN_CHARS)
+    if not bad:
+        return
+    bad_str = ", ".join(repr(c) for c in bad)
+    raise PolicyParseError(
+        f"{where}: pattern {pattern!r} contains regex-only character(s) "
+        f"({bad_str}). matches_pattern / not_matches_pattern use POSIX "
+        f"fnmatch globs (``*``, ``?``, ``[abc]``), NOT regular "
+        f"expressions; ``(a|b|c)`` is treated as the literal characters "
+        f"``(a|b|c)`` and the rule will never match what you mean. "
+        f"Express disjunction as one rule per pattern - e.g. two rules "
+        f"with `not_matches_pattern: \"*api_key*\"` and "
+        f"`not_matches_pattern: \"*password*\"`."
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Parsing                                                                     #
@@ -319,10 +354,18 @@ def _validate_rule(
                     ),
                 )
             for op in ("matches_pattern", "not_matches_pattern"):
-                if op in constraint and not isinstance(constraint[op], str):
-                    raise PolicyParseError(
-                        f"{source}: rule '{name}' require['{path}'].{op} "
-                        f"must be a glob pattern string (e.g. '*.example.com')"
+                if op in constraint:
+                    if not isinstance(constraint[op], str):
+                        raise PolicyParseError(
+                            f"{source}: rule '{name}' require['{path}'].{op} "
+                            f"must be a glob pattern string (e.g. '*.example.com')"
+                        )
+                    _reject_regex_confusion(
+                        pattern=constraint[op],
+                        where=(
+                            f"{source}: rule '{name}' "
+                            f"require['{path}'].{op}"
+                        ),
                     )
             if "length_at_most" in constraint:
                 v = constraint["length_at_most"]
