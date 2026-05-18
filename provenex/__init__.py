@@ -28,6 +28,12 @@ from .core.receipt import (
     verify_receipt_signature,
 )
 from .core.witness import WitnessLog, WitnessRecord
+# Ed25519Signer is exported at the top level for symmetry with
+# HmacSha256Signer. The class itself only fails (with a clear
+# "install provenex-core[ed25519]" error) when instantiated; bare
+# import works in any environment so the top-level provenex import
+# stays pure-stdlib.
+from .core.ed25519 import Ed25519Signer
 from .core.trajectory import (
     TrajectoryAuditResult,
     TrajectoryCheck,
@@ -93,7 +99,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.8.1"
+__version__ = "0.8.2"
 
 __all__ = [
     # Core
@@ -147,6 +153,7 @@ __all__ = [
     "ReceiptBuilder",
     "ReceiptSigner",
     "HmacSha256Signer",
+    "Ed25519Signer",
     "verify_receipt_signature",
     "compute_caller_hash",
     "compute_value_hash",
