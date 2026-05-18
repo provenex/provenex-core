@@ -168,4 +168,3 @@ For the full attacker model, defended and undefended threats, and the security F
 - [`provenex/policy/policy.py`](../provenex/policy/policy.py): `VerificationPolicy`, block/flag matrix, status reduction
 - [`provenex/core/receipt.py`](../provenex/core/receipt.py): receipt model, builder, signer interface, signature verification
 
-The total is small. Read it.
