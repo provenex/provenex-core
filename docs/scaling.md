@@ -425,6 +425,125 @@ keep in mind when sizing:
    tuning lever; we'll add a batched `add_many` to the interface in a
    subsequent release.
 
+### Deployment patterns for big-enterprise / polyglot stacks
+
+The benchmark numbers above are for one Python process. Real enterprise
+deployments have three structural questions on top of that:
+
+1. **Does every host need the SDK?** The short answer is: every host
+   that *ingests* or *verifies* needs the SDK. The witness pod is a
+   single cron job; the auditor is the regulator's machine and runs
+   offline. So "every host" really means "every retrieval-path pod" -
+   the same set of pods that already call your vector store.
+
+2. **What about Java / Go / Rust / Node stacks?** The Python SDK
+   doesn't run inside those. Three patterns cover this, and the right
+   choice depends on how much per-pod state you tolerate.
+
+3. **How does this scale past one verify pod's RPS limit?** Postgres
+   reads are a B-tree point-lookup, so they scale with replicas.
+   Connection count is the bottleneck before query latency.
+
+The three SDK distribution patterns:
+
+| Pattern | What it looks like | When to use | Trade-off |
+|---|---|---|---|
+| **A. SDK on every host** | Each app pod imports `provenex`, connects directly to Postgres, signs locally. The library shape the demos show. | Python-native stacks. The default. | Per-pod Python overhead; pod density limited by Python runtime size. |
+| **B. Sidecar container** | One Provenex sidecar per app pod, app talks to it via local HTTP / gRPC over the pod network. Sidecar handles fingerprinting, verify, signing, and the Postgres pool. | Polyglot enterprises - Java, Go, Rust, Node apps need only a thin HTTP client. | Extra hop (microseconds within a pod), one container per app pod. |
+| **C. Centralized verify service** | Three to five Provenex pods serving as a shared HTTP service. All app pods call it. | Enterprises that refuse per-pod runtime cost; "treat Provenex like any other internal microservice." | Introduces a service dependency. "Decision and proof, not execution" still holds (we never sit on the data path), but Provenex becomes a critical-path internal service rather than a library. |
+
+The HTTP-server side of patterns B and C is not yet shipped in the OSS
+core. The library exposes everything the server needs (`verify_chunks`,
+`admission_check`, `compute_request_binding`); wrapping it in
+~200 lines of FastAPI is the work. We will ship a reference image when
+the first customer with a polyglot stack asks; the design is
+intentionally not speculative.
+
+### Sizing the Postgres connection layer
+
+The single biggest scale lever for pattern A or C is not Provenex
+itself - it is **PgBouncer in front of Postgres**. Each verify pod opens
+its own `psycopg_pool.ConnectionPool` (default min 1, max 10). At 100
+verify pods that is 1,000 direct connections to Postgres, which most
+managed Postgres tiers cap below.
+
+Recommended topology for enterprise scale:
+
+```
+[ app pods x N ]
+       |
+       |   (or sidecar, or centralized service)
+       v
+[ Provenex pods x N - same library, same DSN ]
+       |
+       v
+[ PgBouncer in transaction mode ] - 50-200 server connections
+       |
+       v
+[ Postgres primary + N read replicas ]
+       |
+       +--> WAL --> [ archival / cross-region replica ]
+```
+
+What this buys you:
+
+- **Connection multiplexing**: 10,000 client connections to PgBouncer
+  collapse to ~100 server connections to Postgres. The benchmark
+  bottleneck shifts from "Postgres ran out of connection slots" to
+  actual query throughput.
+- **Read replicas absorb verify load**: Provenex's verify path is a
+  pure `SELECT` against an indexed column. Point verify pods at a
+  read replica DSN; point the ingester pod at the primary. Postgres
+  read replicas scale linearly with replicas added.
+- **WAL archival**: orthogonal to Provenex; standard Postgres backup
+  discipline. Provenex receipts and the witness log live outside
+  Postgres, so even total Postgres loss does not invalidate
+  already-issued receipts.
+
+### Which pods need Provenex installed?
+
+| Pod / process | Provenex SDK required? | Postgres connection? | Signing key? |
+|---|---|---|---|
+| Ingester (batch) | Yes | Yes (primary) | Yes (index secret) |
+| Verify (per-request retrieval) | Yes | Yes (read replica OK) | Yes (receipt secret) |
+| Witness publisher (cron) | Yes | Yes (read replica) | Yes (receipt secret) |
+| App pods (request handlers, in pattern A) | Yes | Yes | Yes |
+| App pods (pattern B with sidecar) | **No** | No | No |
+| App pods (pattern C with central service) | **No** | No | No |
+| Regulator / external auditor | Optional - the auditor logic is in `provenex audit`, but receipts are also verifiable in any language that does SHA-256 + Ed25519 | **No** | **No** (only the Ed25519 public key) |
+
+The "no" rows are the polyglot-stack unlocks. Pattern B is the standard
+sidecar idiom; pattern C is the standard internal-service idiom. Both
+treat Provenex as a black box from the app's perspective.
+
+### When the SDK overhead actually shows up
+
+The benchmark numbers (verify p50 371 µs on SQLite) translate to roughly
+**2,500 verify-per-second per Python process** on commodity hardware
+before Python overhead dominates. Above that, the levers in order:
+
+1. **Add verify pods** - linear scaling up to PgBouncer connection
+   limits.
+2. **Add Postgres read replicas** - point new verify pods at new
+   replicas.
+3. **Move to a batched `verify_chunks_batch` API** (not yet shipped) -
+   amortises the per-call Python overhead (parsing, receipt
+   construction, signing) across N chunks. Roughly 5-10x throughput
+   improvement on multi-chunk-per-request workloads.
+4. **Bloom filter acceleration** (commercial) - the `BloomFilterIndex`
+   ABC is in the OSS core; a production implementation absorbs the
+   "fingerprint not in index" case in process memory, eliminating the
+   Postgres round-trip for UNVERIFIED chunks. Material when UNVERIFIED
+   is a small-but-nonzero fraction of traffic at scale.
+5. **Rust core with language bindings** (roadmap, not yet built) - the
+   algorithm is small enough that a Rust core would 50-100x per-call
+   throughput and remove the install-Python constraint entirely. Real
+   roadmap, no ETA.
+
+Levers 1 and 2 are operational. Lever 3 is a library API addition. Levers
+4 and 5 are roadmap. In practice almost every enterprise deployment we
+have seen is comfortable on levers 1 and 2.
+
 ### What this doc does not yet cover
 
 - **Postgres benchmarks** at 1M and 10M chunks against managed
