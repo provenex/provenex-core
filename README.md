@@ -498,4 +498,4 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 
 - Homepage: [provenex.ai](https://provenex.ai)
 - Issues and discussion: GitHub Issues on this repo
-- Commercial features: contact via provenex.ai
+- Commercial features: contact@provenex.ai
