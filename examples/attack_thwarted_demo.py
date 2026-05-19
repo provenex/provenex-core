@@ -1,51 +1,58 @@
-"""Four attacks, four signed verdicts. Real LangChain. No mocks.
+"""The regulator's seven questions. Real LangChain. No mocks.
 
-A tour of how Provenex turns four real-world attack shapes into auditable
-deny / unverified records, exercising the **actual** LangChain RAG
-toolkit and the **actual** LangChain tool surface:
+A signed receipt is only useful if it answers the questions a regulator
+will actually ask. This demo runs an agent through four common attack
+shapes against real LangChain primitives (``InMemoryVectorStore`` +
+``@tool``), then walks the resulting receipt archive against the seven
+questions an external auditor wants answered:
 
-    - Act 1 wraps a real ``langchain_core.tools.tool``-decorated function
-      with ``ProvenexToolWrapper``. The wrapper's admission check decides
-      before the underlying function runs.
-    - Act 2 builds a real ``langchain_core.vectorstores.InMemoryVectorStore``
-      with ``DeterministicFakeEmbedding`` (LangChain ships both; no
-      cloud creds, no native deps), runs the framework's actual
-      ``.invoke(query)`` retrieval path, and feeds the result through
-      Provenex's verifier. The "fake" in ``FakeEmbedding`` is "not
-      learned"; the framework's class hierarchy and dispatch are
-      identical to a production embedding.
-    - Act 3 is framework-agnostic by nature - it's about the receipt's
-      ``request_binding`` block surviving the attempted replay.
-    - Act 4 wraps a memory-write tool the same way as the Jira tool,
-      plus exercises ``admit_model_inference`` directly for the
-      secret-in-prompt case.
+    1. Which documents did this agent retrieve to answer the question?
+    2. Under what policy were they allowed to be retrieved?
+    3. Was that policy the version in effect at the time, or has it
+       changed since?
+    4. Were any of those documents modified after they were authorised?
+    5. Were any documents returned by retrieval that were NOT in the
+       authorised set?
+    6. Did this agent perform any tool calls or memory writes outside
+       its role?
+    7. Can an auditor verify all of the above without our
+       infrastructure?
 
-Acts:
+The four acts produce the receipts the closing audit answers each
+question from:
 
-    1. Unauthorized Jira action.
+    Act 1. Unauthorized Jira action.
        A low-privilege viewer attempts ``jira.delete_issue``. The
        policy denies BEFORE the wrapped tool's function executes.
+       Produces a signed admission receipt with decision=deny and
+       rules_fired naming the rule. Answers question 6.
 
-    2. Poisoned RAG corpus.
+    Act 2. Poisoned RAG corpus.
        Two attack variants:
-         (a) A chunk that was never indexed at all - the trivial case.
-         (b) A window-aligned substring of an authorized document -
-             the v0.8.0 splice control.
+         (a) A chunk that was never indexed at all.
+         (b) A window-aligned substring of an authorised document
+             (the v0.8.0 splice control).
        Both return UNVERIFIED through the real LangChain retriever
-       pipeline; the strict policy blocks them.
+       pipeline. Answers questions 4 and 5.
 
-    3. Regulator / audit replay.
+    Act 3. Audit replay.
        An attacker takes a valid receipt produced for query A and
        tries to present it as evidence for query B. The
-       ``request_binding`` makes the receipt commit cryptographically
-       to query A; the auditor's check refuses the replay.
+       ``request_binding`` block commits the receipt cryptographically
+       to query A; the auditor's check refuses the replay. Editing
+       the binding breaks the signature. Answers question 7.
 
-    4. Insider agent misuse.
+    Act 4. Insider agent misuse.
        Same insider, two attempts:
-         (a) ``memory.write`` to a restricted key - denied via
+         (a) ``memory_write`` to a restricted key - denied via
              ``ProvenexToolWrapper`` wrapping a real memory tool.
          (b) Model inference call carrying secret material in the
              prompt - denied via ``admit_model_inference`` directly.
+       Both produce signed deny receipts. Answers question 6.
+
+Questions 1, 2, and 3 are answered by every receipt unconditionally
+via ``sources[*]``, ``policy.*.policy_id``, and
+``policy.*.policy_version_hash``.
 
 Run:
 
@@ -58,9 +65,10 @@ Run:
 cosine similarity. The demo itself is stdlib; numpy is a downstream
 requirement of the framework.)
 
-End: aggregate audit walking the saved receipts. Three denies + one
-UNVERIFIED + one forged-signature, all captured on signed audit anchors
-the regulator can re-verify offline.
+End: the seven questions reprinted with the specific receipt field
+that proves each answer, plus an aggregate audit walking the saved
+receipts: three denies + three UNVERIFIED + one forged signature, all
+captured on signed audit anchors the regulator can re-verify offline.
 """
 
 from __future__ import annotations
@@ -224,6 +232,27 @@ def banner(s: str) -> None:
     print()
 
 
+# The seven questions a regulator asks of a receipt archive. The
+# closing audit replays the list with the specific receipt field that
+# answers each one; the four acts produce the receipts that make the
+# evidence concrete.
+SEVEN_QUESTIONS: List[str] = [
+    "Which documents did this agent retrieve to answer the question?",
+    "Under what policy were they allowed to be retrieved?",
+    "Was that policy the version in effect at the time, or has it changed since?",
+    "Were any of those documents modified after they were authorised?",
+    "Were any documents returned by retrieval that were NOT in the authorised set?",
+    "Did this agent perform any tool calls or memory writes outside its role?",
+    "Can an auditor verify all of the above without our infrastructure?",
+]
+
+
+def print_seven_questions(prefix: str = "Q") -> None:
+    """Print the seven questions, numbered, one per line."""
+    for i, q in enumerate(SEVEN_QUESTIONS, start=1):
+        print(f"  {BOLD}{prefix}{i}.{RESET} {q}")
+
+
 def kv(label: str, value: str, color: str = "") -> None:
     print(f"  {DIM}{label:<28}{RESET} {color}{value}{RESET}")
 
@@ -342,7 +371,10 @@ def memory_write(operation: str, value: Any) -> dict:
 # ---------------------------------------------------------------------------
 
 def act1_unauthorized_jira(receipts_dir, signer, policy, trajectory, args):
-    banner("Act 1 - Unauthorized Jira action (viewer tries delete_issue)")
+    banner(
+        "Act 1 - Unauthorized Jira action "
+        "(answers Q6: did this agent perform tool calls outside its role?)"
+    )
 
     # The request_factory pulls a RequestContext out of the LangChain
     # tool input. In a real deployment this would consult your IdP /
@@ -424,7 +456,10 @@ def act1_unauthorized_jira(receipts_dir, signer, policy, trajectory, args):
 # ---------------------------------------------------------------------------
 
 def act2_poisoned_rag(receipts_dir, index, signer, policy, fp, trajectory, args):
-    banner("Act 2 - Poisoned RAG corpus (real LangChain InMemoryVectorStore)")
+    banner(
+        "Act 2 - Poisoned RAG corpus "
+        "(answers Q4 + Q5: was anything modified or unauthorised?)"
+    )
 
     # Real LangChain VectorStore + Embeddings. Identical class
     # hierarchy and dispatch to a production deployment; only the
@@ -620,7 +655,10 @@ def act2_poisoned_rag(receipts_dir, index, signer, policy, fp, trajectory, args)
 # ---------------------------------------------------------------------------
 
 def act3_audit_replay(receipts_dir, signer, args):
-    banner("Act 3 - Audit replay (receipt re-presented as evidence for a different query)")
+    banner(
+        "Act 3 - Audit replay "
+        "(answers Q7: can an auditor verify without our infrastructure?)"
+    )
 
     # A receipt is produced legitimately for query A.
     legit_request = RequestContext(
@@ -712,7 +750,10 @@ def act3_audit_replay(receipts_dir, signer, args):
 # ---------------------------------------------------------------------------
 
 def act4_insider_misuse(receipts_dir, signer, policy, trajectory, args):
-    banner("Act 4 - Insider agent misuse (real LangChain tool + secret-in-prompt)")
+    banner(
+        "Act 4 - Insider agent misuse "
+        "(answers Q6: tool calls and memory writes outside role)"
+    )
 
     insider = RequestContext(
         caller={"id": "u_contractor", "role": "viewer", "name": "Mallory"},
@@ -810,7 +851,7 @@ def act4_insider_misuse(receipts_dir, signer, policy, trajectory, args):
 # ---------------------------------------------------------------------------
 
 def aggregate_audit(receipts_dir: Path, signer) -> None:
-    banner("Aggregate audit - what compliance sees at the end of the quarter")
+    banner("The regulator's seven questions, answered against the receipt archive")
 
     receipts: List[dict] = []
     for path in sorted(receipts_dir.glob("*.json")):
@@ -820,20 +861,127 @@ def aggregate_audit(receipts_dir: Path, signer) -> None:
     allows = 0
     unverified = 0
     forged_signatures = 0
+    policy_ids: set = set()
+    policy_hashes: set = set()
     for r in receipts:
         tcc = r.get("policy", {}).get("tool_call_control")
         if tcc:
+            policy_ids.add(tcc.get("policy_id"))
+            policy_hashes.add(tcc.get("policy_version_hash"))
             for d in tcc.get("decisions", []):
                 if d.get("decision") == "deny":
                     denies += 1
                 else:
                     allows += 1
+        ac = r.get("policy", {}).get("access_control")
+        if ac:
+            policy_ids.add(ac.get("policy_id"))
+            policy_hashes.add(ac.get("policy_version_hash"))
         for s in r.get("sources", []):
             if s.get("verification_outcome") == "UNVERIFIED":
                 unverified += 1
         if r.get("signature") and not verify_receipt_signature(r, signer):
             forged_signatures += 1
 
+    # Strip Nones from the policy sets so the printed summary is tidy.
+    policy_ids.discard(None)
+    policy_hashes.discard(None)
+
+    # Q1: per-receipt source records.
+    print(f"  {BOLD}Q1.{RESET} {SEVEN_QUESTIONS[0]}")
+    print(
+        f"      {DIM}->{RESET} "
+        f"{BOLD}sources[*].document_id{RESET} + "
+        f"{BOLD}sources[*].fingerprint{RESET} + "
+        f"{BOLD}sources[*].entry_kind{RESET} on every retrieval receipt "
+        f"(Act 2). Whole-chunk entries are the operator-authorised set; "
+        f"window entries are structural locators only."
+    )
+
+    # Q2: policy IDs.
+    print(f"  {BOLD}Q2.{RESET} {SEVEN_QUESTIONS[1]}")
+    pid_render = (
+        ", ".join(sorted(policy_ids)) if policy_ids else "(none)"
+    )
+    print(
+        f"      {DIM}->{RESET} "
+        f"{BOLD}policy.access_control.policy_id{RESET} and "
+        f"{BOLD}policy.tool_call_control.policy_id{RESET} on every receipt. "
+        f"Archive shows: {GREEN}{pid_render}{RESET}."
+    )
+
+    # Q3: canonical policy hash.
+    print(f"  {BOLD}Q3.{RESET} {SEVEN_QUESTIONS[2]}")
+    hash_render = (
+        f"{len(policy_hashes)} distinct policy_version_hash(es) recorded"
+        if policy_hashes
+        else "(none)"
+    )
+    print(
+        f"      {DIM}->{RESET} "
+        f"{BOLD}policy.*.policy_version_hash{RESET}: SHA-256 over the "
+        f"canonical policy JSON. The receipt commits cryptographically to "
+        f"the exact policy bytes that ran. Editing the YAML produces a "
+        f"different hash; the change is detectable across the archive. "
+        f"({hash_render}.)"
+    )
+
+    # Q4: window-aligned splice control.
+    print(f"  {BOLD}Q4.{RESET} {SEVEN_QUESTIONS[3]}")
+    print(
+        f"      {DIM}->{RESET} "
+        f"Act 2b's receipt shows "
+        f"{BOLD}verification_outcome=UNVERIFIED{RESET} with "
+        f"{BOLD}entry_kind=window{RESET} on the spliced source. A "
+        f"128-codepoint substring of an authorised doc does NOT promote "
+        f"to VERIFIED; the splice is detectable. Row HMACs on the index "
+        f"catch single-row tampering at retrieval time; the optional "
+        f"Merkle log catches insertion or removal by a key-holder."
+    )
+
+    # Q5: never-indexed chunk.
+    print(f"  {BOLD}Q5.{RESET} {SEVEN_QUESTIONS[4]}")
+    print(
+        f"      {DIM}->{RESET} "
+        f"Act 2a's receipt shows {BOLD}verification_outcome=UNVERIFIED{RESET} "
+        f"on the chunk added directly to the vector store. With "
+        f"{BOLD}block_unverified=true{RESET} on the policy, the chunk is "
+        f"blocked from the LLM. Archive total: "
+        f"{RED if unverified else GREEN}{unverified} UNVERIFIED source(s){RESET}."
+    )
+
+    # Q6: tool-call admission denies.
+    print(f"  {BOLD}Q6.{RESET} {SEVEN_QUESTIONS[5]}")
+    print(
+        f"      {DIM}->{RESET} "
+        f"Act 1, 4a, and 4b receipts each show "
+        f"{BOLD}policy.tool_call_control.decisions[*].decision=deny{RESET} "
+        f"with the firing rule named in "
+        f"{BOLD}rules_fired{RESET}: jira_writes_require_role (Act 1), "
+        f"restricted_memory_writes (Act 4a), no_api_key_in_prompt "
+        f"(Act 4b). Archive total: "
+        f"{RED if denies else GREEN}{denies} tool-call deny(ies){RESET}, "
+        f"{allows} allow(s)."
+    )
+
+    # Q7: offline auditor verification + replay defence.
+    print(f"  {BOLD}Q7.{RESET} {SEVEN_QUESTIONS[6]}")
+    print(
+        f"      {DIM}->{RESET} "
+        f"Every receipt's signature was re-verified above from disk only; "
+        f"no DB connection, no live signer state. Act 3 shows the replay "
+        f"defence: editing the request_binding to point at a different "
+        f"query breaks the signature ("
+        f"{RED if forged_signatures else GREEN}"
+        f"{forged_signatures} forged receipt(s) in archive{RESET}). "
+        f"For Ed25519-signed receipts, an external auditor verifies with "
+        f"only the public key. Run "
+        f"{BOLD}provenex audit --trajectory {receipts_dir}/{RESET} to "
+        f"replay the same checks against the archive."
+    )
+
+    print()
+    print(f"  {BOLD}Archive summary:{RESET}")
     kv("receipts in archive", str(len(receipts)))
     kv("tool-call denies", str(denies), color=RED if denies else GREEN)
     kv("tool-call allows", str(allows))
@@ -859,10 +1007,6 @@ def aggregate_audit(receipts_dir: Path, signer) -> None:
     )
     print()
     print(f"  {DIM}Receipts live in:{RESET} {receipts_dir}/")
-    print(
-        f"  {DIM}Re-verify end-to-end:{RESET} "
-        f"{BOLD}provenex audit --trajectory {receipts_dir}/{RESET}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -892,10 +1036,18 @@ def main() -> int:
     work_dir, receipts_dir, index, signer, policy, fp, trajectory = setup(args)
 
     print(
-        f"{BOLD}Four attacks, four signed verdicts.{RESET}\n"
+        f"{BOLD}The regulator's seven questions.{RESET}\n"
         f"{DIM}Real LangChain InMemoryVectorStore + @tool. No mocks.{RESET}\n"
         f"{DIM}work dir: {work_dir}{RESET}"
     )
+    print()
+    print(
+        f"  {DIM}A signed receipt is only useful if it answers the questions a "
+        f"regulator will actually ask. The four acts below produce the receipts; "
+        f"the closing audit walks the seven questions against the archive.{RESET}"
+    )
+    print()
+    print_seven_questions()
 
     trajectory = act1_unauthorized_jira(receipts_dir, signer, policy, trajectory, args)
     trajectory = act2_poisoned_rag(receipts_dir, index, signer, policy, fp, trajectory, args)
