@@ -103,12 +103,20 @@ tool_call_control:
           in: [google_custom_search, bing_v7]
       on_violation: deny
 
-    # Demo 5 - PII / secrets pattern on the query string.
-    - name: no_secrets_in_query
+    # Demo 5 - PII / secrets patterns on the query string. fnmatch is
+    # glob, not regex - one rule per pattern. The DSL deliberately
+    # refuses regex; globs are auditable.
+    - name: no_api_key_in_query
       when: { tool.name: web_search }
       require:
         tool.parameters.q:
-          not_matches_pattern: "*(api[_-]?key|password|secret)*"
+          not_matches_pattern: "*api_key=*"
+      on_violation: deny
+    - name: no_password_in_query
+      when: { tool.name: web_search }
+      require:
+        tool.parameters.q:
+          not_matches_pattern: "*password=*"
       on_violation: deny
 
     # Length cap. Cheapest defense against prompt-injection-via-long-query.

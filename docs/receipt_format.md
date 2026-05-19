@@ -410,7 +410,7 @@ The tool-call admission decision record. Optional - present iff a `ToolCallPolic
         {
           "action_index": 0,
           "decision": "allow",
-          "rules_fired": ["web_search_provider_allowlist", "no_secrets_in_query"],
+          "rules_fired": ["web_search_provider_allowlist", "no_api_key_in_query", "no_password_in_query"],
           "inputs_hash": "sha256:b8e441f7...",
           "inputs": {
             "tool_parameters": {
