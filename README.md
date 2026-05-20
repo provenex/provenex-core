@@ -2,6 +2,7 @@
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.9.0)](https://pypi.org/project/provenex-core/)
+[![Downloads](https://img.shields.io/pypi/dm/provenex-core.svg?cacheSeconds=3600)](https://pypistats.org/packages/provenex-core)
 [![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.9.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
@@ -296,7 +297,35 @@ if result.allowed:
 save_receipt(result.receipt)             # signed, verifiable offline; denies too
 ```
 
-**Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call against the target system using its own credentials. Use [`ProvenexToolWrapper`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/langchain.py) to wrap any LangChain tool; use [`provenex_mcp_admission`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/mcp.py) to decorate any MCP `tools/call` handler.
+**Decision and proof, not execution.** Provenex returns a decision and emits a signed receipt; the caller makes the actual call against the target system using its own credentials. Use [`ProvenexToolWrapper`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/langchain.py) to wrap any LangChain tool; the MCP integration is its own subsection below.
+
+### MCP (Model Context Protocol)
+
+```python
+from provenex.tool_call.integrations.mcp import provenex_mcp_admission
+
+@provenex_mcp_admission(
+    policy=Policy.from_yaml("agent_policy.yaml"),
+    signer=Ed25519Signer.from_private_key_file("audit-signing.pem"),
+    request_factory=lambda req: RequestContext(
+        caller=read_caller_from_session(req["params"]),   # your auth glue
+        jurisdiction="US",
+        purpose="tool_call",
+        timestamp=req["params"].get("timestamp"),
+    ),
+)
+def tools_call(request: dict) -> dict:
+    # Your existing JSON-RPC tools/call handler body is untouched.
+    return invoke_tool(request["params"])
+```
+
+One decorator, zero changes to the handler body. Every call passes through admission first: allow runs the handler normally; deny raises `ToolCallDenied` (or emits a structured JSON-RPC error via the `on_deny` callback, code [`-32099`](https://github.com/provenex/provenex-core/blob/main/provenex/tool_call/integrations/mcp.py)). **Every allow and every deny produces a signed receipt** under `trajectory.step_kind="tool_call"`.
+
+The integration imports nothing from any MCP SDK. The intercept shape works with the official Python MCP SDK, with any other Python MCP implementation, and with a hand-rolled JSON-RPC handler. The receipt format is identical to what the LangChain wrapper emits; one policy DSL covers both.
+
+- **Runnable demo**: [`examples/mcp_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/mcp_admission_demo.py) - toy MCP handler before-and-after, three live `tools/call` requests showing allow + deny, the on-deny callback pattern, and signed-receipt drain.
+- **Operational deep-dive**: [`docs/mcp_integration.md`](https://github.com/provenex/provenex-core/blob/main/docs/mcp_integration.md) - JSON-RPC error contract, router-level interception via `wrap_mcp_request`, the `RequestContext` factory pattern for session / JWT / mTLS identity, and the receipt fields an MCP-aware auditor reads.
+- **Tests**: [`tests/test_tool_call_mcp.py`](https://github.com/provenex/provenex-core/blob/main/tests/test_tool_call_mcp.py).
 
 ### Memory reads, memory writes, and model inference
 
@@ -507,4 +536,5 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 
 - Homepage: [provenex.ai](https://provenex.ai)
 - Issues and discussion: GitHub Issues on this repo
+- Security: found something? See [SECURITY.md](https://github.com/provenex/provenex-core/blob/main/SECURITY.md). We acknowledge reports within 2 business days; safe-harbor language and an age public key for encrypted reports are in there.
 - Commercial features: contact@provenex.ai

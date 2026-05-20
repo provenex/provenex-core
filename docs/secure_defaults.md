@@ -27,7 +27,7 @@ This is a reference checklist, not a runbook. The operational procedures (key ro
 
 ## block_unverified: the default that will flip
 
-Provenex 0.8.2 defaults `block_unverified` to `False` and emits a one-time `DeprecationWarning` whenever a `VerificationPolicy` is constructed without `block_unverified` set explicitly. The warning text recommends `block_unverified=True` for strict enforcement and `block_unverified=False` to suppress the warning when the default behavior is intentional.
+Provenex 0.9.x defaults `block_unverified` to `False` and emits a one-time `DeprecationWarning` whenever a `VerificationPolicy` is constructed without `block_unverified` set explicitly. The warning text recommends `block_unverified=True` for strict enforcement and `block_unverified=False` to suppress the warning when the default behavior is intentional.
 
 The intended trajectory is the default flips to `True` in a future major release. Operators who construct `VerificationPolicy()` without an explicit value today get unverified chunks reaching the LLM; after the flip they will get strict-by-default enforcement. The warning makes the choice visible so the flip is not a silent breaking change.
 
