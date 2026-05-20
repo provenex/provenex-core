@@ -198,19 +198,14 @@ half the size of leaves on average). A bare key-value store without the
 Merkle layer would be ~600 bytes/chunk; the **~400 byte premium pays
 for tamper-evidence**.
 
-### What the proof story buys you
+### What the proof story enables
 
-The 20-hash proof + 47-µs offline verify is what differentiates this
-from a vector-DB-plus-audit-log approach. A customer can:
+The 20-hash proof + 47-µs offline verify lets a downstream consumer:
 
 1. Get a receipt back from their retrieval API.
 2. Cache the published tree head out-of-band (signed, immutable).
 3. Re-verify the receipt years later, from a different machine, with
    no access to the original index, in under a millisecond.
-
-Nothing else in the RAG provenance space gives you that. Vector DBs
-give you "we found this at retrieval time"; transparency-log-style
-proofs give you "and here's why you can prove it five years from now."
 
 ---
 
@@ -357,7 +352,7 @@ The deltas are what we publish.
 
 ### What we'd expect
 
-- **Ingest overhead:** `provenex.add` at 184 µs vs an embedder at ~10 ms is **~2% extra latency**. The marketing-true sentence is "Provenex is a rounding error on your ingest pipeline."
+- **Ingest overhead:** `provenex.add` at 184 µs vs an embedder at ~10 ms is **~2% extra latency**.
 - **Query overhead:** verify at 371 µs × top-k (say k=10) = **~3.7 ms** added to a query that already costs ~10 ms (embed) + 1-5 ms (ANN). Roughly **30-50% additive on query latency**, which is honest. Verification isn't free, but it's bounded and predictable.
 
 Those numbers are the prediction; the phase-2 bench is what turns them
@@ -406,22 +401,134 @@ five outcomes, signed rows, no transparency log - multiple ingester pods
 are fully supported on `PostgresProvenanceIndex`. The single-ingester
 recommendation only applies to `MerklePostgresProvenanceIndex`.
 
-### What we expect on Postgres
+### Postgres at scale (measured, 1M chunks)
 
-We have not yet published Postgres-specific benchmarks. Two things to
-keep in mind when sizing:
+The numbers below come from `bench/postgres_scale.py` against a local
+Postgres 14 instance on the same laptop as the SQLite headline numbers
+above. DSN is a unix socket on `/tmp:55432`, so there is no network
+RTT in these readings; a managed-Postgres deployment will add 0.5-2 ms
+per query for cross-AZ latency. The bench rig in
+[bench/postgres/](../bench/postgres/) reproduces the same measurements
+against Postgres 16 via Docker Compose, with an optional PgBouncer in
+front for connection-multiplexing topologies the laptop bench does
+not stand up natively.
 
-1. **Verify latency** is dominated by a single B-tree point-lookup on
-   `fingerprint`. On a warm Postgres with the index resident in shared
-   buffers, expect **p50 sub-millisecond, p99 < 5 ms** including network
-   round-trip from the application pod. The previous SQLite numbers
-   (verify p50 371 µs) are a useful floor; Postgres adds RTT but parallelises
-   across pods.
-2. **Ingest throughput** on a single primary is bounded by
-   transaction commit and WAL flush - typically **5-15k commits/sec**
-   on managed Postgres with the write cache enabled. Batching ingest
-   across documents (multiple chunks per transaction) is the right
-   tuning lever.
+```bash
+# Reproduce (~25 minutes end-to-end on a laptop):
+python -m bench.postgres_scale ingest --scale 1m --schema provenex_bench_1m
+python -m bench.postgres_scale verify-warm --scale 1m --schema provenex_bench_1m
+python -m bench.postgres_scale verify-cold --scale 1m --schema provenex_bench_1m
+python -m bench.postgres_scale concurrent --scale 1m --schema provenex_bench_1m
+python -m bench.postgres_scale connection-budget --scale 1m \
+    --schema provenex_bench_1m --connection-budget-threads 1,4,16,64
+```
+
+#### Ingest
+
+| Metric | Value |
+|---|---|
+| Chunks ingested | 1,000,000 |
+| Wall time | 15.5 min |
+| Sustained throughput | **1,076 chunks/sec** |
+
+The single-row-per-commit ingest path is bounded by Postgres WAL fsync,
+not by Provenex's signing or hashing. The batched-ingest API
+(`add_many`, on the OSS roadmap) is the right tuning lever and is
+expected to land in the 5-15k chunks/sec range Postgres ops teams
+already see for unbatched WAL writes plus batching.
+
+#### Verify (k=10 batch)
+
+| Cache state | Per-batch p50 | p95 | p99 | First batch | Per-fingerprint p50 / p99 |
+|---|---|---|---|---|---|
+| **Warm** (shared_buffers resident) | **461 µs** | 710 µs | 1.04 ms | n/a | 46 µs / 104 µs |
+| **Cold** (post-restart, OS page cache flushed) | 2.73 ms | 3.81 ms | 4.19 ms | **6.39 ms** | 273 µs / 419 µs |
+
+Warm-cache per-batch latency is just over twice the SQLite
+single-process verify p50 (371 µs). The extra ~90 µs is the
+`WHERE fingerprint = ANY(%s)` round-trip across the unix socket plus
+psycopg's row materialisation; a remote Postgres adds the network RTT.
+Per-fingerprint cost is the more useful number for capacity planning:
+**46 µs per fingerprint at p50 warm**, **273 µs cold**. A retrieval
+that verifies top-10 hot pages in 461 µs warms enough working set in
+the first request that subsequent requests stay on the warm curve.
+
+Cold-cache numbers come from an explicit `pg_ctl stop -m immediate`
+plus restart outside the harness; the in-harness
+`pg_ctl restart -m fast -w` path does not reliably complete within 900 s
+on a 1M-row schema with a dirty buffer pool, because the shutdown
+checkpoint has to flush every dirty page before the new postmaster
+can come up. The
+[bench rig README](../bench/postgres/README.md) documents the
+container-restart approach (cleanest "true cold" inside Docker).
+
+#### Concurrent reader+writer (8 readers, 50-write/s writer, 30 s)
+
+| Metric | Value |
+|---|---|
+| Reader verify_batch p50 / p95 / p99 / p999 | **3.43 ms / 4.92 ms / 5.79 ms / 14.9 ms** |
+| Reader max observed | 52 ms |
+| Reads completed | 67,676 (~2,256 reads/s aggregate, k=10) |
+| Writes completed | 1,499 (writer hit its 50/s target) |
+| Reader errors | 0 |
+
+Eight reader threads share the same Postgres backend as a continuous
+ingest writer. Reader p99 stays under 6 ms; the p999 tail at 14.9 ms
+is one or two reads coinciding with a WAL fsync, which is the
+expected shape. No reader errors and no contention errors during the
+30 s window; the supersession row-lock the writer takes does not
+fan out into reader stalls.
+
+#### Connection-budget sensitivity (Postgres direct, no PgBouncer)
+
+| Concurrent readers | Throughput (ops/s) | p50 | p99 |
+|---|---|---|---|
+| 1 | 2,233 | 389 µs | 1.37 ms |
+| 4 | 2,471 | 1.57 ms | 2.48 ms |
+| 16 | 2,098 | 7.30 ms | 16.1 ms |
+| 64 | 1,624 | 34.0 ms | 103 ms |
+
+This is the curve that drives the PgBouncer recommendation in the
+[sizing section](#sizing-the-postgres-connection-layer). Throughput
+peaks at 4 readers (~2.5k ops/s) on the 6-core laptop; beyond that,
+extra clients pile on Postgres backend processes and trade
+throughput for tail latency. A 64-reader configuration without
+connection pooling is a worse outcome than a 4-reader configuration
+in every dimension. **The lesson is not "Provenex caps at 2.5k ops/s";
+it is "single Postgres backend caps at 2.5k ops/s on this
+hardware".** Multiplexing through PgBouncer in transaction mode
+collapses 64+ client connections back onto ~4-25 server connections,
+which is what restores throughput at high concurrency. The
+[bench rig](../bench/postgres/README.md) includes a PgBouncer service
+to measure that curve on your own hardware.
+
+#### What this means for sizing
+
+- **Per Python process budget**: ~2,200 verify-batch (k=10) ops/sec on
+  a warm cache, single Postgres backend. Divide by your top-k to get
+  per-retrieval RPS; a top-10 RAG retrieval is ~2.2k RPS per pod
+  before the connection pool becomes the bottleneck.
+- **Cold-start tax**: the first batch after a Postgres restart costs
+  ~6 ms vs. ~0.5 ms warm. A rolling restart of Provenex verify pods
+  is fine; a rolling restart of the *Postgres* backend gives every
+  verifier a ~5 ms tail until shared_buffers refills.
+- **Where to put more capacity**: above ~2k RPS per pod, the
+  immediate next lever is PgBouncer in transaction mode, then
+  read replicas. Adding more verify pods without PgBouncer just
+  multiplies the connection count against the same Postgres
+  instance, which the 64-reader row above shows is a losing trade.
+- **Ingest is the slowest hot path on this rig** (1k chunks/s vs. 2k
+  verify/s). Until the batched-ingest API lands, an ingester pod
+  caps at roughly half its verify-pod sibling's throughput. Most
+  enterprise RAG workloads are read-heavy by 10:1 or more, so this
+  is a real constraint only for high-churn corpora.
+
+The next ceiling above all of these is the receipt-construction +
+signing cost per chunk, which is Python-bound and not Postgres-bound.
+That ceiling is what the commercial Rust core in the roadmap
+addresses; the OSS levers above land you in the same throughput
+range as the SQLite single-process bench at the top of this doc,
+with all the multi-pod, multi-replica properties Postgres provides.
 
 ### Deployment patterns for big-enterprise / polyglot stacks
 
@@ -523,10 +630,17 @@ before Python overhead dominates. Above that, the levers in order:
    limits.
 2. **Add Postgres read replicas** - point new verify pods at new
    replicas.
-3. **Move to a batched `verify_chunks_batch` API** (not yet shipped) -
-   amortises the per-call Python overhead (parsing, receipt
-   construction, signing) across N chunks. Roughly 5-10x throughput
-   improvement on multi-chunk-per-request workloads.
+3. **Batched index lookup via `ProvenanceIndex.verify_batch`** — shipped
+   alongside the 0.8.3 work. `verify_chunks` issues one
+   `WHERE fingerprint = ANY(%s)` query for the whole top-k instead of
+   N pairs of `verify` + `lookup`, dropping Postgres round-trips from
+   ~2N to 1 per retrieval. Measured speedups on a local Postgres
+   (corpus 10k, 500 iterations) at k=10: p50 3.76 ms → 0.47 ms (~8×);
+   at k=25: p50 9.88 ms → 0.76 ms (~13×). SQLite gains ~3× at k=10
+   because the savings there come from collapsing function-call
+   overhead rather than network hops. Receipt format unchanged; the
+   per-chunk receipt-construction / signing cost is the next ceiling
+   (commercial Rust core in the roadmap).
 4. **Bloom filter acceleration** (commercial) - the `BloomFilterIndex`
    ABC is in the OSS core; a production implementation absorbs the
    "fingerprint not in index" case in process memory, eliminating the
@@ -543,16 +657,16 @@ core today.
 
 ### What this doc does not yet cover
 
-- **Postgres benchmarks** at 1M and 10M chunks against managed
-  Postgres (RDS, Aurora, Cloud SQL). Pending.
+- **Managed Postgres at 1M and 10M chunks** (RDS, Aurora, Cloud SQL).
+  The numbers above are local Postgres 14 on the laptop. The bench
+  rig in [bench/postgres/](../bench/postgres/) runs against any DSN
+  and is the path to publishing managed-Postgres numbers.
+- **10M-chunk Postgres run.** Same harness, same slices; pending on
+  finding the disk to host it.
 - **Multi-process ingest scaling on the SQLite backend.** See the
   parallelism caveat above. Use the Postgres backend if you need this.
-- **Hot-cache vs cold-cache verify.** Current verify numbers are
-  steady-state with the index hot in the OS page cache. A cold-start
-  verify would be slower; bench doesn't isolate that yet.
-- **Concurrent reader-writer p99 under load.** What verify p99 looks
-  like while ingest is running into the same index - measured against
-  Postgres, will be the more useful number than the current SQLite
-  single-process figure.
+- **PgBouncer-fronted topologies.** The connection-budget curve above
+  is Postgres-direct. The bench rig includes a PgBouncer service;
+  publishing the multiplexed numbers is the next step.
 - **Network-attached storage.** All current measurements are on a
   local SSD. EBS, GP3, and managed-disk performance will differ.

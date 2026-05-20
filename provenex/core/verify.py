@@ -29,12 +29,17 @@ Quick reference
     traj = provenex.start_trajectory(agent_id="my_agent")
     r1 = provenex.verify_chunks(chunks_a, index=index, trajectory=traj)
     r2 = provenex.verify_chunks(chunks_b, index=index, trajectory=r1.next_trajectory)
+
+For ASGI / FastAPI / Starlette callers, use :func:`verify_chunks_async`
+with an :class:`AsyncPostgresProvenanceIndex`. The async path is
+identical to the sync one except the index round-trip is awaited
+instead of blocking the event loop.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .fingerprinter import Fingerprinter, FingerprinterConfig
 from .receipt import (
@@ -46,7 +51,7 @@ from .receipt import (
 )
 from .trajectory import TrajectoryContext
 from ..export.streaming import _safe_publish
-from ..index.base import IndexEntry, ProvenanceIndex
+from ..index.base import AsyncProvenanceIndex, IndexEntry, ProvenanceIndex, VerificationOutcome
 from ..policy.evaluator import (
     BINDING_AT_EVALUATE,
     BINDING_AT_INGEST,
@@ -243,14 +248,70 @@ def verify_chunks(
             ``request_context``, or when ``chunk_metadata`` is provided
             but has a different length than ``chunks``.
     """
+    eff_policy, fp, texts, fingerprints = _verify_chunks_prepare(
+        chunks=chunks,
+        policy=policy,
+        fingerprinter=fingerprinter,
+        request_context=request_context,
+        chunk_metadata=chunk_metadata,
+        chunk_metadata_binding=chunk_metadata_binding,
+    )
+
+    # Phase 1.1: one ``verify_batch`` round-trip on the index instead of
+    # N pairs of ``verify`` + ``lookup`` (which were two lookups per chunk
+    # internally). On a 10-chunk retrieval this drops 20 backend hits to
+    # 1 on Postgres; on SQLite it folds the in-process I/O similarly.
+    verifications = index.verify_batch(fingerprints)
+
+    return _verify_chunks_finalize(
+        texts=texts,
+        fingerprints=fingerprints,
+        verifications=verifications,
+        fp=fp,
+        eff_policy=eff_policy,
+        signer=signer,
+        trajectory=trajectory,
+        step_kind=step_kind,
+        agent_id=agent_id,
+        output_text=output_text,
+        request_context=request_context,
+        request_text=request_text,
+        chunk_metadata=chunk_metadata,
+        chunk_metadata_binding=chunk_metadata_binding,
+        caller_hash_salt=caller_hash_salt,
+        content_source=content_source,
+        sink=sink,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Shared prepare / finalize stages                                            #
+# --------------------------------------------------------------------------- #
+#
+# verify_chunks and verify_chunks_async share everything except the call into
+# the index: one calls ``index.verify_batch(...)``, the other awaits
+# ``index.verify_batch_async(...)``. The CPU-bound stages around that I/O
+# (input coercion, fingerprinting, receipt assembly, policy evaluation,
+# signing, sink publishing) are factored out here so neither path can drift
+# from the other on what the wire shape of a receipt looks like.
+
+
+def _verify_chunks_prepare(
+    *,
+    chunks: Any,
+    policy: Any,
+    fingerprinter: Optional[Fingerprinter],
+    request_context: Optional[RequestContext],
+    chunk_metadata: Optional[List[Dict[str, Any]]],
+    chunk_metadata_binding: str,
+) -> Tuple[Policy, Fingerprinter, List[str], List[str]]:
     eff_policy: Policy = coerce_policy(policy)
     fp = fingerprinter or Fingerprinter(FingerprinterConfig())
-
     texts = _coerce_chunks(chunks)
 
     # Validate the access-control + request-context combination eagerly.
     # The retriever should not silently degrade if the operator forgot
-    # the request context — that would emit allow-by-default receipts.
+    # the request context, since that would emit allow-by-default receipts.
     if eff_policy.access_control is not None and request_context is None:
         raise ValueError(
             "verify_chunks: policy.access_control was set but "
@@ -268,15 +329,38 @@ def verify_chunks(
             f"{chunk_metadata_binding!r}"
         )
 
+    fingerprints = [fp.fingerprint_chunk(text) for text in texts]
+    return eff_policy, fp, texts, fingerprints
+
+
+def _verify_chunks_finalize(
+    *,
+    texts: List[str],
+    fingerprints: List[str],
+    verifications: Sequence[Tuple[VerificationOutcome, Optional[IndexEntry]]],
+    fp: Fingerprinter,
+    eff_policy: Policy,
+    signer: Optional[ReceiptSigner],
+    trajectory: Optional[TrajectoryContext],
+    step_kind: Optional[str],
+    agent_id: Optional[str],
+    output_text: str,
+    request_context: Optional[RequestContext],
+    request_text: Optional[str],
+    chunk_metadata: Optional[List[Dict[str, Any]]],
+    chunk_metadata_binding: str,
+    caller_hash_salt: Optional[bytes],
+    content_source: Optional[str],
+    sink: Any,
+) -> VerifiedChunks:
     builder = ReceiptBuilder(policy=eff_policy.verification)
     kept: List[str] = []
     blocked: List[str] = []
     policy_decisions: List[Dict[str, Any]] = []
 
     for i, text in enumerate(texts):
-        fingerprint = fp.fingerprint_chunk(text)
-        outcome = index.verify(fingerprint)
-        entry = index.lookup(fingerprint)
+        fingerprint = fingerprints[i]
+        outcome, entry = verifications[i]
         builder.add_source(
             fingerprint=fingerprint,
             outcome=outcome,
@@ -358,9 +442,9 @@ def verify_chunks(
     # receipt; lets downstream consumers GROUP BY caller without
     # crawling per-decision inputs. When ``caller_hash_salt`` is
     # supplied (0.6.5+), the hash becomes HMAC-SHA256 with the salt
-    # as the key — same canonical-JSON payload, two deployments with
+    # as the key (same canonical-JSON payload, two deployments with
     # different salts produce different caller_hash values for the
-    # same caller (per-deployment unlinkability).
+    # same caller; per-deployment unlinkability).
     emit_caller_hash: Optional[str] = None
     if request_context is not None:
         emit_caller_hash = compute_caller_hash(
@@ -408,6 +492,94 @@ def verify_chunks(
         blocked=blocked,
         receipt=receipt,
         next_trajectory=next_trajectory,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Async entry point                                                           #
+# --------------------------------------------------------------------------- #
+
+
+async def verify_chunks_async(
+    chunks: Any,
+    index: AsyncProvenanceIndex,
+    signer: Optional[ReceiptSigner] = None,
+    policy: Any = None,  # Policy | VerificationPolicy | None
+    fingerprinter: Optional[Fingerprinter] = None,
+    trajectory: Optional[TrajectoryContext] = None,
+    step_kind: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    output_text: str = "",
+    request_context: Optional[RequestContext] = None,
+    request_text: Optional[str] = None,
+    chunk_metadata: Optional[List[Dict[str, Any]]] = None,
+    chunk_metadata_binding: str = BINDING_AT_EVALUATE,
+    caller_hash_salt: Optional[bytes] = None,
+    content_source: Optional[str] = None,
+    sink: Any = None,
+) -> VerifiedChunks:
+    """Async-safe counterpart of :func:`verify_chunks`.
+
+    Same semantics, same return shape, same receipt wire format. The only
+    difference from :func:`verify_chunks` is that the index round-trip is
+    awaited (``index.verify_batch_async``) rather than blocking, so a
+    FastAPI / Starlette / aiohttp handler can call this directly without
+    serializing the event loop.
+
+    Args:
+        index: An :class:`AsyncProvenanceIndex` (such as
+            :class:`AsyncPostgresProvenanceIndex`). The async counterpart
+            of the sync :class:`ProvenanceIndex` interface; only the
+            ``verify_batch_async`` method is consulted on this hot path.
+        chunks, signer, policy, fingerprinter, trajectory, step_kind,
+        agent_id, output_text, request_context, request_text,
+        chunk_metadata, chunk_metadata_binding, caller_hash_salt,
+        content_source, sink: See :func:`verify_chunks` for full
+        semantics; the meanings carry over unchanged.
+
+    Returns:
+        :class:`VerifiedChunks`, bit-identical to what
+        :func:`verify_chunks` would have returned given the same inputs
+        and the same index state.
+
+    Note:
+        The sink publishing step (``_safe_publish``) runs synchronously
+        inside the coroutine. Built-in sinks (Stdout / File / Multi /
+        RetryQueue) are non-blocking enough to be safe; network-bound
+        sinks (Kafka, AWS, GCP) may briefly block the event loop. If
+        that becomes the bottleneck, wrap the call in
+        ``asyncio.to_thread(...)`` or set ``sink=None`` on the hot path
+        and forward receipts asynchronously elsewhere.
+    """
+    eff_policy, fp, texts, fingerprints = _verify_chunks_prepare(
+        chunks=chunks,
+        policy=policy,
+        fingerprinter=fingerprinter,
+        request_context=request_context,
+        chunk_metadata=chunk_metadata,
+        chunk_metadata_binding=chunk_metadata_binding,
+    )
+
+    verifications = await index.verify_batch_async(fingerprints)
+
+    return _verify_chunks_finalize(
+        texts=texts,
+        fingerprints=fingerprints,
+        verifications=verifications,
+        fp=fp,
+        eff_policy=eff_policy,
+        signer=signer,
+        trajectory=trajectory,
+        step_kind=step_kind,
+        agent_id=agent_id,
+        output_text=output_text,
+        request_context=request_context,
+        request_text=request_text,
+        chunk_metadata=chunk_metadata,
+        chunk_metadata_binding=chunk_metadata_binding,
+        caller_hash_salt=caller_hash_salt,
+        content_source=content_source,
+        sink=sink,
     )
 
 

@@ -22,7 +22,7 @@ import threading
 import warnings
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Optional
+from typing import List, Optional, Sequence, Tuple
 
 from .base import (
     ENTRY_KIND_WHOLE_CHUNK,
@@ -187,6 +187,43 @@ def _canonical_payload(
 def _sign(payload: bytes, secret: bytes) -> str:
     """HMAC-SHA256 a payload, returned as hex."""
     return hmac.new(secret, payload, sha256).hexdigest()
+
+
+def _reduce_entry_to_outcome(
+    entry: Optional[IndexEntry], secret: bytes
+) -> VerificationOutcome:
+    """Map an :class:`IndexEntry` to its :class:`VerificationOutcome`.
+
+    Centralised so the per-row ``verify()`` path and the batched
+    ``verify_batch()`` path apply identical rules: HMAC re-derivation,
+    then the entry_kind / authorized / superseded ladder. Used by both
+    the SQLite and Postgres backends (Postgres imports it).
+    """
+    if entry is None:
+        return VerificationOutcome.UNVERIFIED
+    expected = _sign(
+        _canonical_payload(
+            fingerprint=entry.fingerprint,
+            document_id=entry.document_id,
+            document_version=entry.document_version,
+            ingested_at=entry.ingested_at,
+            chunk_offset=entry.chunk_offset,
+            chunk_length=entry.chunk_length,
+            entry_kind=entry.entry_kind,
+        ),
+        secret,
+    )
+    if not hmac.compare_digest(expected, entry.signature):
+        return VerificationOutcome.TAMPERED
+    if entry.entry_kind == ENTRY_KIND_WINDOW:
+        if not entry.authorized:
+            return VerificationOutcome.UNAUTHORIZED
+        return VerificationOutcome.UNVERIFIED
+    if not entry.authorized:
+        return VerificationOutcome.UNAUTHORIZED
+    if entry.superseded:
+        return VerificationOutcome.STALE
+    return VerificationOutcome.VERIFIED
 
 
 class SQLiteProvenanceIndex(ProvenanceIndex):
@@ -422,44 +459,70 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
     # ----------------------------------------------------------- verify
 
     def verify(self, fingerprint: str) -> VerificationOutcome:
-        entry = self.lookup(fingerprint)
-        if entry is None:
-            return VerificationOutcome.UNVERIFIED
+        return _reduce_entry_to_outcome(self.lookup(fingerprint), self._secret)
 
-        expected = _sign(
-            _canonical_payload(
-                fingerprint=entry.fingerprint,
-                document_id=entry.document_id,
-                document_version=entry.document_version,
-                ingested_at=entry.ingested_at,
-                chunk_offset=entry.chunk_offset,
-                chunk_length=entry.chunk_length,
-                entry_kind=entry.entry_kind,
-            ),
-            self._secret,
-        )
-        if not hmac.compare_digest(expected, entry.signature):
-            return VerificationOutcome.TAMPERED
+    # ------------------------------------------------------- verify_batch
 
-        # v0.8.0 splice control: window entries are structural locators
-        # only. They never promote to VERIFIED on a whole-chunk SHA-256
-        # match. UNAUTHORIZED still wins if the locator-owning document
-        # is unauthorized (the bytes are recognized as coming from a
-        # forbidden source). Otherwise the locator match produces
-        # UNVERIFIED — there is no operator-authorized chunk record for
-        # this byte sequence.
-        if entry.entry_kind == ENTRY_KIND_WINDOW:
-            if not entry.authorized:
-                return VerificationOutcome.UNAUTHORIZED
-            return VerificationOutcome.UNVERIFIED
+    def verify_batch(
+        self,
+        fingerprints: Sequence[str],
+    ) -> List[Tuple[VerificationOutcome, Optional[IndexEntry]]]:
+        """One ``WHERE fingerprint IN (...)`` query instead of N round-trips.
 
-        if not entry.authorized:
-            return VerificationOutcome.UNAUTHORIZED
+        Selection rule mirrors :meth:`lookup` exactly: prefer whole-chunk
+        over window, then non-superseded, then most-recently-ingested. The
+        HMAC check and the entry_kind / authorized / superseded reduction
+        then run locally per fingerprint, identical to :meth:`verify`.
 
-        if entry.superseded:
-            return VerificationOutcome.STALE
+        Duplicates in the input list yield duplicate outputs without
+        re-querying. An empty input list short-circuits with no SQL.
+        """
+        if not fingerprints:
+            return []
+        # DISTINCT keeps the IN-list small when the caller passes
+        # duplicates; we rebuild per-input-position output below.
+        unique = list(dict.fromkeys(fingerprints))
+        placeholders = ",".join("?" * len(unique))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT f.fingerprint, f.document_id, f.document_version, "
+                "       f.ingested_at, f.chunk_offset, f.chunk_length, "
+                "       f.superseded, f.signature, d.authorized, "
+                "       f.entry_kind "
+                "FROM fingerprints f "
+                "JOIN documents d ON d.document_id = f.document_id "
+                f"WHERE f.fingerprint IN ({placeholders}) "
+                "ORDER BY f.fingerprint, "
+                "         CASE f.entry_kind WHEN 'whole_chunk' THEN 0 ELSE 1 END ASC, "
+                "         f.superseded ASC, f.ingested_at DESC",
+                unique,
+            ).fetchall()
 
-        return VerificationOutcome.VERIFIED
+        # Keep the first row per fingerprint after the ORDER BY — that's
+        # the preferred candidate, matching lookup()'s LIMIT 1 semantics.
+        preferred: dict[str, IndexEntry] = {}
+        for row in rows:
+            fp = row["fingerprint"]
+            if fp in preferred:
+                continue
+            preferred[fp] = IndexEntry(
+                fingerprint=fp,
+                document_id=row["document_id"],
+                document_version=row["document_version"],
+                ingested_at=row["ingested_at"],
+                chunk_offset=row["chunk_offset"],
+                chunk_length=row["chunk_length"],
+                authorized=bool(row["authorized"]),
+                superseded=bool(row["superseded"]),
+                signature=row["signature"],
+                entry_kind=row["entry_kind"],
+            )
+
+        out: List[Tuple[VerificationOutcome, Optional[IndexEntry]]] = []
+        for fp in fingerprints:
+            entry = preferred.get(fp)
+            out.append((_reduce_entry_to_outcome(entry, self._secret), entry))
+        return out
 
     # ----------------------------------------------------------- close
 

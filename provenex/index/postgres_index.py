@@ -36,6 +36,7 @@ lazily and raises a clear error if missing.
 from __future__ import annotations
 
 import os
+from typing import List, Optional, Sequence, Tuple
 
 from .base import (
     ENTRY_KIND_WHOLE_CHUNK,
@@ -48,6 +49,7 @@ from .base import (
 from .sqlite_index import (
     _canonical_payload,
     _now_utc_iso,
+    _reduce_entry_to_outcome,
     _resolve_index_secret,
     _sign,
 )
@@ -403,42 +405,65 @@ class PostgresProvenanceIndex(ProvenanceIndex):
     # ----------------------------------------------------------- verify
 
     def verify(self, fingerprint: str) -> VerificationOutcome:
-        entry = self.lookup(fingerprint)
-        if entry is None:
-            return VerificationOutcome.UNVERIFIED
+        return _reduce_entry_to_outcome(self.lookup(fingerprint), self._secret)
 
-        import hmac
+    # ------------------------------------------------------- verify_batch
 
-        expected = _sign(
-            _canonical_payload(
-                fingerprint=entry.fingerprint,
-                document_id=entry.document_id,
-                document_version=entry.document_version,
-                ingested_at=entry.ingested_at,
-                chunk_offset=entry.chunk_offset,
-                chunk_length=entry.chunk_length,
-                entry_kind=entry.entry_kind,
-            ),
-            self._secret,
-        )
-        if not hmac.compare_digest(expected, entry.signature):
-            return VerificationOutcome.TAMPERED
+    def verify_batch(
+        self,
+        fingerprints: Sequence[str],
+    ) -> List[Tuple[VerificationOutcome, Optional[IndexEntry]]]:
+        """One ``WHERE fingerprint = ANY(%s)`` query instead of N round-trips.
 
-        # v0.8.0 splice control: window entries never promote to
-        # VERIFIED. UNAUTHORIZED still wins for locator-owning
-        # documents that have been revoked. See the SQLite analog.
-        if entry.entry_kind == ENTRY_KIND_WINDOW:
-            if not entry.authorized:
-                return VerificationOutcome.UNAUTHORIZED
-            return VerificationOutcome.UNVERIFIED
+        Mirrors the SQLite override exactly: same row-selection rule,
+        same per-fingerprint HMAC reduction. The single-query collapse
+        is the Phase 1.1 deliverable for the Postgres backend - on a
+        top-10 retrieval, this drops the number of Postgres round-trips
+        from 20 (lookup+verify per chunk) to 1.
+        """
+        if not fingerprints:
+            return []
+        unique = list(dict.fromkeys(fingerprints))
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT f.fingerprint, f.document_id, f.document_version, "
+                    "       f.ingested_at, f.chunk_offset, f.chunk_length, "
+                    "       f.superseded, f.signature, d.authorized, "
+                    "       f.entry_kind "
+                    "FROM provenex_fingerprints f "
+                    "JOIN provenex_documents d ON d.document_id = f.document_id "
+                    "WHERE f.fingerprint = ANY(%s) "
+                    "ORDER BY f.fingerprint, "
+                    "         CASE f.entry_kind WHEN 'whole_chunk' THEN 0 ELSE 1 END ASC, "
+                    "         f.superseded ASC, f.ingested_at DESC",
+                    (unique,),
+                )
+                rows = cur.fetchall()
 
-        if not entry.authorized:
-            return VerificationOutcome.UNAUTHORIZED
+        preferred: dict[str, IndexEntry] = {}
+        for row in rows:
+            fp = row[0]
+            if fp in preferred:
+                continue
+            preferred[fp] = IndexEntry(
+                fingerprint=fp,
+                document_id=row[1],
+                document_version=row[2],
+                ingested_at=row[3],
+                chunk_offset=row[4],
+                chunk_length=row[5],
+                authorized=bool(row[8]),
+                superseded=bool(row[6]),
+                signature=row[7],
+                entry_kind=row[9],
+            )
 
-        if entry.superseded:
-            return VerificationOutcome.STALE
-
-        return VerificationOutcome.VERIFIED
+        out: List[Tuple[VerificationOutcome, Optional[IndexEntry]]] = []
+        for fp in fingerprints:
+            entry = preferred.get(fp)
+            out.append((_reduce_entry_to_outcome(entry, self._secret), entry))
+        return out
 
     # ----------------------------------------------------------- close
 

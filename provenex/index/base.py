@@ -22,7 +22,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import List, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
 
 class VerificationOutcome(str, Enum):
@@ -265,6 +265,93 @@ class ProvenanceIndex(ABC):
             UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED).
         """
 
+    def verify_batch(
+        self,
+        fingerprints: Sequence[str],
+    ) -> List[Tuple[VerificationOutcome, Optional[IndexEntry]]]:
+        """Verify many fingerprints in one call.
+
+        Returns ``[(outcome, entry), ...]`` aligned with the input order.
+        ``entry`` is the matched row (or ``None`` for an UNVERIFIED
+        no-row case); for UNVERIFIED window-locator matches and
+        TAMPERED rows, the entry IS still returned so the caller can
+        record the locator metadata on the receipt.
+
+        The default implementation loops :meth:`verify` and :meth:`lookup`
+        sequentially - correct for every backend, but pays one round-trip
+        per fingerprint. Backends override this when a single multi-key
+        query is meaningfully cheaper (SQLite ``IN (...)`` / Postgres
+        ``WHERE fingerprint = ANY(%s)``).
+
+        Args:
+            fingerprints: Sequence of ``"sha256:<hex>"`` strings. The same
+                fingerprint MAY appear more than once; each occurrence
+                yields its own entry in the output.
+
+        Returns:
+            One ``(outcome, entry)`` tuple per input fingerprint, in
+            input order.
+        """
+        return [(self.verify(fp), self.lookup(fp)) for fp in fingerprints]
+
     @abstractmethod
     def close(self) -> None:
         """Release any resources held by the index (file handles, sockets)."""
+
+
+@runtime_checkable
+class AsyncProvenanceIndex(Protocol):
+    """Structural counterpart of :class:`ProvenanceIndex` for asyncio callers.
+
+    Mirrors the sync interface method-for-method, with ``_async`` suffix
+    and ``await``-able semantics. A concrete implementation
+    (:class:`provenex.index.async_postgres_index.AsyncPostgresProvenanceIndex`)
+    wraps ``psycopg.AsyncConnection`` so a FastAPI / Starlette / aiohttp
+    handler can call into the verify path without blocking the event loop.
+
+    This is a :class:`typing.Protocol`, not an ABC, so any class with the
+    right method signatures is accepted. The hot path used by
+    :func:`provenex.verify_chunks_async` consults only
+    ``verify_batch_async``; the other methods exist so async ingest and
+    operator code paths have a complete async surface.
+
+    All async methods carry the same contract as their sync counterparts
+    in :class:`ProvenanceIndex`. Same five outcomes; same precedence;
+    same canonical signing payload (so a receipt produced via the async
+    path verifies bit-identically against a sync-backed verifier).
+    """
+
+    async def add_async(
+        self,
+        fingerprint: str,
+        document_id: str,
+        document_version: str,
+        chunk_offset: int,
+        chunk_length: int,
+        authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
+    ) -> None:
+        ...
+
+    async def lookup_async(self, fingerprint: str) -> Optional[IndexEntry]:
+        ...
+
+    async def set_authorization_async(
+        self, document_id: str, authorized: bool
+    ) -> None:
+        ...
+
+    async def supersede_async(self, document_id: str, new_version: str) -> int:
+        ...
+
+    async def verify_async(self, fingerprint: str) -> VerificationOutcome:
+        ...
+
+    async def verify_batch_async(
+        self,
+        fingerprints: Sequence[str],
+    ) -> List[Tuple[VerificationOutcome, Optional[IndexEntry]]]:
+        ...
+
+    async def close_async(self) -> None:
+        ...

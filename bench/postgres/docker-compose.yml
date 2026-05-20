@@ -1,0 +1,78 @@
+# Provenex Postgres bench rig.
+#
+# Brings up a Postgres-tuned-for-benchmarking container and an optional
+# PgBouncer in transaction mode in front of it. The rig is for anyone
+# who wants to reproduce the numbers in docs/scaling.md against their
+# own hardware, or to measure PgBouncer-fronted topologies that the
+# laptop bench does not stand up natively.
+#
+# Usage:
+#   cd bench/postgres
+#   docker compose up -d
+#
+# Then from the repo root, point the harness at the rig:
+#   export PROVENEX_TEST_POSTGRES_DSN='postgresql://postgres:bench@localhost:5455/postgres'
+#   python -m bench.postgres_scale all --scale 1m \
+#       --pg-data-dir /var/lib/postgresql/data
+#
+# Through PgBouncer (transaction mode; 100 client conns -> ~25 server conns):
+#   export PROVENEX_TEST_POSTGRES_DSN='postgresql://postgres:bench@localhost:5456/postgres'
+#   python -m bench.postgres_scale connection-budget --scale 1m \
+#       --connection-budget-threads 1,10,100,1000
+#
+# Stop + clean up:
+#   docker compose down -v
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: provenex_bench_pg
+    environment:
+      POSTGRES_PASSWORD: bench
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - work_mem=32MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_connections=200
+      - -c
+      - wal_buffers=16MB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - synchronous_commit=on
+    ports:
+      - "5455:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.20.1-p1
+    container_name: provenex_bench_pgbouncer
+    environment:
+      DATABASE_URL: postgres://postgres:bench@postgres:5432/postgres
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "2000"
+      DEFAULT_POOL_SIZE: "25"
+      RESERVE_POOL_SIZE: "5"
+      AUTH_TYPE: md5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5456:5432"
+
+volumes:
+  pgdata:

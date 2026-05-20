@@ -1,0 +1,53 @@
+{
+  "receipt_id": "prx_00000000000000000000000000000000",
+  "schema_version": "2.4.0",
+  "issued_at": "2026-05-20T12:00:00.000Z",
+  "issuer": "provenex-core/0.8.2",
+  "output": {
+    "hash": "sha256:97b38b2ebda1ca4cf4ea291005d97d07c7053db2aed3ef866c04b49ecfb3448d",
+    "hash_algorithm": "sha256"
+  },
+  "sources": [
+    {
+      "chunk_index": 0,
+      "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "document_id": "doc_policy_v4",
+      "document_version": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ingested_at": "2026-04-01T09:00:00.000Z",
+      "chunk_offset": 0,
+      "chunk_length": 512,
+      "authorized": true,
+      "verification_outcome": "VERIFIED",
+      "normalization_applied": [
+        "unicode_nfc",
+        "whitespace_collapse"
+      ],
+      "entry_kind": "whole_chunk"
+    }
+  ],
+  "policy": {
+    "verification": {
+      "block_stale": false,
+      "block_unauthorized": true,
+      "block_unverified": false,
+      "block_tampered": true,
+      "flag_stale": true,
+      "flag_unauthorized": true,
+      "flag_unverified": true,
+      "flag_tampered": true
+    }
+  },
+  "summary": {
+    "total_chunks": 1,
+    "verified": 1,
+    "stale": 0,
+    "unauthorized": 0,
+    "unverified": 0,
+    "tampered": 0,
+    "overall_status": "PASS"
+  },
+  "signature": {
+    "algorithm": "hmac-sha256",
+    "value": "95e1e39a1f26b802171b46de27e5fa585b054a09c5cd77637f0839cd2a9aefc2"
+  }
+}

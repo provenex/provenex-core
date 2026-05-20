@@ -1,0 +1,196 @@
+{
+  "receipt_id": "prx_11111111111111111111111111111111",
+  "schema_version": "2.4.0",
+  "issued_at": "2026-05-20T12:00:00.000Z",
+  "issuer": "provenex-core/0.8.2",
+  "caller_hash": "hmac-sha256:1af3da9ad949fbdd04f27d206419344a433599bf3eca8cc205c20f558f25b74c",
+  "request_binding": {
+    "algorithm": "sha256",
+    "request_hash": "sha256:9c579fa7fe61b616965b1364080295d205a4bc3df2abcec4f3846704e5018936",
+    "query_hash": "sha256:edfbed5770c424bedd28dabba2a617967fae1ceba3754cc6e5093fd56b1d33a7",
+    "request_context_hash": "sha256:259a7bfbe0b37b8e1368a37f3960b50dad2563d741d14a76f085171531d68660"
+  },
+  "output": {
+    "hash": "sha256:f03c730319c1e67fc80c0c6366cc3777ea2230fe6b51b1d178cc3cc2c035536a",
+    "hash_algorithm": "sha256"
+  },
+  "sources": [
+    {
+      "chunk_index": 0,
+      "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "document_id": "doc_policy_v4",
+      "document_version": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ingested_at": "2026-04-01T09:00:00.000Z",
+      "chunk_offset": 0,
+      "chunk_length": 512,
+      "authorized": true,
+      "verification_outcome": "VERIFIED",
+      "normalization_applied": [
+        "unicode_nfc",
+        "whitespace_collapse"
+      ],
+      "entry_kind": "whole_chunk"
+    },
+    {
+      "chunk_index": 1,
+      "fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "document_id": "doc_policy_v4",
+      "document_version": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ingested_at": "2026-04-01T09:00:00.000Z",
+      "chunk_offset": 128,
+      "chunk_length": 128,
+      "authorized": true,
+      "verification_outcome": "UNVERIFIED",
+      "normalization_applied": [
+        "unicode_nfc"
+      ],
+      "entry_kind": "window",
+      "content_source": "indexed_corpus"
+    },
+    {
+      "chunk_index": 2,
+      "fingerprint": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "document_id": null,
+      "document_version": null,
+      "ingested_at": null,
+      "chunk_offset": null,
+      "chunk_length": null,
+      "authorized": null,
+      "verification_outcome": "UNVERIFIED",
+      "normalization_applied": [
+        "unicode_nfc"
+      ],
+      "content_source": "live_tool_output"
+    }
+  ],
+  "policy": {
+    "verification": {
+      "block_stale": false,
+      "block_unauthorized": true,
+      "block_unverified": false,
+      "block_tampered": true,
+      "flag_stale": true,
+      "flag_unauthorized": true,
+      "flag_unverified": true,
+      "flag_tampered": true
+    },
+    "access_control": {
+      "evaluator": "native_yaml",
+      "policy_id": "phase0-fixture-v1",
+      "policy_version_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "policy_in_transparency_log": false,
+      "decisions": [
+        {
+          "chunk_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "decision": "allow",
+          "rules_fired": [
+            "jurisdiction_eu_only"
+          ],
+          "inputs_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "inputs": {
+            "chunk_metadata": {
+              "residency": "EU"
+            },
+            "request_context": {
+              "caller": {
+                "id": "u_42",
+                "role": "hr_admin",
+                "display_name": "André “Andy” O’Brien"
+              },
+              "jurisdiction": "EU",
+              "purpose": "customer_support",
+              "timestamp": "2026-05-20T11:30:00.000Z"
+            }
+          },
+          "metadata_binding": {
+            "chunk_metadata": "at_ingest",
+            "request_context": "at_evaluate"
+          }
+        },
+        {
+          "chunk_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "decision": "allow",
+          "rules_fired": [],
+          "inputs_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "inputs": null,
+          "metadata_binding": {
+            "chunk_metadata": "at_evaluate",
+            "request_context": "at_evaluate"
+          }
+        },
+        {
+          "chunk_fingerprint": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "decision": "deny",
+          "rules_fired": [
+            "unknown_metadata_deny"
+          ],
+          "inputs_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "inputs": null,
+          "metadata_binding": {
+            "chunk_metadata": "at_evaluate",
+            "request_context": "at_evaluate"
+          }
+        }
+      ]
+    },
+    "tool_call_control": {
+      "evaluator": "native_yaml",
+      "policy_id": "phase0-fixture-v1",
+      "policy_version_hash": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+      "policy_in_transparency_log": false,
+      "decisions": [
+        {
+          "action_index": 0,
+          "decision": "allow",
+          "rules_fired": [
+            "web_search_provider_allowlist"
+          ],
+          "inputs_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+          "inputs": null,
+          "metadata_binding": {
+            "tool_parameters": "at_evaluate",
+            "request_context": "at_evaluate"
+          }
+        }
+      ]
+    }
+  },
+  "summary": {
+    "total_chunks": 3,
+    "verified": 1,
+    "stale": 0,
+    "unauthorized": 0,
+    "unverified": 2,
+    "tampered": 0,
+    "total_actions": 1,
+    "actions_allowed": 1,
+    "actions_denied": 0,
+    "overall_status": "PARTIAL"
+  },
+  "actions": [
+    {
+      "action_index": 0,
+      "name": "web_search",
+      "operation": "query",
+      "parameters_hash": "sha256:d1759b13dbed6354e02ea06acffba34fabcebbaee92a10285a381224ed0a1810",
+      "parameters": null,
+      "target_system": "google_custom_search",
+      "invocation_id": "inv_8e2c"
+    }
+  ],
+  "trajectory": {
+    "trajectory_id": "trj_ffffffffffffffffffffffffffffffff",
+    "step_index": 1,
+    "parent_step_ids": [
+      "prx_22222222222222222222222222222222"
+    ],
+    "trajectory_started_at": "2026-05-20T11:59:00.000Z",
+    "step_kind": "retrieval",
+    "agent_id": "research_agent",
+    "session_id": "session-2026-001"
+  },
+  "signature": {
+    "algorithm": "hmac-sha256",
+    "value": "0941e709f3761dbbab773c640daa5b275a077b61d0621d4adc455a5949549d18"
+  }
+}
