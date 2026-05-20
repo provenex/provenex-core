@@ -1,0 +1,118 @@
+# Default values for a 50-RPS / 1M-chunk deployment.
+# See values-large.yaml for a 500-RPS / 10M-chunk deployment shape.
+
+image:
+  repository: provenex/provenex-server
+  tag: "0.9.0"
+  pullPolicy: IfNotPresent
+
+# Verify deployment: stateless, horizontally scaled.
+replicaCount: 3
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "1000m"
+    memory: "512Mi"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Horizontal Pod Autoscaler: scale on CPU (verify is CPU-light, mostly
+# I/O wait, so 80% target CPU keeps headroom for traffic spikes without
+# thrashing).
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 80
+
+# Pod Disruption Budget: keep at least 2 verify pods up during voluntary
+# disruptions. Receipts are stateless so any pod can serve any request,
+# but a PDB prevents an over-eager cluster operator from rolling all pods
+# at once.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Signing keys: provided via a Kubernetes Secret. The chart never holds
+# the key material; you create the Secret out-of-band (kubectl create
+# secret, ExternalSecrets controller, Vault Agent Injector, etc.).
+secrets:
+  # Name of the Secret containing the signing keys. The chart mounts
+  # the named keys as env vars on the verify pods.
+  name: provenex-signing
+  # Key inside the Secret that holds the receipt HMAC secret. Set to ""
+  # if you use the Ed25519 path below instead.
+  receiptHmacKey: receipt_secret
+  # Key inside the Secret that holds an Ed25519 private key in PEM. Set
+  # to "" if you use the HMAC path above. (Mutually exclusive with the
+  # HMAC path; if both are set the Ed25519 path wins.)
+  receiptEd25519Key: receipt_ed25519_pem
+  # Key for the index HMAC secret (covers the per-row index signature).
+  indexHmacKey: index_secret
+
+# Postgres DSN. If postgresql.enabled is true the chart points at the
+# bundled subchart; otherwise set externalDsnSecret to the name of a
+# Secret with a single ``dsn`` key.
+externalDsnSecret: ""
+
+# Policy ConfigMap: the operator (Phase 2.3) keeps this in sync with
+# Policy CRs, or you create it yourself. The verify pods mount it at
+# /etc/provenex/policy.yaml.
+policyConfigMap:
+  name: provenex-policy
+  # If false, no /etc/provenex/policy.yaml is mounted and the server
+  # runs without an access-control policy (verification half still runs).
+  enabled: false
+
+# Bundled Postgres for kind / dev clusters. Use externalDsnSecret in
+# production.
+postgresql:
+  enabled: true
+  auth:
+    username: provenex
+    password: provenex-dev-only
+    database: provenex
+  primary:
+    persistence:
+      enabled: false  # ephemeral in dev; flip on for staging+
+
+# Ingester CronJob: hourly batch ingest. Image is the same provenex
+# image, run with a different ENTRYPOINT (provenex CLI ingest).
+ingester:
+  enabled: false
+  schedule: "0 * * * *"
+  args: ["--help"]  # replace with your ingest command
+
+# Witness publisher CronJob: every 6 hours append the latest checkpoint
+# to the witness log. See docs/runbooks/witness_log.md.
+witness:
+  enabled: false
+  schedule: "0 */6 * * *"
+
+# NetworkPolicy: deny-by-default egress except to Postgres and DNS;
+# allow ingress from app pods labelled provenex-client.
+networkPolicy:
+  enabled: true
+
+# Probes — readyz hits the pool with a sentinel verify so it fails only
+# when the backend pool is truly unhealthy. The liveness probe is a
+# cheap /healthz.
+probes:
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# Prometheus annotations so a ServiceMonitor or annotation-driven
+# scrape picks up /metrics automatically.
+metrics:
+  enabled: true
+  path: /metrics
+  port: 8080

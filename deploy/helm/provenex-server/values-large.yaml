@@ -1,0 +1,47 @@
+# 500-RPS / 10M-chunk deployment overrides.
+#
+# Apply on top of the defaults:
+#   helm install provenex deploy/helm/provenex-server \
+#       -f deploy/helm/provenex-server/values-large.yaml \
+#       --set externalDsnSecret=my-postgres-dsn
+
+replicaCount: 10
+
+resources:
+  requests:
+    cpu: "1000m"
+    memory: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "2Gi"
+
+autoscaling:
+  enabled: true
+  minReplicas: 10
+  maxReplicas: 60
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 5
+
+# Use external Postgres at this scale. The bundled chart is not sized
+# for 10M chunks plus production write load.
+postgresql:
+  enabled: false
+
+# Ingester schedule: more frequent so per-batch sizes stay bounded.
+ingester:
+  enabled: true
+  schedule: "*/15 * * * *"
+
+witness:
+  enabled: true
+  schedule: "0 */2 * * *"  # every 2h at this scale
+
+# Pool sizing per pod. Each pod opens up to 10 backend connections; at
+# 60 pods that's 600 client conns -> point at PgBouncer to multiplex
+# them down to ~50 server conns (see docs/scaling.md).
+env:
+  PROVENEX_POOL_MIN: "2"
+  PROVENEX_POOL_MAX: "10"

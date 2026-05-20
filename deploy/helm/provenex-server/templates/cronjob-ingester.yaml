@@ -1,0 +1,30 @@
+{{- if .Values.ingester.enabled -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "provenex-server.fullname" . }}-ingester
+  labels:
+    {{- include "provenex-server.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.ingester.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+          containers:
+            - name: ingester
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              command: ["provenex"]
+              args:
+                {{- toYaml .Values.ingester.args | nindent 16 }}
+              env:
+                {{- include "provenex-server.envFromSecrets" . | nindent 16 }}
+{{- end }}

@@ -1,0 +1,159 @@
+# Plain-Kubernetes manifests for the Provenex HTTP server.
+#
+# Same shape as deploy/helm/provenex-server/, rendered with the chart's
+# default values. Use this if you don't run Helm. Apply with:
+#
+#   kubectl create namespace provenex
+#   kubectl -n provenex create secret generic provenex-signing \
+#       --from-literal=index_secret=... \
+#       --from-literal=receipt_secret=...
+#   kubectl -n provenex create secret generic provenex-dsn \
+#       --from-literal=dsn=postgresql://...
+#   kubectl -n provenex apply -f deploy/manifests/provenex-server.yaml
+#
+# Then kubectl -n provenex port-forward svc/provenex-server 8080:8080
+# and curl POST /v1/verify.
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: provenex-server
+  labels:
+    app.kubernetes.io/name: provenex-server
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+  selector:
+    app.kubernetes.io/name: provenex-server
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provenex-server
+  labels:
+    app.kubernetes.io/name: provenex-server
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: provenex-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: provenex-server
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8080"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: provenex-server
+          image: provenex/provenex-server:0.9.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PROVENEX_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: provenex-signing
+                  key: index_secret
+            - name: PROVENEX_RECEIPT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: provenex-signing
+                  key: receipt_secret
+            - name: PROVENEX_DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: provenex-dsn
+                  key: dsn
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "200m", memory: "256Mi" }
+            limits:   { cpu: "1000m", memory: "512Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: provenex-server
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: provenex-server
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: provenex-server
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: provenex-server
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: provenex-server
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: provenex-server
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              provenex-client: "true"
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

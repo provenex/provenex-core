@@ -1,0 +1,52 @@
+# Multi-stage Dockerfile for the Provenex HTTP server.
+#
+# Stage 1 builds a venv with the wheel-installed package; stage 2 copies
+# the venv into a slim runtime that runs as a non-root user. Image
+# tagged as provenex/provenex-server:<version>.
+
+# ----------------------------- builder ---------------------------------------
+FROM python:3.12-slim AS builder
+
+# psycopg's binary wheel pulls in libpq itself, so no system packages
+# are needed at build time. We pin pip + wheel for reproducible
+# resolution.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /build
+COPY pyproject.toml ./
+COPY provenex ./provenex
+COPY README.md ./
+
+RUN pip install --no-cache-dir --upgrade pip wheel \
+    && pip install --no-cache-dir ".[server]"
+
+# ----------------------------- runtime ---------------------------------------
+FROM python:3.12-slim AS runtime
+
+# Non-root user for the runtime. The signing key file is bind-mounted
+# read-only at /run/secrets/, never baked into the image.
+RUN groupadd --system --gid 10001 provenex \
+    && useradd --system --uid 10001 --gid provenex --shell /sbin/nologin provenex
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER provenex
+WORKDIR /home/provenex
+
+# The server reads its DSN, signing keys, and policy file from env.
+# Container orchestrators (Kubernetes, Nomad, ECS) populate these from
+# their secret-management surface.
+ENV PROVENEX_POOL_MIN=1 \
+    PROVENEX_POOL_MAX=10
+
+EXPOSE 8080
+
+# uvicorn --factory invokes create_app() rather than importing an
+# already-constructed instance, so the lifespan hook can configure the
+# pool with the right per-pod env.
+ENTRYPOINT ["uvicorn", "provenex.server.app:create_app", \
+            "--factory", "--host", "0.0.0.0", "--port", "8080"]

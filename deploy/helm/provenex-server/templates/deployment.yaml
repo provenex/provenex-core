@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "provenex-server.fullname" . }}
+  labels:
+    {{- include "provenex-server.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "provenex-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "provenex-server.selectorLabels" . | nindent 8 }}
+      {{- if .Values.metrics.enabled }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: {{ .Values.metrics.path | quote }}
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+      {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: provenex-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            {{- include "provenex-server.envFromSecrets" . | nindent 12 }}
+            {{- if .Values.policyConfigMap.enabled }}
+            - name: PROVENEX_POLICY_FILE
+              value: /etc/provenex/policy.yaml
+            {{- end }}
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- if or .Values.secrets.receiptEd25519Key .Values.policyConfigMap.enabled }}
+          volumeMounts:
+            {{- if .Values.secrets.receiptEd25519Key }}
+            - name: signing-keys
+              mountPath: /run/secrets/provenex
+              readOnly: true
+            {{- end }}
+            {{- if .Values.policyConfigMap.enabled }}
+            - name: policy
+              mountPath: /etc/provenex
+              readOnly: true
+            {{- end }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      {{- if or .Values.secrets.receiptEd25519Key .Values.policyConfigMap.enabled }}
+      volumes:
+        {{- if .Values.secrets.receiptEd25519Key }}
+        - name: signing-keys
+          secret:
+            secretName: {{ .Values.secrets.name }}
+            # Mode 0440: readable by owner (root) and by fsGroup
+            # (10001, the provenex user's primary group). 0400 would
+            # leave the file readable only by root and the non-root
+            # runtime user could not load its own signing key.
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.secrets.receiptEd25519Key }}
+                path: {{ .Values.secrets.receiptEd25519Key }}
+                mode: 0440
+        {{- end }}
+        {{- if .Values.policyConfigMap.enabled }}
+        - name: policy
+          configMap:
+            name: {{ .Values.policyConfigMap.name }}
+        {{- end }}
+      {{- end }}

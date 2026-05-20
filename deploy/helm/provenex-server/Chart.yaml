@@ -1,0 +1,28 @@
+apiVersion: v2
+name: provenex-server
+description: |
+  Helm chart for the Provenex HTTP server (Pattern B sidecar / Pattern C
+  centralized verify service). Includes a verify Deployment, an ingester
+  CronJob, a witness-publisher CronJob, NetworkPolicy, HPA, PDB, and a
+  bundled Postgres subchart for kind / dev clusters. The signing key is
+  read from a Secret you provide (ExternalSecret-friendly) — the chart
+  never holds key material.
+type: application
+version: 0.1.0
+appVersion: "0.9.0"
+keywords:
+  - provenex
+  - rag
+  - provenance
+  - policy
+home: https://provenex.ai
+sources:
+  - https://github.com/provenex/provenex-core
+maintainers:
+  - name: Provenex
+    email: contact@provenex.ai
+dependencies:
+  - name: postgresql
+    version: "15.5.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

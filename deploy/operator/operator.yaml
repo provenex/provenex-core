@@ -1,0 +1,106 @@
+# Provenex policy operator: Deployment + RBAC.
+#
+# Apply this after the CRD (deploy/operator/crd.yaml). The operator
+# watches Policy CRs cluster-wide and reconciles each into its named
+# ConfigMap. RBAC is intentionally narrow: read Policy, read+write
+# ConfigMaps, no Secret access.
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provenex-operator
+  namespace: provenex-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: provenex-operator
+rules:
+  - apiGroups: [provenex.io]
+    resources: [policies, policies/status]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch, create, patch, update]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: provenex-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: provenex-operator
+subjects:
+  - kind: ServiceAccount
+    name: provenex-operator
+    namespace: provenex-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provenex-operator
+  namespace: provenex-system
+  labels:
+    app.kubernetes.io/name: provenex-operator
+spec:
+  replicas: 1  # operator should run as single-writer; HA via leader election is future work
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: provenex-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: provenex-operator
+    spec:
+      serviceAccountName: provenex-operator
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: operator
+          image: provenex/provenex-operator:0.9.0
+          command: ["kopf"]
+          args:
+            - run
+            - -m
+            - provenex.operator.main
+            - --standalone
+            - --verbose
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+---
+# Example Policy CR (commented out; uncomment + edit to apply).
+# apiVersion: provenex.io/v1
+# kind: Policy
+# metadata:
+#   name: hr-corpus-policy
+#   namespace: provenex
+# spec:
+#   targetConfigMap: provenex-policy
+#   policy: |
+#     version: 1
+#     policy_id: hr-corpus-v3
+#     verification:
+#       block_stale: false
+#       block_unauthorized: true
+#     access_control:
+#       rules:
+#         - name: eu-jurisdiction
+#           when: { request.jurisdiction: EU }
+#           require: { chunk.metadata.pii_clean: true }
+#           on_violation: deny

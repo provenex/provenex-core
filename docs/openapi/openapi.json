@@ -1,0 +1,719 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Provenex",
+    "description": "Provenex HTTP API. Returns signed provenance receipts for retrieval, tool-call admission, memory writes, and model inference admission. Any language with SHA-256 + HMAC or Ed25519 can verify the receipts offline using only the public key (or shared HMAC secret).",
+    "version": "0.9.0"
+  },
+  "paths": {
+    "/v1/verify": {
+      "post": {
+        "tags": [
+          "verify"
+        ],
+        "summary": "Verify retrieved chunks; emit a signed receipt.",
+        "operationId": "verify_v1_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admit/tool": {
+      "post": {
+        "tags": [
+          "admit"
+        ],
+        "summary": "Admission-check a tool call; emit a signed receipt.",
+        "operationId": "admit_tool_v1_admit_tool_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmitToolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admit/memory_write": {
+      "post": {
+        "tags": [
+          "admit"
+        ],
+        "summary": "Admission-check a memory write; emit a signed receipt.",
+        "operationId": "admit_memory_write_v1_admit_memory_write_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmitMemoryWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admit/model_inference": {
+      "post": {
+        "tags": [
+          "admit"
+        ],
+        "summary": "Admission-check a model inference call.",
+        "operationId": "admit_model_inference_v1_admit_model_inference_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdmitModelInferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdmissionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ingest": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Bulk-ingest fingerprints into the Postgres index.",
+        "operationId": "ingest_v1_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness probe.",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness probe.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Prometheus metrics.",
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdmissionResponse": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "title": "Decision",
+            "description": "`allow` or `deny`."
+          },
+          "rules_fired": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rules Fired"
+          },
+          "receipt": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Receipt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision",
+          "receipt"
+        ],
+        "title": "AdmissionResponse",
+        "description": "Shared response shape for the /v1/admit/* family."
+      },
+      "AdmitMemoryWriteRequest": {
+        "properties": {
+          "memory_key": {
+            "type": "string",
+            "title": "Memory Key",
+            "description": "The memory key being written."
+          },
+          "value": {
+            "title": "Value",
+            "description": "The value being written. Hashed."
+          },
+          "store_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Id",
+            "description": "Optional memory store / namespace id."
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestContextBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "memory_key",
+          "value",
+          "request"
+        ],
+        "title": "AdmitMemoryWriteRequest",
+        "description": "POST /v1/admit/memory_write request body."
+      },
+      "AdmitModelInferenceRequest": {
+        "properties": {
+          "model_name": {
+            "type": "string",
+            "title": "Model Name",
+            "description": "Model identifier, e.g. claude-opus-4-7."
+          },
+          "prompt": {
+            "title": "Prompt",
+            "description": "Prompt text. Hashed on the receipt."
+          },
+          "target_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Provider",
+            "description": "Provider, e.g. anthropic."
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestContextBody"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model_name",
+          "prompt",
+          "request"
+        ],
+        "title": "AdmitModelInferenceRequest",
+        "description": "POST /v1/admit/model_inference request body."
+      },
+      "AdmitToolRequest": {
+        "properties": {
+          "tool": {
+            "$ref": "#/components/schemas/ToolCallBody"
+          },
+          "request": {
+            "$ref": "#/components/schemas/RequestContextBody"
+          },
+          "redact_parameters": {
+            "type": "boolean",
+            "title": "Redact Parameters",
+            "default": false
+          },
+          "redact_inputs": {
+            "type": "boolean",
+            "title": "Redact Inputs",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool",
+          "request"
+        ],
+        "title": "AdmitToolRequest",
+        "description": "POST /v1/admit/tool request body."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "IngestEntry": {
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint",
+            "description": "SHA-256 fingerprint in canonical form: `sha256:<hex>`."
+          },
+          "document_id": {
+            "type": "string",
+            "title": "Document Id"
+          },
+          "document_version": {
+            "type": "string",
+            "title": "Document Version",
+            "description": "`sha256:<hex>` over the normalized document."
+          },
+          "chunk_offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Chunk Offset",
+            "default": 0
+          },
+          "chunk_length": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Chunk Length"
+          },
+          "authorized": {
+            "type": "boolean",
+            "title": "Authorized",
+            "default": true
+          },
+          "entry_kind": {
+            "type": "string",
+            "title": "Entry Kind",
+            "description": "Either `whole_chunk` or `window`.",
+            "default": "whole_chunk"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "document_id",
+          "document_version",
+          "chunk_length"
+        ],
+        "title": "IngestEntry",
+        "description": "One chunk to ingest into the Postgres index."
+      },
+      "IngestRequest": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/IngestEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "IngestRequest",
+        "description": "POST /v1/ingest request body."
+      },
+      "IngestResponse": {
+        "properties": {
+          "ingested": {
+            "type": "integer",
+            "title": "Ingested"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ingested"
+        ],
+        "title": "IngestResponse",
+        "description": "POST /v1/ingest response body."
+      },
+      "RequestContextBody": {
+        "properties": {
+          "caller": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Caller"
+          },
+          "jurisdiction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jurisdiction"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "timestamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timestamp"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          }
+        },
+        "type": "object",
+        "title": "RequestContextBody",
+        "description": "Wire shape for :class:`RequestContext`.\n\nShared between /v1/verify and /v1/admit/* so the same JSON dict\nworks on both surfaces."
+      },
+      "ToolCallBody": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "operation": {
+            "type": "string",
+            "title": "Operation"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "target_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target System"
+          },
+          "invocation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invocation Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "operation"
+        ],
+        "title": "ToolCallBody",
+        "description": "Subset of :class:`ToolCallContext` needed over the wire."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerifyRequest": {
+        "properties": {
+          "chunks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Chunks",
+            "description": "Retrieved chunk texts. Verified against the index."
+          },
+          "request_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Text",
+            "description": "Optional triggering query / prompt text. Hashed onto the receipt's request_binding.query_hash so a valid receipt cannot be presented as evidence for a different query. The text itself is not recorded."
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RequestContextBody"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional RequestContext: caller identity, jurisdiction, purpose, timestamp, session_id. Required when the loaded policy has access_control set; otherwise optional. Same shape as the request body on /v1/admit/*."
+          },
+          "output_text": {
+            "type": "string",
+            "title": "Output Text",
+            "description": "Optional LLM output text whose hash is recorded on the receipt. Pass on the final call in a multi-step flow.",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunks"
+        ],
+        "title": "VerifyRequest",
+        "description": "POST /v1/verify request body."
+      },
+      "VerifyResponse": {
+        "properties": {
+          "kept": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kept",
+            "description": "Chunk texts that passed policy."
+          },
+          "blocked": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocked",
+            "description": "Chunks removed by policy."
+          },
+          "receipt": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Receipt",
+            "description": "The signed provenance receipt as a JSON object."
+          }
+        },
+        "type": "object",
+        "required": [
+          "kept",
+          "blocked",
+          "receipt"
+        ],
+        "title": "VerifyResponse",
+        "description": "POST /v1/verify response body."
+      }
+    }
+  }
+}

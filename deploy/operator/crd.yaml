@@ -1,0 +1,103 @@
+# Custom Resource Definition for Provenex policies.
+#
+# A Policy CR carries one rendered Provenex YAML policy plus the
+# bookkeeping (rendered to a ConfigMap, hashed onto receipts) the
+# verify pods need. The accompanying operator (provenex/operator/main.py)
+# watches Policy CRs and reconciles each into the named ConfigMap.
+#
+# Apply once per cluster:
+#
+#   kubectl apply -f deploy/operator/crd.yaml
+#
+# Then create Policy CRs:
+#
+#   kubectl apply -f my_policy.yaml
+#
+# Verify pods reading PROVENEX_POLICY_FILE from the resulting ConfigMap
+# pick up the new policy on the next pod rollover. The new
+# policy_version_hash appears on every receipt issued thereafter.
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policies.provenex.io
+spec:
+  group: provenex.io
+  scope: Namespaced
+  names:
+    kind: Policy
+    listKind: PolicyList
+    plural: policies
+    singular: policy
+    shortNames: [pxpolicy]
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [policy, targetConfigMap]
+              properties:
+                policy:
+                  type: string
+                  description: |
+                    Inline Provenex policy YAML (the same schema accepted
+                    by Policy.from_yaml). The operator runs
+                    `provenex policy validate` against this string before
+                    accepting the CR; an invalid policy keeps the
+                    previous ConfigMap unchanged and sets
+                    status.phase=Rejected.
+                targetConfigMap:
+                  type: string
+                  description: |
+                    Name of the ConfigMap to write into. Must match the
+                    Helm chart's policyConfigMap.name (default
+                    "provenex-policy"). The ConfigMap is created if
+                    absent, updated in place otherwise; the operator
+                    never deletes ConfigMaps it didn't create.
+                fileName:
+                  type: string
+                  default: policy.yaml
+                  description: |
+                    Key inside the ConfigMap. Verify pods read
+                    /etc/provenex/<fileName>.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Accepted, Rejected]
+                message:
+                  type: string
+                  description: |
+                    Human-readable detail; "Accepted by ..." on success,
+                    validator error on Rejected.
+                policyVersionHash:
+                  type: string
+                  description: |
+                    The schema 2.0.0 policy_version_hash the operator
+                    computed for the validated policy. Verify pods
+                    publish receipts carrying this same hash once they
+                    pick up the new ConfigMap.
+                observedGeneration:
+                  type: integer
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: ConfigMap
+          type: string
+          jsonPath: .spec.targetConfigMap
+        - name: PolicyVersion
+          type: string
+          jsonPath: .status.policyVersionHash
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
