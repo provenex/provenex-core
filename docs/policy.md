@@ -287,7 +287,7 @@ Three things you might reach for that the native DSL refuses, **on purpose**:
 
 **Why it's a design choice, not a missing feature.** `PolicyEvaluator.evaluate(chunk_or_tool, request) → PolicyDecision` is contractually pure: same inputs, same decision, same `inputs_hash`. Two regulators, two months apart, with the original `(chunk, request)` inputs and the original policy bundle MUST reproduce the receipt's `inputs_hash` exactly. That property is what makes Provenex receipts auditable years after they were issued. The moment a rule reads hidden state outside `(chunk_or_tool, request)` - trajectory history, aggregations, external lookups - `inputs_hash` becomes path-dependent. The audit story collapses.
 
-**Where the load-bearing reasons go:**
+**The three reasons:**
 
 - `policy_version_hash` is canonical: two bundles that parse to the same Python structure produce the same hash. Trajectory rules would require canonicalising trajectory state into the bundle, which is incoherent (trajectories are runtime artifacts, not config).
 - `inputs_hash` per decision is the audit anchor. Path-dependent inputs mean an auditor can't reproduce it from the recorded inputs alone - they'd need the entire trajectory state, which is exactly what the receipt was supposed to summarise.
@@ -297,9 +297,9 @@ Three things you might reach for that the native DSL refuses, **on purpose**:
 
 - **Commercial Rego adapter** - the [Rego language](https://www.openpolicyagent.org/docs/latest/policy-language/) is general-purpose and can express trajectory rules cleanly. The Rego adapter is opt-in; operators who use it accept the audit-anchor trade-off explicitly (the `inputs_hash` discipline still applies per decision, but Rego policies can reference trajectory state if the operator authors them that way). Available under the commercial license - see [provenex.ai](https://provenex.ai).
 
-- **Downstream anomaly detector reading receipts** - this is the recommended path for almost every customer. Provenex emits one signed receipt per decision; an anomaly detector / SIEM / UEBA tool reads the receipt stream and does the sequence / pattern detection there. That's the OCSF export's whole purpose (see [`ocsf_mapping.md`](ocsf_mapping.md)) - receipts become the source-of-record events the detector consumes. The detector is a different tool category (SIEM / UEBA), with different budgets and different vendors. Provenex is the firewall; the detector is the SIEM that correlates across firewall events.
+- **Downstream anomaly detector reading receipts.** Provenex emits one signed receipt per decision; an anomaly detector / SIEM / UEBA tool reads the receipt stream and does the sequence / pattern detection there. The OCSF export (see [`ocsf_mapping.md`](ocsf_mapping.md)) is the integration surface — receipts become source-of-record events the detector consumes.
 
-The firewall doesn't ship a SIEM. The SIEM doesn't ship a firewall. Each is better-engineered because it doesn't try to be the other. See [`anomaly_detection.md`](anomaly_detection.md) for the canonical positioning, including worked anomaly-detection patterns over the receipt stream.
+See [`anomaly_detection.md`](anomaly_detection.md) for worked anomaly-detection patterns over the receipt stream.
 
 ## Evaluator interface
 

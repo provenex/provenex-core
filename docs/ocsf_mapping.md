@@ -101,7 +101,7 @@ themselves are unchanged.
     "version": "1.3.0",
     "product": {
       "name": "provenex-core",
-      "version": "0.8.2",
+      "version": "0.9.0",
       "vendor_name": "Provenex",
       "feature": { "name": "provenex-receipt", "version": "2.4.0" }
     },

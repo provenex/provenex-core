@@ -55,6 +55,52 @@ the canonical signing payload.
    - Ingest-vs-verify separation, read-replica usage, PgBouncer notes.
    - 1M-chunk benchmark numbers and the policy-evaluation latency profile.
 
+## By audience
+
+**Policy and DSL:**
+
+- [`policy.md`](policy.md) - the unified policy DSL (`verification`, `access_control`, `tool_call_control`); operators, expressions, worked examples, and the per-decision-purity rationale.
+
+**Developer:**
+
+- [`quickstart.md`](quickstart.md) - the five-minute getting-started across SQLite, Merkle, Ed25519, agentic flows, policy, tool-call admission, and memory / model inference.
+- [`cookbook.md`](cookbook.md) - twenty short recipes for common tasks.
+- [`vector_db_integration.md`](vector_db_integration.md) - the matrix across eleven vector backends (Pinecone, Weaviate, Milvus, Qdrant, Chroma, FAISS, pgvector, MongoDB Atlas, Elasticsearch, Vespa, OpenSearch).
+- [`pinecone_integration.md`](pinecone_integration.md) - a Pinecone-specific deep dive.
+- [`langchain_integration.md`](langchain_integration.md) - LangChain retriever and tool integration.
+- [`mcp_integration.md`](mcp_integration.md) - MCP `tools/call` decorator deep dive plus a small worked example.
+- [`streaming_export.md`](streaming_export.md) - the `ReceiptSink` Protocol and reference sinks.
+- [`trajectory.md`](trajectory.md) - the agentic DAG model and the five step kinds.
+- [`migration_guide.md`](migration_guide.md) - per-version upgrade notes back to 0.5.0.
+
+**Operator (production):**
+
+- [`secure_defaults.md`](secure_defaults.md) - every setting that affects security posture, current default, production recommendation.
+- [`deployment_patterns.md`](deployment_patterns.md) - the three SDK distribution shapes (every-host, sidecar, centralized service) and when to use each.
+- [`k8s_deployment.md`](k8s_deployment.md) - Helm chart walkthrough plus sizing guide for the `provenex-server` workload.
+- [`key_management.md`](key_management.md) - HMAC vs Ed25519 vs KMS / HSM, rotation procedures, threat model.
+- [`receipt_retention.md`](receipt_retention.md) - 7-year compliance retention pattern (S3 Object Lock + Glacier + Athena); maps to GCP and Azure.
+- [`runbooks/key_rotation.md`](runbooks/key_rotation.md) - HMAC and Ed25519 rotation procedures.
+- [`runbooks/witness_log.md`](runbooks/witness_log.md) - running the witness / checkpoint log in production.
+- [`runbooks/postgres_operations.md`](runbooks/postgres_operations.md) - schema management, failover, replica lag, backup and restore, index rebuild.
+- [`runbooks/disaster_recovery.md`](runbooks/disaster_recovery.md) - total Postgres loss, signing-key compromise, ingestion drift, multi-region patterns.
+- [`runbooks/sizing_guide.md`](runbooks/sizing_guide.md) - reference deployment shapes and the SQLite-vs-Postgres-vs-shard decision tree.
+- [`streaming_export_ops.md`](streaming_export_ops.md) - sink-failure semantics, backpressure, recovery, OCSF quirks.
+- [`data_sovereignty.md`](data_sovereignty.md) - multi-region deployment patterns and GDPR Article 17 mechanics.
+
+**Auditor and regulator:**
+
+- [`regulator_verification.md`](regulator_verification.md) - offline verification walkthrough with a pure-stdlib reference verifier.
+
+**Downstream detection:**
+
+- [`anomaly_detection.md`](anomaly_detection.md) - admission vs detection architecture plus five worked detection patterns.
+- [`ocsf_mapping.md`](ocsf_mapping.md) - OCSF v1.3 field-by-field mapping for SIEMs.
+
+**Procurement:**
+
+- [`procurement_faq.md`](procurement_faq.md) - license, supply chain, supported versions, vulnerability reporting, telemetry, cryptography provenance.
+
 ## Source map
 
 The security-critical surface is small. A reviewer should read it directly.
@@ -71,8 +117,14 @@ The security-critical surface is small. A reviewer should read it directly.
   `OUTCOME_PRECEDENCE`.
 - [`provenex/index/sqlite_index.py`](../provenex/index/sqlite_index.py),
   [`provenex/index/postgres_index.py`](../provenex/index/postgres_index.py),
-  [`provenex/index/merkle_sqlite_index.py`](../provenex/index/merkle_sqlite_index.py) -
-  the three reference index implementations (SQLite, Postgres, Merkle).
+  [`provenex/index/merkle_sqlite_index.py`](../provenex/index/merkle_sqlite_index.py),
+  [`provenex/index/merkle_postgres_index.py`](../provenex/index/merkle_postgres_index.py) -
+  the four reference index implementations (SQLite, Postgres, Merkle-SQLite,
+  Merkle-Postgres).
+- [`provenex/index/bloom.py`](../provenex/index/bloom.py) - the
+  `BloomFilterIndex` abstract base class for the negative-cache
+  acceleration layer (commercial implementation; OSS ships the
+  interface).
 - [`provenex/core/merkle.py`](../provenex/core/merkle.py) - the RFC 6962
   Merkle primitive and stateless inclusion-proof verifier.
 - [`provenex/policy/policy.py`](../provenex/policy/policy.py) - the unified

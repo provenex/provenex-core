@@ -278,4 +278,4 @@ The witness log is a hash-chained, signed, append-only JSONL log of `(checkpoint
 - Witness / checkpoint log: [`provenex/core/witness.py`](../provenex/core/witness.py)
 - Conformance self-test: [`provenex/cli/main.py`](../provenex/cli/main.py) `_cmd_selftest`
 
-If you find a security issue, please report it privately to `security@provenex.ai` rather than via a public issue.
+If you find a security issue, please report it privately to `contact@provenex.ai` rather than via a public issue.

@@ -126,6 +126,7 @@ The `SQLiteProvenanceIndex` above protects each row with an HMAC. For an additio
 from provenex.core.fingerprinter import Fingerprinter
 from provenex.core.merkle import verify_inclusion_proof
 from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
+from provenex.index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
 
@@ -133,7 +134,19 @@ from provenex.policy.policy import VerificationPolicy
 index = MerkleSQLiteProvenanceIndex("provenance.db")
 fp = Fingerprinter()
 result = fp.fingerprint(document_text)
+whole_doc_fp = fp.fingerprint_chunk(document_text)
+index.add(
+    fingerprint=whole_doc_fp,
+    document_id="policy_v4",
+    document_version=result.document_version,
+    chunk_offset=0,
+    chunk_length=len(document_text),
+    authorized=True,
+    entry_kind=ENTRY_KIND_WHOLE_CHUNK,
+)
 for f in result.fingerprints:
+    if f.fingerprint == whole_doc_fp:
+        continue
     index.add(
         fingerprint=f.fingerprint,
         document_id="policy_v4",
@@ -141,6 +154,7 @@ for f in result.fingerprints:
         chunk_offset=f.offset,
         chunk_length=f.length,
         authorized=True,
+        entry_kind=ENTRY_KIND_WINDOW,
     )
 published_tree_root = index.tree_root()  # share this; sign it; gossip it
 

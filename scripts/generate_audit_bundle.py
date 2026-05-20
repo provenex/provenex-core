@@ -187,7 +187,7 @@ verification will fail; the audit will refuse the receipt.
 
 - Source: https://github.com/provenex/provenex-core (MIT)
 - Documentation: https://provenex.ai/
-- Contact: skulk@provenex.ai
+- Contact: contact@provenex.ai
 
 Bundle generated: {generated_at} UTC
 Provenex version: provenex-core/{provenex_version}

@@ -1,20 +1,16 @@
 # Anomaly detection over Provenex receipts
 
-**Provenex receipts are the source-of-record AI agent anomaly detectors consume.** This document is the canonical reference: what Provenex emits, what the detector does with it, and where the line between the two is drawn.
-
-If you are evaluating Provenex alongside a UEBA / SIEM / agent-anomaly-detection tool, this is the doc to read.
-
----
+Provenex receipts are the source-of-record an AI-agent anomaly detector consumes. This document covers what Provenex emits, what the detector does with it, and where the line between the two is drawn.
 
 ## What this document is
 
-A working integration spec for an anomaly-detection layer sitting downstream of Provenex. Three things you'll find here:
+An integration spec for an anomaly-detection layer sitting downstream of Provenex. Three sections:
 
 1. **Architecture** - the per-decision admission layer (Provenex) and the sequence/pattern detection layer (your detector), and the receipt stream that connects them.
 2. **Schema field reference for detectors** - every field a detection rule typically reads, with a one-line "what to do with this in detection."
 3. **Worked detection patterns** - concrete examples, with the receipt fields each one consumes and SQL/pseudocode snippets a SIEM analyst can adapt.
 
-Provenex deliberately does not implement these detections itself. The line between admission and detection is load-bearing - see [§ The line we don't cross](#the-line-we-dont-cross).
+Provenex does not implement these detections itself; see [§ Admission and detection are different engines](#admission-and-detection-are-different-engines).
 
 ---
 
@@ -316,11 +312,9 @@ See [`ocsf_mapping.md`](ocsf_mapping.md) for the full field-by-field translation
 
 ---
 
-## The line we don't cross
+## Admission and detection are different engines
 
-Provenex is the admission layer. The anomaly detector is the SIEM that reads admission events. **We do not build the detector.**
-
-**Why this matters operationally.**
+Provenex is the admission layer. The anomaly detector reads admission events. Provenex does not build the detector.
 
 Per-decision admission and cross-decision detection have different engineering requirements. The admission layer must be:
 - **Deterministic** - same `(input, policy)` produces the same decision, every time, forever.
@@ -334,11 +328,7 @@ The detector layer needs the opposite shape:
 - **External-data-aware** - IdP lookups, asset inventory, threat intel feeds.
 - **Asynchronous** - millisecond or second latency is fine; minutes is often fine.
 
-**One engine doing both is worse at each.** Bundling sequence detection into a per-decision admission engine breaks the audit guarantees and the latency budget. Bundling per-decision purity into a sequence detector breaks the detector's expressivity and forces it to swallow Provenex's design constraints. Each is better-engineered because it doesn't try to be the other.
-
-**The receipt is the API.** Receipts have stable correlation keys (`caller_hash`, `trajectory_id`, `session_id`, `step_kind`), explicit decision metadata (`rules_fired`, `decision`, `verification_outcome`), and time with millisecond precision. They are deliberately the right shape for a detector to consume - and deliberately not the right shape to mutate during detection. See [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
-
-**Strategically, this is the same line as firewall / SIEM.** A firewall enforces per-packet rules deterministically. A SIEM correlates across packets. Nobody asks the firewall to also be the SIEM; the firewall would be worse at firewalling and the operator would have one tool to debug instead of two. Provenex is the firewall (for AI access); the detector is the SIEM. Two categories, two budget lines, two vendors. By design.
+Receipts are the API between the two: stable correlation keys (`caller_hash`, `trajectory_id`, `session_id`, `step_kind`), explicit decision metadata (`rules_fired`, `decision`, `verification_outcome`), and time with millisecond precision. See [`policy.md`](policy.md#what-the-native-dsl-deliberately-doesnt-do-and-why) for the design rationale.
 
 ---
 
@@ -368,7 +358,7 @@ The receipt is the cryptographic source-of-truth. The detector's downstream guar
 
 ## Compatibility
 
-This document is the canonical positioning for Provenex's source-of-record architecture. It does not affect the wire format or any API surface. Receipts produced under any Provenex version since 0.5.0 (when Postgres landed) are usable as detector input; receipts produced under 0.6.0+ also carry tool-call admission events; receipts produced under 0.6.4+ carry the source-of-record correlation fields (`caller_hash`, `session_id`); receipts produced under 0.6.5+ cover the full agent surface (memory + model inference); receipts produced under 0.6.6+ ship via `ReceiptSink`; receipts produced under 0.6.7+ translate to OCSF v1.3.
+Receipts produced under any Provenex version since 0.5.0 (when Postgres landed) are usable as detector input. Receipts produced under 0.6.0+ also carry tool-call admission events; receipts produced under 0.6.4+ carry the source-of-record correlation fields (`caller_hash`, `session_id`); receipts produced under 0.6.5+ cover the full agent surface (memory + model inference); receipts produced under 0.6.6+ ship via `ReceiptSink`; receipts produced under 0.6.7+ translate to OCSF v1.3.
 
 When OCSF stabilizes AI-specific event classes, this document is updated; receipts are not. The five verification outcomes (`VERIFIED` / `STALE` / `UNAUTHORIZED` / `UNVERIFIED` / `TAMPERED`) are sacred. The decision values (`allow` / `deny`) and the trajectory step kinds are stable. **Detectors written against today's receipts will keep working.**
 
