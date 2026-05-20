@@ -41,7 +41,14 @@ from .core.trajectory import (
     audit_trajectory_dag,
     start_trajectory,
 )
-from .core.verify import VerifiedChunks, verify_chunks, verify_memory
+from .core.signer_registry import (
+    SignerRegistry,
+    TenantNotFound,
+    default_signer_factory,
+    from_config_dict as signer_registry_from_config,
+)
+from .drift import DriftEvent, IndexDriftDetector
+from .core.verify import VerifiedChunks, verify_chunks, verify_chunks_async, verify_memory
 from .export import (
     FileJSONLSink,
     MultiSink,
@@ -56,12 +63,14 @@ from .index.base import (
     ENTRY_KIND_WHOLE_CHUNK,
     ENTRY_KIND_WINDOW,
     OUTCOME_PRECEDENCE,
+    AsyncProvenanceIndex,
     IndexEntry,
     ProvenanceIndex,
     VerificationOutcome,
     reduce_outcomes,
 )
 from .index.bloom import BloomAcceleratedIndex, BloomFilterIndex, NoopBloomFilter
+from .index.async_postgres_index import AsyncPostgresProvenanceIndex
 from .index.postgres_index import PostgresProvenanceIndex
 from .index.sqlite_index import SQLiteProvenanceIndex
 from .policy.evaluator import (
@@ -99,7 +108,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.8.2"
+__version__ = "0.9.0"
 
 __all__ = [
     # Core
@@ -112,8 +121,10 @@ __all__ = [
     # Index
     "IndexEntry",
     "ProvenanceIndex",
+    "AsyncProvenanceIndex",
     "SQLiteProvenanceIndex",
     "PostgresProvenanceIndex",
+    "AsyncPostgresProvenanceIndex",
     "VerificationOutcome",
     "OUTCOME_PRECEDENCE",
     "reduce_outcomes",
@@ -159,6 +170,14 @@ __all__ = [
     "compute_value_hash",
     "compute_request_binding",
     "Claim",
+    # Multi-tenant signer registry
+    "SignerRegistry",
+    "TenantNotFound",
+    "default_signer_factory",
+    "signer_registry_from_config",
+    # Index drift detector
+    "DriftEvent",
+    "IndexDriftDetector",
     "CONTENT_SOURCE_INDEXED_CORPUS",
     "CONTENT_SOURCE_LIVE_TOOL_OUTPUT",
     "CONTENT_SOURCE_MEMORY_STORE",
@@ -175,6 +194,7 @@ __all__ = [
     # Framework-agnostic verification
     "VerifiedChunks",
     "verify_chunks",
+    "verify_chunks_async",
     "verify_memory",
     # Streaming export sinks (0.6.6+)
     "ReceiptSink",

@@ -1,8 +1,8 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.8.2)](https://pypi.org/project/provenex-core/)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.8.2)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.9.0)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.9.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 
 **Policy enforcement for AI data access, with cryptographic proof.**
@@ -112,7 +112,7 @@ One signed receipt per retrieval or per tool call. Retrieval receipts carry `sou
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.4.0",
-  "issuer": "provenex-core/0.8.2",
+  "issuer": "provenex-core/0.9.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "request_binding": {
     "algorithm": "sha256",
@@ -420,11 +420,13 @@ The interfaces (`ProvenanceIndex`, `PolicyEvaluator`, `ReceiptSigner`, `BloomFil
 | Layer | Open source (this repo, MIT) | Commercial ([provenex.ai](https://provenex.ai)) |
 | --- | --- | --- |
 | **Fingerprinting engine** | Normalizer, Rabin-Karp, SHA-256 strengthening, peppered mode | High-throughput Bloom-filter acceleration for 10M+ chunk scale |
-| **Provenance index** | Postgres (multi-node production) and SQLite (single-node), HMAC-signed rows, optional RFC 6962 Merkle transparency log | Hosted index with distributed signed append-only storage, transparency-log-backed policy bundle records |
-| **Policy evaluator** | Unified policy with `verification` + `access_control` + `tool_call_control` halves, native YAML DSL | **Rego adapter** (load Rego bundles into the same `PolicyEvaluator` protocol), **OPA service adapter** (delegate decisions to a running OPA instance) |
-| **Receipts** | HMAC + Ed25519 signing, request binding, trajectory DAG, self-attribution claims, content-source classifier, witness / checkpoint log | Compliance-grade exports (PDF, CSV, JSON-LD), HSM-backed Ed25519, inference attribution and temporal decay scoring |
-| **Integrations** | LangChain, LangGraph, LlamaIndex, CrewAI, MCP, framework-agnostic SDK | Identity-provider integration (RequestContext auto-populated from Okta / Azure AD), enterprise SSO / RBAC |
-| **Observability** | `ReceiptSink` Protocol, stdlib sinks, OCSF v1.3 mapping (`receipt_to_ocsf` + `OCSFAdapter`), Kafka / SQS / S3 / PubSub sinks behind extras | Dedicated support, SLA |
+| **Provenance index** | Postgres (multi-node production, sync + async API) and SQLite (single-node), HMAC-signed rows, optional RFC 6962 Merkle transparency log, batched `verify_batch` | Hosted index with distributed signed append-only storage, transparency-log-backed policy bundle records |
+| **Policy evaluator** | Unified policy with `verification` + `access_control` + `tool_call_control` halves, native YAML DSL, **`provenex policy simulate`** for SR-11-7 / Model Risk replay | **Rego adapter** (load Rego bundles into the same `PolicyEvaluator` protocol), **OPA service adapter** (delegate decisions to a running OPA instance) |
+| **Receipts** | HMAC + Ed25519 signing, request binding, trajectory DAG, self-attribution claims, content-source classifier, witness / checkpoint log, **KMS / HSM signer adapters (AWS, GCP, Azure, PKCS#11)**, **multi-tenant signer registry** | Compliance-grade exports (PDF, CSV, JSON-LD), managed HSM hosting, inference attribution and temporal decay scoring |
+| **Server / deployment** | **`provenex-server`** FastAPI app (`pip install "provenex-core[server]"`), **Helm chart + raw manifests**, **Policy CRD + operator**, **Dockerfile.server** | Managed control plane, multi-region failover, vendor-managed upgrades |
+| **Integrations** | LangChain, LangGraph, LlamaIndex, CrewAI, MCP, framework-agnostic SDK, **JWT → RequestContext recipe** (Okta + Azure AD examples) | Identity-provider integration suite, enterprise SSO / RBAC |
+| **Observability** | `ReceiptSink` Protocol, stdlib sinks, OCSF v1.3 mapping (`receipt_to_ocsf` + `OCSFAdapter`), Kafka / SQS / S3 / PubSub sinks behind extras, **`/metrics` Prometheus endpoint**, **drift webhook detector**, **Splunk app + Sentinel KQL pack** | Dedicated support, SLA |
+| **Compliance** | **Receipt-retention Terraform module** (S3 Object Lock + Glacier + Athena, 7-year), 5 runbooks under `docs/runbooks/` | Vendor-managed retention service, regulator-facing audit portal |
 | **CLI** | `provenex ingest / verify / receipt / audit / policy / selftest / index audit` | |
 
 ## Install
@@ -441,6 +443,13 @@ pip install "provenex-core[ed25519]"       # + Ed25519 asymmetric signing
 pip install "provenex-core[export-kafka]"  # + KafkaSink (kafka-python)
 pip install "provenex-core[export-aws]"    # + SQSSink / S3AppendSink (boto3)
 pip install "provenex-core[export-gcp]"    # + PubSubSink (google-cloud-pubsub)
+pip install "provenex-core[server]"        # + FastAPI HTTP server (Patterns B/C)
+pip install "provenex-core[operator]"      # + Policy CRD operator (kopf + k8s client)
+pip install "provenex-core[kms-aws]"       # + AWS KMS signer adapter
+pip install "provenex-core[kms-gcp]"       # + GCP KMS signer adapter
+pip install "provenex-core[kms-azure]"     # + Azure Key Vault signer adapter
+pip install "provenex-core[pkcs11]"        # + PKCS#11 HSM signer adapter
+pip install "provenex-core[identity]"      # + JWT -> RequestContext recipe (PyJWT)
 ```
 
 Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. The Postgres backend, framework integrations, the native YAML DSL, and the Ed25519 signer are optional extras.

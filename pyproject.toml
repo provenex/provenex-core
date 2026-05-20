@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenex-core"
-version = "0.8.2"
+version = "0.9.0"
 description = "Policy enforcement for AI data access, with cryptographic proof"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,39 @@ policy = ["PyYAML>=6.0"]
 # Imports psycopg lazily; the SQLite backend (and the core) remain pure
 # stdlib without this extra.
 postgres = ["psycopg[binary]>=3.1", "psycopg-pool>=3.2"]
+# HTTP server (provenex-server). Thin FastAPI wrapper for Pattern B
+# (sidecar) and Pattern C (centralized verify service) deployments.
+# Pulls in the postgres extra by reference plus the ASGI stack.
+server = [
+    "provenex-core[postgres]",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.0",
+]
+# Lightweight Kubernetes operator that reconciles Policy CRs into the
+# ConfigMap the verify pods read. Off the hot path; ships as a separate
+# image and is independent of the server.
+operator = [
+    "kopf>=1.37",
+    "kubernetes>=29.0",
+    "PyYAML>=6.0",
+]
+# KMS / HSM signer adapters. Each adapter implements the same
+# ReceiptSigner protocol the OSS HmacSha256Signer / Ed25519Signer do,
+# so the signing key never has to leave the KMS / HSM. The cryptography
+# dep is pulled in transitively for the verify() path.
+kms-aws = ["boto3>=1.34", "cryptography>=42.0"]
+kms-gcp = ["google-cloud-kms>=2.21", "cryptography>=42.0"]
+kms-azure = [
+    "azure-identity>=1.15",
+    "azure-keyvault-keys>=4.9",
+    "cryptography>=42.0",
+]
+pkcs11 = ["python-pkcs11>=0.7", "cryptography>=42.0"]
+# Identity-provider recipes that build a RequestContext from a JWT.
+# PyJWT does signature verification; cryptography is its asymmetric
+# backend.
+identity = ["PyJWT[crypto]>=2.8", "cryptography>=42.0"]
 # Streaming export sinks (0.6.6+). The core sinks (StdoutJSONLSink,
 # FileJSONLSink, MultiSink, RetryQueueSink) ship in the stdlib core;
 # these extras add the network-bound sinks.
@@ -56,6 +89,7 @@ export-gcp = ["google-cloud-pubsub>=2.20"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
+    "pytest-asyncio>=0.23",
     "black>=24.0",
     "ruff>=0.4",
     "mypy>=1.10",
@@ -63,6 +97,9 @@ dev = [
     "PyYAML>=6.0",
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.2",
+    # ASGI deps for the Phase 1.2 100-concurrent-verify acceptance test.
+    "starlette>=0.37",
+    "httpx>=0.27",
 ]
 
 [project.scripts]

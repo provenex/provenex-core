@@ -21,8 +21,8 @@ Subcommands:
         secret is in the environment) and verifies each inclusion proof
         against the transparency-log tree root carried on the receipt. With
         ``--show-policy``, also prints the per-chunk data-access policy
-        decisions from the receipt's ``access_policy`` block (schema 1.5.0+).
-        Needs no database access. This is the auditor's tool.
+        decisions from the receipt's ``policy.access_control`` block (schema
+        2.0.0+). Needs no database access. This is the auditor's tool.
 
     provenex policy validate <policy.yaml>
         Parse and validate a native YAML policy file. Exit 0 if valid,
@@ -692,6 +692,34 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 
+def _cmd_policy_simulate(args: argparse.Namespace) -> int:
+    """Replay receipts under a proposed new policy; report decision flips."""
+    from pathlib import Path
+
+    from ..policy.simulator import simulate
+    from ..policy.unified import Policy
+
+    try:
+        new_policy = Policy.from_yaml(args.policy)
+    except Exception as exc:
+        print(f"error: failed to load policy {args.policy!r}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        report = simulate(new_policy, Path(args.receipts))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if args.human:
+        print(report.to_human_diff())
+    else:
+        print(json.dumps(report.to_dict(), indent=2))
+    # Exit 0 even with flips — the simulator's job is to report, not enforce.
+    # The operator decides whether the flips are intentional.
+    return 0
+
+
 def _cmd_policy_validate(args: argparse.Namespace) -> int:
     """Parse and validate a native YAML policy file.
 
@@ -1291,6 +1319,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit 0/1 without printing on success",
     )
     p_policy_validate.set_defaults(func=_cmd_policy_validate)
+
+    p_policy_simulate = p_policy_sub.add_parser(
+        "simulate",
+        help=(
+            "Replay historic receipts under a proposed new policy; report "
+            "which decisions flip allow<->deny."
+        ),
+        description=(
+            "SR-11-7 / Model Risk workflow primitive. Given a proposed "
+            "new policy and a directory of previously-issued receipts, "
+            "re-evaluates each decision under the new policy using only "
+            "the inputs the receipt carries. No external calls; pure "
+            "local computation. Output is JSON on stdout; pass --human "
+            "for a markdown-ish summary instead."
+        ),
+    )
+    p_policy_simulate.add_argument(
+        "--policy", required=True, help="Path to the proposed new policy YAML."
+    )
+    p_policy_simulate.add_argument(
+        "--receipts",
+        required=True,
+        help=(
+            "File or directory of receipts. A directory is scanned "
+            "recursively for *.json files."
+        ),
+    )
+    p_policy_simulate.add_argument(
+        "--human",
+        action="store_true",
+        help="Emit a markdown summary instead of JSON.",
+    )
+    p_policy_simulate.set_defaults(func=_cmd_policy_simulate)
 
     p_policy_hash = p_policy_sub.add_parser(
         "hash",
