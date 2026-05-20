@@ -1,0 +1,18 @@
+// Tool-call admissions denied by Provenex in the last 24 hours.
+// Receipts arrive on the Provenex_Receipt_CL custom log.
+//
+// Field paths in the custom log come from the Sentinel JSON ingestion
+// "$.path" syntax; adjust if your ingestion pipeline flattens fields
+// differently.
+
+Provenex_Receipt_CL
+| where TimeGenerated > ago(24h)
+| extend actions = parse_json(actions_s)
+| mv-expand action = actions
+| where action.admission.decision == "deny"
+| extend tool_name        = tostring(action.name),
+         tool_operation   = tostring(action.operation),
+         target_system    = tostring(action.target_system),
+         caller           = tostring(caller_hash_s)
+| summarize denied_count = count() by tool_name, target_system, caller
+| order by denied_count desc

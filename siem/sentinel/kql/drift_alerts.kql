@@ -1,0 +1,12 @@
+// Coalesced drift webhook events emitted by IndexDriftDetector.
+
+Provenex_Drift_CL
+| where TimeGenerated > ago(7d)
+| extend distinct_count = array_length(parse_json(distinct_fingerprints_s)),
+         window_s = todouble(window_seconds_d)
+| project TimeGenerated, distinct_count, window_s,
+          first_seen_ts_s, last_seen_ts_s,
+          // Surface the first few fingerprints inline so analysts can
+          // pivot without a separate join.
+          sample_fingerprints = array_slice(parse_json(distinct_fingerprints_s), 0, 5)
+| order by TimeGenerated desc

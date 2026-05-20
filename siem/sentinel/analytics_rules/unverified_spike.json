@@ -1,0 +1,21 @@
+{
+  "displayName": "Provenex: UNVERIFIED chunk spike (1h)",
+  "description": "Fires when the rate of UNVERIFIED chunks exceeds 100 per hour. Usually signals an ingest gap, a corpus reorg, or hostile insertion that bypassed the indexed corpus.",
+  "severity": "Medium",
+  "enabled": true,
+  "query": "Provenex_Receipt_CL\n| where TimeGenerated > ago(1h)\n| extend sources = parse_json(sources_s)\n| mv-expand source = sources\n| where source.verification_outcome == \"UNVERIFIED\"\n| summarize unverified_count = count() by bin(TimeGenerated, 1h)\n| where unverified_count > 100",
+  "queryFrequency": "PT15M",
+  "queryPeriod": "PT1H",
+  "triggerOperator": "GreaterThan",
+  "triggerThreshold": 0,
+  "tactics": ["Discovery", "Collection"],
+  "incidentConfiguration": {
+    "createIncident": true,
+    "groupingConfiguration": {
+      "enabled": true,
+      "reopenClosedIncident": false,
+      "lookbackDuration": "PT6H",
+      "matchingMethod": "AllEntities"
+    }
+  }
+}

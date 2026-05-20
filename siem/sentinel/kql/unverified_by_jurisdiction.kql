@@ -1,0 +1,13 @@
+// UNVERIFIED chunks in the last 24h, grouped by request jurisdiction.
+// A spike in any one jurisdiction usually means a corpus for that
+// jurisdiction is missing a recent ingest cycle.
+
+Provenex_Receipt_CL
+| where TimeGenerated > ago(24h)
+| extend sources = parse_json(sources_s),
+         jurisdiction = tostring(parse_json(request_binding_s).request_context.jurisdiction)
+| mv-expand source = sources
+| where source.verification_outcome == "UNVERIFIED"
+| extend jurisdiction = iif(isempty(jurisdiction), "unknown", jurisdiction)
+| summarize unverified_count = count() by jurisdiction
+| order by unverified_count desc

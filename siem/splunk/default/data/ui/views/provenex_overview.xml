@@ -1,0 +1,35 @@
+<dashboard version="1.1" theme="dark">
+  <label>Provenex Overview</label>
+  <description>SOC view over Provenex provenance receipts: denied tool calls, UNVERIFIED chunks by jurisdiction, drift alerts.</description>
+  <row>
+    <panel>
+      <title>Denied tool calls (24h)</title>
+      <table>
+        <search>
+          <query>| savedsearch provenex_denied_tool_calls_24h</query>
+        </search>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>UNVERIFIED chunks by jurisdiction (24h)</title>
+      <chart>
+        <search>
+          <query>| savedsearch provenex_unverified_chunks_by_jurisdiction</query>
+        </search>
+        <option name="charting.chart">column</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Drift detector alerts (7d)</title>
+      <table>
+        <search>
+          <query>| savedsearch provenex_drift_alerts</query>
+        </search>
+      </table>
+    </panel>
+  </row>
+</dashboard>
