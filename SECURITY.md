@@ -63,6 +63,19 @@ If your workflow is PGP-based, look up the key for `contact@provenex.ai` on [key
 
 Provenex receipts are signed with Ed25519 (a signing-only EdDSA scheme). The encrypted-report channel uses age's X25519 (an encryption-only ECDH scheme) because Ed25519 cannot decrypt. Both are EdDSA-family curves; the operational difference is a property of the operations, not of the trust root.
 
+## Key inventory
+
+Reviewers occasionally conflate the keys named in this document with the keys that sign artifacts customers consume. They are not the same keys. The inventory below makes the distinction explicit.
+
+| Key | Where it lives | What it signs / decrypts | What happens if compromised |
+| --- | --- | --- | --- |
+| **Disclosure recipient key** (age + PGP, named above) | Provenex maintainer's personal device / keyring | Decrypts vulnerability reports sent to `contact@provenex.ai`. Signs nothing. | An attacker could read encrypted vulnerability disclosures sent under this key. **No customer-facing artifact is affected.** No receipt, no release, no SBOM signature depends on it. Rotation: publish a new recipient block in this file and a new PGP fingerprint on `keys.openpgp.org`. |
+| **Receipt signing key** (HMAC secret or Ed25519 private key) | Each **customer's** infrastructure (env var, secrets manager, KMS, or HSM). Provenex never holds it. | Signs the canonical payload of every receipt that customer issues. | Only that customer's receipts can be forged. Other customers are unaffected. Provenex cannot rotate this for you; rotation is operator-driven. See [docs/runbooks/key_rotation.md](docs/runbooks/key_rotation.md). |
+| **Index-row signing key** (HMAC secret) | Each **customer's** infrastructure. Provenex never holds it. | Signs the per-row canonical payload of each entry in the provenance index. Surfaces tampering as a `TAMPERED` outcome on verify. | Only that customer's index rows can be silently modified; the receipt's `verification_outcome` still records the actual on-row signature state. Rotation requires reingest. |
+| **PyPI release artifact attestation** (Sigstore PEP 740) | None on disk. Minted by PyPI from a GitHub Actions OIDC token at release time. | Attests that the published `provenex-core` wheel and sdist were built by the `release.yml` workflow at a specific tag, on this repository, by this GitHub organization. | An attacker who compromised the GitHub Actions OIDC binding for this repo could publish a malicious version. The binding is the trust root; no long-lived static signing key exists. Mitigation: GitHub repo settings + the `pypi` environment guardrail. |
+
+The two keys customers verify against (receipt signing and index-row signing) are the customer's own keys. Provenex never holds them and cannot rotate or revoke them for the customer. A reviewer evaluating Provenex against the "what happens if your one key leaks" question should focus on the disclosure key (impact: limited to encrypted bug reports) and the PyPI release attestation (impact: dependent on the GitHub OIDC chain, not a static key). The signing keys that protect receipts are out of our reach by design.
+
 ## Supported versions
 
 Provenex is in active development. Security fixes are issued for:

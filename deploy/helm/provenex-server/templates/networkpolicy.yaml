@@ -12,8 +12,7 @@ spec:
   policyTypes: [Ingress, Egress]
   ingress:
     # App pods labelled provenex-client are the only ones allowed to
-    # reach the verify service. Operators can override by editing the
-    # template; the default is deny-everyone-else.
+    # reach the verify service. The default is deny-everyone-else.
     - from:
         - podSelector:
             matchLabels:
@@ -21,8 +20,25 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    {{- if .Values.networkPolicy.monitoringNamespace }}
+    # Scrape access from a monitoring namespace (Prometheus / Grafana
+    # Agent / OTel collector). Without this rule the deny-by-default
+    # ingress blocks /metrics scraping, even though the pod is
+    # annotated with prometheus.io/scrape=true.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace | quote }}
+      ports:
+        - protocol: TCP
+          port: 8080
+    {{- end }}
+    {{- with .Values.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   egress:
-    # Postgres
+    {{- if .Values.postgresql.enabled }}
+    # Bundled Postgres subchart pods (same namespace).
     - to:
         - podSelector:
             matchLabels:
@@ -30,7 +46,18 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
-    # DNS
+    {{- end }}
+    {{- range .Values.networkPolicy.databaseEgressCIDRs }}
+    # External database egress (managed Postgres, PgBouncer, etc.).
+    # Configure via networkPolicy.databaseEgressCIDRs in values.yaml.
+    - to:
+        - ipBlock:
+            cidr: {{ . | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.networkPolicy.databaseEgressPort | default 5432 }}
+    {{- end }}
+    # DNS (cluster + external resolvers).
     - to:
         - namespaceSelector: {}
       ports:
@@ -38,4 +65,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 {{- end }}

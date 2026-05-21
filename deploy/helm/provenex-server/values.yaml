@@ -94,10 +94,28 @@ witness:
   enabled: false
   schedule: "0 */6 * * *"
 
-# NetworkPolicy: deny-by-default egress except to Postgres and DNS;
-# allow ingress from app pods labelled provenex-client.
+# NetworkPolicy: deny-by-default ingress and egress. The defaults
+# below cover the bundled-Postgres dev path. For production with
+# managed Postgres (RDS, Cloud SQL, Crunchy) you must set
+# databaseEgressCIDRs, otherwise the verify pods cannot reach the
+# database. For Prometheus scraping you must set monitoringNamespace,
+# otherwise /metrics is blocked by the default ingress rule even
+# though the pod is annotated with prometheus.io/scrape=true.
 networkPolicy:
   enabled: true
+  # Namespace where the Prometheus / scraper pods live. When set, an
+  # ingress rule is added that lets pods in that namespace hit :8080.
+  # Common values: "monitoring", "kube-system", "observability".
+  monitoringNamespace: ""
+  # CIDRs (and optional port) that verify pods are allowed to egress
+  # to for the external database. Example: ["10.0.0.0/16"] for a VPC
+  # that contains RDS. Leave empty when postgresql.enabled is true.
+  databaseEgressCIDRs: []
+  databaseEgressPort: 5432
+  # Free-form extra rules merged into the generated NetworkPolicy.
+  # Use when the defaults above are not sufficient for your topology.
+  extraIngress: []
+  extraEgress: []
 
 # Probes. /readyz fails (503) when the index pool is unreachable OR when
 # this replica's circuit breaker is OPEN, so a replica that cannot

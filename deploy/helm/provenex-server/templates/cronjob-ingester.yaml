@@ -22,9 +22,22 @@ spec:
           containers:
             - name: ingester
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
               command: ["provenex"]
               args:
                 {{- toYaml .Values.ingester.args | nindent 16 }}
               env:
                 {{- include "provenex-server.envFromSecrets" . | nindent 16 }}
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
 {{- end }}

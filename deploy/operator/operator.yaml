@@ -61,9 +61,12 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
       containers:
         - name: operator
           image: provenex/provenex-operator:0.10.0
+          imagePullPolicy: IfNotPresent
           command: ["kopf"]
           args:
             - run
@@ -71,6 +74,33 @@ spec:
             - provenex.operator.main
             - --standalone
             - --verbose
+            # Bind kopf's built-in HTTP healthcheck so kubelet can probe
+            # liveness. Without this, a hung kopf reconcile loop is
+            # invisible to the cluster and the operator keeps running
+            # without making progress. Port 9696 is kopf's documented
+            # default for --liveness.
+            - --liveness=http://0.0.0.0:9696/healthz
+          ports:
+            - name: probe
+              containerPort: 9696
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probe
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            failureThreshold: 3
+          # kopf does not distinguish liveness from readiness; reuse the
+          # same endpoint. A reconcile loop that has not yet caught up
+          # still reports ready, which matches the cluster's expectation
+          # for a controller-style workload.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: probe
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: "50m"

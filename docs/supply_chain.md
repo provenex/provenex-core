@@ -89,10 +89,19 @@ actually present at build time.
 
 ## What we do NOT (yet) publish
 
-* **SLSA Level 2+ build provenance.** On the roadmap, deferred until
-  v1.1. PyPI's PEP 740 attestations give the equivalent identity
-  binding for now; SLSA would add the reproducible-build hash
-  verification that complements that.
+* **Reproducible builds.** The Sigstore attestation is an *identity*
+  attestation: it binds the wheel hash to a specific GitHub Actions
+  workflow run, a specific commit, and the `provenex-core` repository.
+  It does **not** prove that a third party building the same source
+  tarball locally would produce the same wheel byte-for-byte. True
+  reproducible build requires pinning Python build tool versions,
+  setting `SOURCE_DATE_EPOCH` for deterministic timestamps, and
+  documenting the exact build environment so a reviewer can match it.
+  We have not done this work yet. The destination is SLSA Level 3
+  with build provenance; tracked for v1.1.
+* **SLSA Level 2+ build provenance.** Deferred to v1.1. PyPI's PEP 740
+  attestations give identity binding today; SLSA L3 adds the
+  reproducible-build hash verification that complements it.
 * **Per-release vulnerability scan results.** Reviewers can run
   `pip-audit` against the published wheel locally; we do not check in
   a baseline.
@@ -100,6 +109,64 @@ actually present at build time.
 If you need either of these as a procurement signal before we ship
 them, reach out, we have prioritized them above other backlog items
 when customers have asked.
+
+## PyPI typosquat awareness
+
+Two project names on PyPI are owned by us:
+
+| Name | Purpose |
+| --- | --- |
+| `provenex-core` | The canonical library. This is the one customers should install. |
+| `provenex` | Thin meta-package that installs `provenex-core` as its only dependency. Intended for users who type the obvious name; provided so it is not available to typosquatters. |
+
+Any other PyPI project name that contains "provenex" is **not from
+us**. Names that look plausible but are not ours:
+
+* `provenex-sdk`, `provenex-client`, `provenex-py`, `provenex-ai`,
+  `provenex-rag`, `py-provenex`, `provenex_core` (with an underscore
+  in the slug), `provenex-cli`, `provenex-tools`.
+
+We are working through claiming these as defensive placeholders.
+Until that is complete, **only install from `provenex-core` or
+`provenex`** and verify the project URL on PyPI points to
+`https://github.com/provenex/provenex-core` before trusting any
+install. Reporting a typosquat: use the disclosure channel in
+[`SECURITY.md`](../SECURITY.md).
+
+## Verifying the v0.10.0 release
+
+The first release with the full supply-chain signal chain (Sigstore
+attestations + CycloneDX SBOM + trusted-publisher OIDC) is v0.10.0.
+To confirm the release on PyPI matches the source on GitHub:
+
+```bash
+# 1. Pull the wheel from PyPI.
+pip download --no-deps provenex-core==0.10.0
+
+# 2. View the "Provenance" panel on the PyPI release page:
+#    https://pypi.org/project/provenex-core/0.10.0/
+#    It will show the GitHub Actions workflow run that produced the
+#    attestation, the OIDC issuer claims (repo, ref, workflow), and a
+#    link to the Sigstore Rekor log entry.
+
+# 3. Download the SBOM from the matching GitHub Release:
+#    https://github.com/provenex/provenex-core/releases/tag/v0.10.0
+#    The asset is `sbom.cdx.json` (CycloneDX 1.6).
+
+# 4. Optional: verify the attestation locally with sigstore.
+#    See https://docs.pypi.org/attestations/ for the current API
+#    surface; the bundle URL pattern is still maturing.
+pip install sigstore
+python -m sigstore verify identity \
+  --cert-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  provenex_core-0.10.0-py3-none-any.whl
+```
+
+A green verification means the wheel you have was built by the
+`release.yml` workflow at tag `v0.10.0` on this repository, by this
+GitHub organization. No party outside that chain can produce a
+matching attestation.
 
 ## Reporting a supply-chain concern
 
