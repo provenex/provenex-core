@@ -440,6 +440,25 @@ For dive-deep reading:
 provenex selftest
 ```
 
+### Reproducible performance
+
+Three deployment patterns, each with separate latency numbers. The bench code that produced these is in [`bench/`](https://github.com/provenex/provenex-core/tree/main/bench); the full methodology, 1M-chunk scale numbers, and policy-evaluation latency profile are in [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md). Numbers below are from a 2018 mobile laptop (Darwin x86_64, Python 3.12); on enterprise hardware (`c6i.2xlarge` or comparable), `docs/scaling.md` § *What changes on enterprise hardware* documents expected ratios.
+
+| Pattern | Where the index lives | Verify p50 / p99 / p999 | Throughput | Best for |
+| --- | --- | --- | --- | --- |
+| **A — In-process SQLite** | Same process as the agent | **37.6 µs / 54.4 µs / 106.7 µs** (100K-chunk warm cache) | 24.4k ops/s single-threaded | Dev, demos, single-node deployments, anywhere a Postgres dependency is unwelcome |
+| **B — Sidecar HTTP** | Adjacent container on the same host | Between A and C; localhost network adds ~100–300 µs per call | Equal to A modulo loopback overhead | Multi-language agents, polyglot fleets, or where the agent runtime can't import Python |
+| **C — Centralized async Postgres** | Shared Postgres cluster, async pool | **p50 1.57 ms / p99 2.48 ms** at 4 concurrent readers, 1M chunks; **p50 7.30 ms / p99 16.10 ms** at 16 concurrent readers | 2.1k–2.5k ops/s per replica; horizontal scaling on read replicas | Multi-pod, multi-region deployments; everything where ingest and verify run in different processes |
+
+Reproduce Pattern A on your hardware:
+
+```bash
+provenex bench --scale 100k   # ~60s; matches the headline numbers above
+provenex bench --scale 1m     # ~10 min; matches docs/scaling.md
+```
+
+Pattern C reproduction (needs a Postgres instance) is documented in [`bench/postgres/`](https://github.com/provenex/provenex-core/tree/main/bench/postgres); the `provenex bench` CLI ships only the in-process reproducer to keep the install footprint zero-dependency.
+
 ### Why open source?
 
 Security teams won't trust a black box. If a regulator asks how your access-policy enforcement system works, "it's proprietary" is not an answer. The whole algorithm needs to be auditable end to end: normalization, rolling hash, sliding window, SHA-256 strengthening, policy evaluator semantics, receipt schema, signature payload. So it is.

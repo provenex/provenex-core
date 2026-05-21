@@ -1003,6 +1003,29 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_bench(args: argparse.Namespace) -> int:
+    """Thin shim into provenex.bench.scale.main.
+
+    The bench subcommand lives in its own subpackage so customers can
+    also invoke ``python -m provenex.bench.scale`` if they want, and
+    so the CLI imports stay cheap when bench is not used.
+    """
+    from ..bench.scale import main as bench_main
+
+    argv: List[str] = [
+        "--scale", args.scale,
+        "--seed", str(args.seed),
+        "--verify-samples", str(args.verify_samples),
+        "--chunk-chars", str(args.chunk_chars),
+        "--unknown-rate", str(args.unknown_rate),
+    ]
+    if args.out is not None:
+        argv.extend(["--out", args.out])
+    if args.json_only:
+        argv.append("--json-only")
+    return bench_main(argv)
+
+
 def _cmd_index_audit(args: argparse.Namespace) -> int:
     """Surface supersession-health problems in a Provenex index.
 
@@ -1383,6 +1406,60 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_selftest.set_defaults(func=_cmd_selftest)
+
+    # Reproducible bench: customers run this on their hardware to compare
+    # against the README's published numbers. Defers to provenex.bench.scale.
+    p_bench = sub.add_parser(
+        "bench",
+        help="Reproduce the README's Pattern A (in-process) verify numbers",
+        description=(
+            "Run the shipped in-process SQLite reproducer for the verify "
+            "hot path. Produces p50/p95/p99/p999 latency over a synthetic "
+            "corpus of the requested size. Useful as a hardware-comparable "
+            "sanity check against the headline numbers in docs/scaling.md."
+        ),
+    )
+    p_bench.add_argument(
+        "--scale",
+        choices=["1k", "10k", "100k", "1m"],
+        default="10k",
+        help="Corpus size preset (default: 10k, ~10s on a laptop).",
+    )
+    p_bench.add_argument(
+        "--seed", type=int, default=42, help="PRNG seed (default: 42)."
+    )
+    p_bench.add_argument(
+        "--verify-samples",
+        type=int,
+        default=10_000,
+        help="Verify sample size (default: 10_000).",
+    )
+    p_bench.add_argument(
+        "--chunk-chars",
+        type=int,
+        default=800,
+        help="Synthetic chunk length in characters (default: 800).",
+    )
+    p_bench.add_argument(
+        "--unknown-rate",
+        type=float,
+        default=0.1,
+        help=(
+            "Fraction of verify queries that target unindexed fingerprints "
+            "(default: 0.1)."
+        ),
+    )
+    p_bench.add_argument(
+        "--out",
+        default=None,
+        help="Optional path for the JSON report (in addition to stdout summary).",
+    )
+    p_bench.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Emit only the JSON report to stdout; suppress the human summary.",
+    )
+    p_bench.set_defaults(func=_cmd_bench)
 
     # index subcommands (v0.8.0+).
     p_index = sub.add_parser(
