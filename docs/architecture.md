@@ -103,6 +103,7 @@ the canonical signing payload.
 **Procurement:**
 
 - [`procurement_faq.md`](procurement_faq.md) - license, supply chain, supported versions, vulnerability reporting, telemetry, cryptography provenance.
+- [`supply_chain.md`](supply_chain.md) - per-release artifacts: PyPI Sigstore attestations (PEP 740), CycloneDX SBOM, and the local-verify recipe.
 
 ## Source map
 

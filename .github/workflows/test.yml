@@ -63,3 +63,27 @@ jobs:
 
       - name: Run pytest
         run: pytest tests/ -v --tb=short
+
+  sbom:
+    name: SBOM buildability check
+    runs-on: ubuntu-latest
+    # One Python version is enough — we want to catch breakage in the
+    # cyclonedx-py tooling, not retest it on every supported runtime.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install package with deployment extras + SBOM tool
+        run: |
+          python -m pip install --upgrade pip
+          pip install cyclonedx-bom
+          pip install -e ".[postgres,ed25519,policy]"
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cyclonedx-py environment -o sbom.cdx.json
+          python -c "import json; d=json.load(open('sbom.cdx.json')); assert d['bomFormat']=='CycloneDX'; assert len(d.get('components', []))>0, 'empty components[]'; print('ok:', len(d['components']), 'components')"
