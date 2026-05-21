@@ -38,6 +38,7 @@ instead of blocking the event loop.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -52,6 +53,12 @@ from .receipt import (
 from .trajectory import TrajectoryContext
 from ..export.streaming import _safe_publish
 from ..index.base import AsyncProvenanceIndex, IndexEntry, ProvenanceIndex, VerificationOutcome
+from ..index.circuit import CircuitBreaker
+from ..policy.availability import (
+    ON_ERROR_BLOCK,
+    IndexAvailabilityPolicy,
+    IndexUnavailable,
+)
 from ..policy.evaluator import (
     BINDING_AT_EVALUATE,
     BINDING_AT_INGEST,
@@ -173,6 +180,7 @@ def verify_chunks(
     caller_hash_salt: Optional[bytes] = None,
     content_source: Optional[str] = None,
     sink: Any = None,
+    breaker: Optional[CircuitBreaker] = None,
 ) -> VerifiedChunks:
     """Verify a set of chunks against the index and emit a signed receipt.
 
@@ -261,7 +269,15 @@ def verify_chunks(
     # N pairs of ``verify`` + ``lookup`` (which were two lookups per chunk
     # internally). On a 10-chunk retrieval this drops 20 backend hits to
     # 1 on Postgres; on SQLite it folds the in-process I/O similarly.
-    verifications = index.verify_batch(fingerprints)
+    # The wrapper enforces the operator's availability policy: timeout
+    # bound, circuit-breaker check, and either block-on-error
+    # (IndexUnavailable) or degrade-on-error (UNVERIFIED + index_status).
+    verifications, index_status = _verify_batch_with_availability(
+        index=index,
+        fingerprints=fingerprints,
+        availability=eff_policy.availability,
+        breaker=breaker,
+    )
 
     return _verify_chunks_finalize(
         texts=texts,
@@ -281,7 +297,184 @@ def verify_chunks(
         caller_hash_salt=caller_hash_salt,
         content_source=content_source,
         sink=sink,
+        index_status=index_status,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Index availability — timeout, circuit breaker, mode handling                #
+# --------------------------------------------------------------------------- #
+#
+# The provenance index is the only network dependency on the verify hot
+# path. These helpers wrap the index round-trip so that timeouts,
+# connection errors, and pool exhaustion produce the operator-chosen
+# response (``block`` — raise :class:`IndexUnavailable` — or ``degrade``
+# — return a degraded receipt) instead of crashing the call. The
+# circuit breaker, when supplied, short-circuits while the index is
+# considered unhealthy so a struggling backend is not pushed harder.
+
+
+def _classify_index_exception(exc: BaseException) -> str:
+    """Bucket an index error into ``"timeout"`` / ``"connection"`` / ``"other"``.
+
+    The core stays stdlib-only, so we cannot import psycopg's exception
+    taxonomy to switch on. We approximate by class name: anything named
+    ``*Timeout*`` is a timeout; anything mentioning ``Connection`` /
+    ``Pool`` / ``OperationalError`` is connection-class; everything else
+    is ``other``. The class string is the value of
+    ``index_status.error_class`` on a degraded receipt and the label of
+    the ``IndexUnavailable.error_class`` attribute when blocking.
+    """
+    if isinstance(exc, asyncio.TimeoutError) or isinstance(exc, TimeoutError):
+        return "timeout"
+    name = type(exc).__name__
+    if (
+        "Timeout" in name
+    ):
+        return "timeout"
+    if (
+        "Connection" in name
+        or "Pool" in name
+        or "Operational" in name
+        or "Disconnect" in name
+    ):
+        return "connection"
+    return "other"
+
+
+def _degraded_outcomes(
+    fingerprints: Sequence[str],
+) -> List[Tuple[VerificationOutcome, Optional[IndexEntry]]]:
+    """Return the all-UNVERIFIED outcome list used in ``degrade`` mode.
+
+    When the index is unreachable, the caller cannot know whether a
+    given chunk would have verified, been stale, or been blocked.
+    Every chunk's outcome collapses to ``UNVERIFIED`` and the
+    receipt carries ``index_status.available=false`` so an auditor
+    distinguishes this case from a genuine "no entry in the index"
+    miss.
+    """
+    return [(VerificationOutcome.UNVERIFIED, None) for _ in fingerprints]
+
+
+def _resolve_index_failure(
+    *,
+    fingerprints: Sequence[str],
+    availability: IndexAvailabilityPolicy,
+    error_class: str,
+    exc: Optional[BaseException] = None,
+) -> Tuple[
+    List[Tuple[VerificationOutcome, Optional[IndexEntry]]],
+    Optional[Dict[str, Any]],
+]:
+    """Apply the operator-chosen mode to an index failure.
+
+    ``block`` raises :class:`IndexUnavailable`; ``degrade`` returns the
+    all-UNVERIFIED outcome list plus an ``index_status`` dict for the
+    receipt.
+    """
+    if availability.on_index_error == ON_ERROR_BLOCK:
+        message = f"provenance index unavailable ({error_class})"
+        if exc is not None:
+            message = f"{message}: {exc}"
+        raise IndexUnavailable(message, error_class=error_class)
+    return (
+        _degraded_outcomes(fingerprints),
+        {"available": False, "error_class": error_class},
+    )
+
+
+def _verify_batch_with_availability(
+    *,
+    index: ProvenanceIndex,
+    fingerprints: Sequence[str],
+    availability: IndexAvailabilityPolicy,
+    breaker: Optional[CircuitBreaker],
+) -> Tuple[
+    List[Tuple[VerificationOutcome, Optional[IndexEntry]]],
+    Optional[Dict[str, Any]],
+]:
+    """Sync index call wrapped in breaker + mode handling.
+
+    The sync path does not impose a wall-clock timeout — production
+    sync callers should set their database driver's
+    ``statement_timeout``. Library users on SQLite are bounded by
+    file I/O and do not need one.
+    """
+    if breaker is not None and not breaker.allow():
+        return _resolve_index_failure(
+            fingerprints=fingerprints,
+            availability=availability,
+            error_class="breaker_open",
+        )
+    try:
+        verifications = index.verify_batch(fingerprints)
+    except IndexUnavailable:
+        if breaker is not None:
+            breaker.record_failure()
+        raise
+    except Exception as exc:
+        if breaker is not None:
+            breaker.record_failure()
+        return _resolve_index_failure(
+            fingerprints=fingerprints,
+            availability=availability,
+            error_class=_classify_index_exception(exc),
+            exc=exc,
+        )
+    if breaker is not None:
+        breaker.record_success()
+    return verifications, None
+
+
+async def _verify_batch_async_with_availability(
+    *,
+    index: AsyncProvenanceIndex,
+    fingerprints: Sequence[str],
+    availability: IndexAvailabilityPolicy,
+    breaker: Optional[CircuitBreaker],
+) -> Tuple[
+    List[Tuple[VerificationOutcome, Optional[IndexEntry]]],
+    Optional[Dict[str, Any]],
+]:
+    """Async index call wrapped in timeout + breaker + mode handling.
+
+    The wall-clock timeout comes from
+    :attr:`IndexAvailabilityPolicy.timeout_seconds`. When ``None``,
+    the call is awaited without an outer ``asyncio.wait_for``;
+    callers can still bound latency at the connection-pool /
+    statement-timeout layers.
+    """
+    if breaker is not None and not breaker.allow():
+        return _resolve_index_failure(
+            fingerprints=fingerprints,
+            availability=availability,
+            error_class="breaker_open",
+        )
+    timeout = availability.timeout_seconds
+    try:
+        if timeout is None:
+            verifications = await index.verify_batch_async(fingerprints)
+        else:
+            verifications = await asyncio.wait_for(
+                index.verify_batch_async(fingerprints), timeout=timeout
+            )
+    except IndexUnavailable:
+        if breaker is not None:
+            breaker.record_failure()
+        raise
+    except Exception as exc:
+        if breaker is not None:
+            breaker.record_failure()
+        return _resolve_index_failure(
+            fingerprints=fingerprints,
+            availability=availability,
+            error_class=_classify_index_exception(exc),
+            exc=exc,
+        )
+    if breaker is not None:
+        breaker.record_success()
+    return verifications, None
 
 
 # --------------------------------------------------------------------------- #
@@ -352,6 +545,7 @@ def _verify_chunks_finalize(
     caller_hash_salt: Optional[bytes],
     content_source: Optional[str],
     sink: Any,
+    index_status: Optional[Dict[str, Any]] = None,
 ) -> VerifiedChunks:
     builder = ReceiptBuilder(policy=eff_policy.verification)
     kept: List[str] = []
@@ -468,6 +662,7 @@ def _verify_chunks_finalize(
         access_control=access_control_block,
         caller_hash=emit_caller_hash,
         request_binding=request_binding,
+        index_status=index_status,
     )
 
     # Schema 2.3.0 / 0.6.6+: ship to downstream sink if supplied.
@@ -517,6 +712,7 @@ async def verify_chunks_async(
     caller_hash_salt: Optional[bytes] = None,
     content_source: Optional[str] = None,
     sink: Any = None,
+    breaker: Optional[CircuitBreaker] = None,
 ) -> VerifiedChunks:
     """Async-safe counterpart of :func:`verify_chunks`.
 
@@ -560,7 +756,12 @@ async def verify_chunks_async(
         chunk_metadata_binding=chunk_metadata_binding,
     )
 
-    verifications = await index.verify_batch_async(fingerprints)
+    verifications, index_status = await _verify_batch_async_with_availability(
+        index=index,
+        fingerprints=fingerprints,
+        availability=eff_policy.availability,
+        breaker=breaker,
+    )
 
     return _verify_chunks_finalize(
         texts=texts,
@@ -580,6 +781,7 @@ async def verify_chunks_async(
         caller_hash_salt=caller_hash_salt,
         content_source=content_source,
         sink=sink,
+        index_status=index_status,
     )
 
 

@@ -29,6 +29,8 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from ..core.receipt import ProvenanceReceipt, ReceiptSigner
 from ..core.signer_registry import SignerRegistry, TenantNotFound
+from ..index.circuit import STATE_OPEN, CircuitBreaker
+from ..policy.availability import IndexUnavailable
 from .keys import load_index_secret, load_receipt_signer
 from .metrics import Metrics
 from .models import (
@@ -201,12 +203,33 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await index.open_async()
 
+    # One process-wide circuit breaker guards the verify hot path
+    # against the provenance index. Threshold / window / cooldown are
+    # taken from the loaded policy's availability block when present,
+    # or from the IndexAvailabilityPolicy defaults otherwise. Per
+    # replica: a breaker that learned one replica's pool was sick
+    # should not also freeze a healthy replica.
+    from ..policy.availability import IndexAvailabilityPolicy
+
+    availability = (
+        policy.availability
+        if policy is not None
+        else IndexAvailabilityPolicy()
+    )
+    breaker = CircuitBreaker(
+        threshold=availability.breaker_threshold,
+        window_seconds=availability.breaker_window_seconds,
+        cooldown_seconds=availability.breaker_cooldown_seconds,
+    )
+
     app.state.index = index
     app.state.signer = signer
     app.state.tenant_registry = tenant_registry
     app.state.policy = policy
     app.state.metrics = metrics
     app.state.drift_detector = _load_drift_detector()
+    app.state.breaker = breaker
+    app.state.availability = availability
     app.state.started_at = time.time()
     try:
         yield
@@ -249,6 +272,7 @@ def create_app() -> FastAPI:
         signer = _resolve_signer(request)
         policy = request.app.state.policy
         metrics: Metrics = request.app.state.metrics
+        breaker: CircuitBreaker = request.app.state.breaker
 
         request_context = (
             _build_request_context(body.request) if body.request is not None else None
@@ -264,10 +288,37 @@ def create_app() -> FastAPI:
                 request_text=body.request_text,
                 request_context=request_context,
                 output_text=body.output_text,
+                breaker=breaker,
             )
+        except IndexUnavailable as exc:
+            metrics.incr(
+                "provenex_index_error_total",
+                {"error_class": exc.error_class},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "index_unavailable",
+                    "error_class": exc.error_class,
+                    "message": str(exc),
+                },
+            ) from exc
         finally:
             metrics.observe_verify_latency(time.perf_counter() - t0)
         metrics.incr("provenex_verify_total")
+        # Degraded-receipt counter: the verify call ran in
+        # ``degrade`` mode and the index was actually unavailable.
+        # Distinguish from the all-UNVERIFIED happy-path case where
+        # the chunks were genuinely not in the index.
+        if result.receipt.index_status is not None:
+            metrics.incr(
+                "provenex_verify_degraded_total",
+                {
+                    "error_class": result.receipt.index_status.get(
+                        "error_class", "other"
+                    )
+                },
+            )
         drift = request.app.state.drift_detector
         for s in result.receipt.sources:
             metrics.incr(
@@ -428,11 +479,46 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", tags=["health"], summary="Liveness probe.")
     async def healthz() -> JSONResponse:
+        """Liveness: the process is up and running.
+
+        Does NOT consult the index. Use ``/readyz`` to check whether
+        this replica can currently issue VERIFIED receipts.
+        """
         return JSONResponse({"status": "ok"})
 
-    @app.get("/readyz", tags=["health"], summary="Readiness probe.")
+    @app.get(
+        "/readyz",
+        tags=["health"],
+        summary="Readiness probe: can this replica issue VERIFIED receipts now?",
+    )
     async def readyz(request: Request) -> JSONResponse:
+        """Readiness: the index is reachable AND the circuit breaker
+        is closed.
+
+        A replica that returns 200 here is ready to serve a verify
+        request whose receipt may carry a VERIFIED outcome. A replica
+        whose breaker is OPEN is still alive (``/healthz`` returns
+        200) and may still serve verify requests in
+        ``on_index_error=degrade`` mode, but every receipt it issues
+        right now will be degraded. The distinction matters to a
+        load balancer or k8s controller that wants to route traffic
+        away from a replica that can't see the index.
+
+        Returns 503 with a structured detail when not ready.
+        """
         idx = request.app.state.index
+        breaker: CircuitBreaker = request.app.state.breaker
+        if breaker.state == STATE_OPEN:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "breaker_open",
+                    "message": (
+                        "circuit breaker is OPEN; this replica cannot "
+                        "issue VERIFIED receipts until the cooldown elapses"
+                    ),
+                },
+            )
         try:
             # Sentinel verify: lookup a known-absent fingerprint to
             # confirm the Postgres pool can serve a query.
@@ -440,8 +526,16 @@ def create_app() -> FastAPI:
                 "sha256:" + "0" * 64
             )
         except Exception as exc:  # pragma: no cover - probe error path
-            raise HTTPException(status_code=503, detail=str(exc))
-        return JSONResponse({"status": "ready"})
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "index_unreachable",
+                    "message": str(exc),
+                },
+            )
+        return JSONResponse(
+            {"status": "ready", "breaker_state": breaker.state}
+        )
 
     @app.get("/metrics", tags=["health"], summary="Prometheus metrics.")
     async def metrics(request: Request) -> Response:

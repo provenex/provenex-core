@@ -91,10 +91,22 @@ from .trajectory import TrajectoryContext
 #           additions are additive on the wire; the receipt shape is a
 #           valid 2.3.0 superset. The index storage change is breaking:
 #           pre-v0.8.0 indexes must be re-ingested.
+#   2.5.0 — Optional top-level ``index_status`` block recording that
+#           the verify call ran while the provenance index was
+#           unreachable. Present only when the operator ran the
+#           verify path in ``on_index_error="degrade"`` mode and the
+#           index was actually unavailable for this call; absent on
+#           the normal path. Shape: ``{"available": false,
+#           "error_class": "timeout" | "connection" | "breaker_open"
+#           | "other"}``. The block is covered by the receipt
+#           signature, so a degraded receipt cannot be silently
+#           promoted to a healthy one. Additive on the wire: a 2.4.0
+#           verifier that ignores unknown fields validates a 2.5.0
+#           receipt unchanged.
 # Minor-version bumps are additive: receipts at a lower revision remain
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
-SCHEMA_VERSION = "2.4.0"
+SCHEMA_VERSION = "2.5.0"
 ISSUER = "provenex-core/0.9.0"
 
 
@@ -408,6 +420,13 @@ class ProvenanceReceipt:
     # evidence for a different query. Absent when the caller supplied
     # neither a request_text nor a request_context.
     request_binding: Optional[Dict[str, Any]] = None
+    # Schema 2.5.0: optional top-level annotation that this receipt was
+    # produced while the provenance index was unreachable. Present only
+    # in ``on_index_error="degrade"`` mode when the index actually
+    # failed; absent on the normal path. Distinguishes "we tried and
+    # couldn't reach the index" from "every chunk happened to be a
+    # genuine miss". Covered by the receipt signature.
+    index_status: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -441,6 +460,8 @@ class ProvenanceReceipt:
             d["caller_hash"] = self.caller_hash
         if self.request_binding is not None:
             d["request_binding"] = dict(self.request_binding)
+        if self.index_status is not None:
+            d["index_status"] = dict(self.index_status)
         d.update(
             {
                 "output": {
@@ -1007,6 +1028,7 @@ class ReceiptBuilder:
         tool_call_control: Optional[Dict[str, Any]] = None,
         caller_hash: Optional[str] = None,
         request_binding: Optional[Dict[str, Any]] = None,
+        index_status: Optional[Dict[str, Any]] = None,
     ) -> ProvenanceReceipt:
         """Build, sign, and return the finished receipt.
 
@@ -1048,6 +1070,17 @@ class ReceiptBuilder:
                 :func:`provenex.tool_call.admission_check` computes it
                 from the request context. Use
                 :func:`compute_caller_hash` to build the string.
+            request_binding: Optional schema-2.4.0 top-level block
+                binding the receipt to the triggering query and
+                request context. Built by
+                :func:`compute_request_binding`; callers normally let
+                the verify path assemble it.
+            index_status: Optional schema-2.5.0 top-level block
+                recording that the provenance index was unreachable
+                when this receipt was produced. Present only in
+                ``on_index_error="degrade"`` mode when the index
+                actually failed. Shape:
+                ``{"available": false, "error_class": "..."}``.
 
         Returns:
             The completed :class:`ProvenanceReceipt`.
@@ -1070,6 +1103,7 @@ class ReceiptBuilder:
             request_binding=(
                 dict(request_binding) if request_binding else None
             ),
+            index_status=dict(index_status) if index_status else None,
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

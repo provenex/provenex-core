@@ -92,9 +92,11 @@ from .policy.evaluator import (
     compute_inputs_hash,
     compute_policy_version_hash,
 )
+from .policy.availability import IndexAvailabilityPolicy, IndexUnavailable
 from .policy.policy import VerificationPolicy, overall_status
 from .policy.unified import Policy
 from .policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
+from .index.circuit import CircuitBreaker
 from .tool_call import (
     AdmissionResult,
     NativeYamlToolCallEvaluator,
@@ -139,6 +141,10 @@ __all__ = [
     # Verification policy (the five-outcome half, since v0.1)
     "VerificationPolicy",
     "overall_status",
+    # Index-availability policy (block/degrade on index error)
+    "IndexAvailabilityPolicy",
+    "IndexUnavailable",
+    "CircuitBreaker",
     # Data-access policy framework (schema 2.0.0)
     "ChunkContext",
     "RequestContext",

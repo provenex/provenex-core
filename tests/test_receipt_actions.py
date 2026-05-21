@@ -47,7 +47,7 @@ SECRET = b"test-receipt-actions-secret"
 
 
 def test_schema_version_is_2_3_0():
-    assert SCHEMA_VERSION == "2.4.0"
+    assert SCHEMA_VERSION == "2.5.0"
 
 
 def test_add_action_returns_index_and_records():

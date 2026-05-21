@@ -35,6 +35,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
+from .availability import IndexAvailabilityPolicy
 from .evaluator import PolicyEvaluator
 from .policy import VerificationPolicy
 
@@ -53,6 +54,9 @@ _UNIFIED_YAML_TOP_KEYS = frozenset(
         "access_control",
         # Schema 2.2.0 addition: rules for tool-call admission.
         "tool_call_control",
+        # v0.10 addition: operator-controlled behavior when the
+        # provenance index is unreachable on the verify hot path.
+        "availability",
     }
 )
 
@@ -81,6 +85,9 @@ class Policy:
     verification: VerificationPolicy = field(default_factory=VerificationPolicy)
     access_control: Optional[PolicyEvaluator] = None
     tool_call_control: Optional["ToolCallPolicyEvaluator"] = None
+    availability: IndexAvailabilityPolicy = field(
+        default_factory=IndexAvailabilityPolicy
+    )
 
     @classmethod
     def from_yaml(cls, path: str) -> "Policy":
@@ -174,10 +181,14 @@ class Policy:
                 bundle, source=source
             )
 
+        availability_block = bundle.get("availability")
+        availability = _parse_availability(availability_block, source=source)
+
         return cls(
             verification=verification,
             access_control=access_control,
             tool_call_control=tool_call_control,
+            availability=availability,
         )
 
 
@@ -233,6 +244,57 @@ def _parse_verification(
         flag_unverified=block.get("flag_unverified", defaults.flag_unverified),
         flag_tampered=block.get("flag_tampered", defaults.flag_tampered),
     )
+
+
+def _parse_availability(
+    block: Any,
+    *,
+    source: str,
+) -> IndexAvailabilityPolicy:
+    """Parse the ``availability:`` subsection into an :class:`IndexAvailabilityPolicy`.
+
+    Missing keys fall back to dataclass defaults. Unknown keys raise so
+    a typo (``on_index_errors`` ...) does not silently use defaults.
+    """
+    from .evaluator import PolicyParseError
+
+    if block is None:
+        return IndexAvailabilityPolicy()
+    if not isinstance(block, dict):
+        raise PolicyParseError(
+            f"{source}: 'availability' must be a mapping, got "
+            f"{type(block).__name__}"
+        )
+    allowed = {
+        "on_index_error",
+        "timeout_seconds",
+        "breaker_threshold",
+        "breaker_window_seconds",
+        "breaker_cooldown_seconds",
+    }
+    extras = set(block) - allowed
+    if extras:
+        raise PolicyParseError(
+            f"{source}: availability has unknown keys {sorted(extras)}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+    defaults = IndexAvailabilityPolicy()
+    try:
+        return IndexAvailabilityPolicy(
+            on_index_error=block.get("on_index_error", defaults.on_index_error),
+            timeout_seconds=block.get("timeout_seconds", defaults.timeout_seconds),
+            breaker_threshold=block.get(
+                "breaker_threshold", defaults.breaker_threshold
+            ),
+            breaker_window_seconds=block.get(
+                "breaker_window_seconds", defaults.breaker_window_seconds
+            ),
+            breaker_cooldown_seconds=block.get(
+                "breaker_cooldown_seconds", defaults.breaker_cooldown_seconds
+            ),
+        )
+    except ValueError as exc:
+        raise PolicyParseError(f"{source}: {exc}") from exc
 
 
 def coerce_policy(value: Any) -> "Policy":
