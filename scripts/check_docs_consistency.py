@@ -29,6 +29,7 @@ and from CI (covered by ``tests/test_docs_consistency.py``).
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -409,6 +410,95 @@ def _check_openapi(schema: str, issuer: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
+# Local-link check
+# ---------------------------------------------------------------------------
+
+# Markdown link extractor. Matches both `[text](path)` and `![alt](path)`.
+# Captures the link target up to the first whitespace or closing paren.
+# Reference-style links (`[text][ref]`) are intentionally not matched;
+# they resolve to a separate `[ref]: url` definition that the regex
+# would otherwise misread as a link target.
+_MD_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)\)")
+
+# Dirs we never walk when collecting markdown files. `bench/wiki_cache`
+# is a corpus of plain-text Wikipedia articles used by the bench
+# harness; it has no documentation. The rest are build / VCS / IDE
+# scratch space.
+_LINK_CHECK_SKIP_DIRS = {
+    ".git",
+    "__pycache__",
+    "node_modules",
+    "dist",
+    "build",
+    "wiki_cache",
+    "provenex_core.egg-info",
+}
+
+# Link targets that should be ignored. External URLs, mail/tel/ftp,
+# and empty anchors are not file-existence checks.
+_LINK_SKIP_PREFIXES = (
+    "http://",
+    "https://",
+    "mailto:",
+    "tel:",
+    "ftp://",
+    "#",
+)
+
+
+def _check_markdown_links(schema: str, issuer: str) -> List[str]:
+    """Every relative link in every committed Markdown file must point
+    to a path that exists.
+
+    External URLs, mail/tel/ftp, and pure anchors are skipped. Anchor
+    and query-string suffixes on a path are stripped before resolution.
+    Links that resolve outside the repo (FS escapes) are skipped.
+
+    The purpose of this check is to catch the failure mode where a
+    document references a sibling doc, runbook, or example by relative
+    path, but the target was renamed, moved, or never shipped. The
+    docs-consistency lint already enforces schema and version anchors;
+    this check enforces that everything we point readers at actually
+    exists.
+    """
+    problems: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(REPO):
+        # Prune in-place so os.walk does not descend into skipped trees.
+        dirnames[:] = [d for d in dirnames if d not in _LINK_CHECK_SKIP_DIRS]
+        for fn in filenames:
+            if not fn.endswith(".md"):
+                continue
+            path = Path(dirpath) / fn
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for m in _MD_LINK_RE.finditer(text):
+                target = m.group(1).strip()
+                if not target or target.startswith(_LINK_SKIP_PREFIXES):
+                    continue
+                # Strip #anchor and ?query before existence-checking.
+                bare = target.split("#", 1)[0].split("?", 1)[0]
+                if not bare:
+                    continue
+                try:
+                    resolved = (path.parent / bare).resolve()
+                except (OSError, RuntimeError):
+                    continue
+                # Defensive: ignore paths that escape the repo.
+                try:
+                    resolved.relative_to(REPO)
+                except ValueError:
+                    continue
+                if not resolved.exists():
+                    rel_doc = path.relative_to(REPO)
+                    problems.append(
+                        f"{rel_doc}: broken local link to {target!r}"
+                    )
+    return problems
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -422,6 +512,7 @@ CHECKS = [
     ("deploy/manifests/ + deploy/operator/", _check_deploy_manifests),
     ("SECURITY.md", _check_security_md),
     ("docs/openapi/openapi.json", _check_openapi),
+    ("markdown local links (every .md file)", _check_markdown_links),
 ]
 
 

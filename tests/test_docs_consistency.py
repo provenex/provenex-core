@@ -69,17 +69,30 @@ def test_no_drift_across_docs(lint_module):
         pytest.fail(msg)
 
 
+# Checks that are NOT source-of-truth-dependent and therefore should
+# not fire on a simulated schema/issuer drift. Add to this set when a
+# new check looks at properties orthogonal to receipt.py's constants
+# (file existence, structural well-formedness, etc.).
+_DRIFT_INDEPENDENT_CHECKS = {
+    "markdown local links (every .md file)",
+}
+
+
 def test_lint_catches_simulated_drift(lint_module, monkeypatch):
     """If the source of truth bumps without docs following, the lint
-    must surface drift. Each check function must return at least one
-    problem when the simulated source of truth disagrees with the
-    on-disk values.
+    must surface drift. Each check function (that depends on the source
+    of truth) must return at least one problem when the simulated
+    source of truth disagrees with the on-disk values.
 
     Guards against the failure mode where a check function is added
     but its regex never matches anything on disk; the function would
     return [] both before and after a real bump, defeating the
     structural guarantee. This test runs every check against a
     drifted source-of-truth and asserts each one fires.
+
+    Checks that intentionally do NOT depend on the source of truth
+    (e.g., the markdown-link-existence check) are listed in
+    ``_DRIFT_INDEPENDENT_CHECKS`` and skipped here.
     """
     real_schema, real_issuer = lint_module._read_source_of_truth()
     # Force the lint to think the source of truth is far ahead of
@@ -91,6 +104,8 @@ def test_lint_catches_simulated_drift(lint_module, monkeypatch):
     # Run every check individually with the drifted source of truth
     # and confirm each returns at least one problem.
     for name, fn in lint_module.CHECKS:
+        if name in _DRIFT_INDEPENDENT_CHECKS:
+            continue
         problems = fn(drifted_schema, drifted_issuer)
         # Some checks (deploy_manifests, openapi, security_md) skip when
         # their target file is missing; we tolerate empty results in that
@@ -103,6 +118,30 @@ def test_lint_catches_simulated_drift(lint_module, monkeypatch):
                 f"match the on-disk content. Either fix the regex or "
                 f"remove the check."
             )
+
+
+def test_lint_catches_broken_markdown_link(lint_module, tmp_path, monkeypatch):
+    """Plant a fake broken link in a temp .md file inside the repo,
+    run the link checker, confirm the planted link is reported, then
+    remove it and confirm the check goes clean again."""
+    plant = lint_module.REPO / "docs" / "__test_broken_link__.md"
+    try:
+        plant.write_text(
+            "Reference to a nonexistent file: [missing](./does_not_exist.md)\n"
+        )
+        problems = lint_module._check_markdown_links("schema", "issuer")
+        assert any(
+            "does_not_exist.md" in p and "__test_broken_link__" in p
+            for p in problems
+        ), f"planted broken link not surfaced; problems={problems!r}"
+    finally:
+        if plant.exists():
+            plant.unlink()
+    # After cleanup the lint must be clean again on this file.
+    problems_after = lint_module._check_markdown_links("schema", "issuer")
+    assert not any(
+        "__test_broken_link__" in p for p in problems_after
+    ), "lint still reports a problem on the deleted planted file"
 
 
 def _check_targets_missing(lint_module, check_name: str) -> bool:
