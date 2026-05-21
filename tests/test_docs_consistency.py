@@ -67,3 +67,60 @@ def test_no_drift_across_docs(lint_module):
             + "\n".join(f"  - {p}" for p in problems)
         )
         pytest.fail(msg)
+
+
+def test_lint_catches_simulated_drift(lint_module, monkeypatch):
+    """If the source of truth bumps without docs following, the lint
+    must surface drift. Each check function must return at least one
+    problem when the simulated source of truth disagrees with the
+    on-disk values.
+
+    Guards against the failure mode where a check function is added
+    but its regex never matches anything on disk; the function would
+    return [] both before and after a real bump, defeating the
+    structural guarantee. This test runs every check against a
+    drifted source-of-truth and asserts each one fires.
+    """
+    real_schema, real_issuer = lint_module._read_source_of_truth()
+    # Force the lint to think the source of truth is far ahead of
+    # what's on disk. Schema bump: 2.4.0 -> 9.9.9. Issuer bump:
+    # 0.9.0 -> 99.99.99.
+    drifted_schema = "9.9.9"
+    drifted_issuer = "provenex-core/99.99.99"
+
+    # Run every check individually with the drifted source of truth
+    # and confirm each returns at least one problem.
+    for name, fn in lint_module.CHECKS:
+        problems = fn(drifted_schema, drifted_issuer)
+        # Some checks (deploy_manifests, openapi, security_md) skip when
+        # their target file is missing; we tolerate empty results in that
+        # case but flag if the targets exist and the check ignored them.
+        if not problems and not _check_targets_missing(lint_module, name):
+            pytest.fail(
+                f"check for {name!r} returned no problems against a "
+                f"drifted source of truth (schema={drifted_schema}, "
+                f"issuer={drifted_issuer}); its regex likely does not "
+                f"match the on-disk content. Either fix the regex or "
+                f"remove the check."
+            )
+
+
+def _check_targets_missing(lint_module, check_name: str) -> bool:
+    """True if a check's target files do not exist (clean skip is allowed)."""
+    repo = lint_module.REPO
+    target_map = {
+        "deploy/helm/provenex-server/": [
+            "deploy/helm/provenex-server/Chart.yaml",
+            "deploy/helm/provenex-server/values.yaml",
+        ],
+        "deploy/manifests/ + deploy/operator/": [
+            "deploy/manifests/provenex-server.yaml",
+            "deploy/operator/operator.yaml",
+        ],
+        "SECURITY.md": ["SECURITY.md"],
+        "docs/openapi/openapi.json": ["docs/openapi/openapi.json"],
+    }
+    targets = target_map.get(check_name)
+    if targets is None:
+        return False
+    return not any((repo / t).exists() for t in targets)

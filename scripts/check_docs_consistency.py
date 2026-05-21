@@ -274,6 +274,140 @@ def _check_ocsf_mapping(schema: str, issuer: str) -> List[str]:
     return problems
 
 
+def _check_helm_chart(schema: str, issuer: str) -> List[str]:
+    """Helm chart appVersion + container image tag must match ISSUER suffix."""
+    want = _issuer_version(issuer)
+    problems: List[str] = []
+
+    chart_path = REPO / "deploy" / "helm" / "provenex-server" / "Chart.yaml"
+    if chart_path.exists():
+        text = chart_path.read_text()
+        m = re.search(r'^appVersion:\s*"([^"]+)"', text, re.MULTILINE)
+        if m is None:
+            problems.append(
+                "deploy/helm/provenex-server/Chart.yaml: no `appVersion: \"...\"` line"
+            )
+        elif m.group(1) != want:
+            problems.append(
+                f"deploy/helm/provenex-server/Chart.yaml: appVersion=\"{m.group(1)}\" "
+                f"disagrees with receipt.py ISSUER version suffix \"{want}\""
+            )
+
+    values_path = REPO / "deploy" / "helm" / "provenex-server" / "values.yaml"
+    if values_path.exists():
+        text = values_path.read_text()
+        # image.tag is nested under image:; match a 'tag: "X.Y.Z"' line that
+        # follows an 'image:' block within 5 lines.
+        m = re.search(
+            r'image:\s*\n(?:\s+\w+:.*\n){0,5}\s+tag:\s*"([^"]+)"',
+            text,
+        )
+        if m is None:
+            problems.append(
+                "deploy/helm/provenex-server/values.yaml: no `image:` block "
+                "with a tag: \"X.Y.Z\" line found"
+            )
+        elif m.group(1) != want:
+            problems.append(
+                f"deploy/helm/provenex-server/values.yaml: image.tag="
+                f"\"{m.group(1)}\" disagrees with receipt.py ISSUER "
+                f"version suffix \"{want}\""
+            )
+
+    return problems
+
+
+def _check_deploy_manifests(schema: str, issuer: str) -> List[str]:
+    """Container image tags in deploy/manifests + deploy/operator must match."""
+    want = _issuer_version(issuer)
+    problems: List[str] = []
+
+    manifests = [
+        REPO / "deploy" / "manifests" / "provenex-server.yaml",
+        REPO / "deploy" / "operator" / "operator.yaml",
+    ]
+    for path in manifests:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        # image: provenex/provenex-XXX:Y.Y.Y - one or more occurrences per file.
+        matches = re.findall(
+            r'image:\s*provenex/provenex-[\w-]+:(\S+)', text
+        )
+        if not matches:
+            # Manifest exists but has no provenex/provenex-* image. Not a
+            # drift, just a manifest we do not lint. Skip.
+            continue
+        rel = path.relative_to(REPO)
+        for got in matches:
+            if got != want:
+                problems.append(
+                    f"{rel}: image tag \"{got}\" disagrees with "
+                    f"receipt.py ISSUER version suffix \"{want}\""
+                )
+    return problems
+
+
+def _check_security_md(schema: str, issuer: str) -> List[str]:
+    """SECURITY.md supported-versions table must mark X.Y.x as current."""
+    want = _issuer_version(issuer)
+    parts = want.split(".")
+    if len(parts) < 2:
+        return []  # malformed version; not our problem here
+    minor = f"{parts[0]}.{parts[1]}.x"
+
+    path = REPO / "SECURITY.md"
+    if not path.exists():
+        return []
+    text = path.read_text()
+
+    # Look for the '(current minor) | Yes' row in the supported-versions
+    # table. Captures the version cell before the '(current minor)' tag.
+    m = re.search(
+        r'\|\s*([\d.x]+)\s*\(current minor\)\s*\|\s*Yes\s*\|',
+        text,
+    )
+    if m is None:
+        return [
+            "SECURITY.md: supported-versions table missing the "
+            "'(current minor) | Yes' row"
+        ]
+    if m.group(1) != minor:
+        return [
+            f"SECURITY.md: supported-versions table marks \"{m.group(1)}\" "
+            f"as the current minor, but receipt.py ISSUER suggests "
+            f"\"{minor}\""
+        ]
+    return []
+
+
+def _check_openapi(schema: str, issuer: str) -> List[str]:
+    """docs/openapi/openapi.json info.version must match ISSUER suffix."""
+    want = _issuer_version(issuer)
+    path = REPO / "docs" / "openapi" / "openapi.json"
+    if not path.exists():
+        return []
+    text = path.read_text()
+    # Find the info block's version. info.version appears within
+    # "info": { ... "version": "X.Y.Z" ... }.
+    m = re.search(
+        r'"info":\s*\{[^}]*"version":\s*"([^"]+)"',
+        text,
+    )
+    if m is None:
+        return [
+            "docs/openapi/openapi.json: no `info.version` field found"
+        ]
+    if m.group(1) != want:
+        return [
+            f"docs/openapi/openapi.json: info.version=\"{m.group(1)}\" "
+            f"disagrees with receipt.py ISSUER version suffix \"{want}\". "
+            f"Regenerate via the create_app().openapi() call in "
+            f"provenex/server/app.py."
+        ]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -284,6 +418,10 @@ CHECKS = [
     ("README.md", _check_readme),
     ("docs/receipt_format.md", _check_receipt_format),
     ("docs/ocsf_mapping.md", _check_ocsf_mapping),
+    ("deploy/helm/provenex-server/", _check_helm_chart),
+    ("deploy/manifests/ + deploy/operator/", _check_deploy_manifests),
+    ("SECURITY.md", _check_security_md),
+    ("docs/openapi/openapi.json", _check_openapi),
 ]
 
 
