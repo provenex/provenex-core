@@ -14,7 +14,8 @@ Subcommands:
 
     provenex receipt --index <db> --output <text> <chunk_file>...
         Generate a provenance receipt for a set of chunk files plus an LLM
-        output, signed with PROVENEX_SIGNING_SECRET, and write JSON to stdout.
+        output, signed with PROVENEX_RECEIPT_SECRET (falling back to the
+        legacy PROVENEX_SIGNING_SECRET), and write JSON to stdout.
 
     provenex audit <receipt.json> [--show-policy]
         Independently verify a receipt. Checks the signature (if the signing
@@ -179,7 +180,7 @@ def _cmd_receipt(args: argparse.Namespace) -> int:
             normalization_applied=fp.fingerprint(text).normalization_applied,
         )
     output_text = _read_text(args.output) if args.output else ""
-    signer = HmacSha256Signer() if os.environ.get("PROVENEX_SIGNING_SECRET") else None
+    signer = HmacSha256Signer() if _signing_secret_in_env() else None
     receipt = builder.finalize(output_text=output_text, signer=signer)
     print(receipt.to_json())
     index.close()
@@ -240,6 +241,20 @@ def _hex_of(prefixed: str) -> bytes:
     return bytes.fromhex(prefixed)
 
 
+def _signing_secret_in_env() -> bool:
+    """Whether HMAC signing key material is available in the environment.
+
+    Mirrors the priority order in ``provenex.core.receipt._resolve_receipt_secret``:
+    ``PROVENEX_RECEIPT_SECRET`` (preferred) then the legacy
+    ``PROVENEX_SIGNING_SECRET`` fallback. Used by every CLI codepath that
+    needs to decide whether to construct a default HMAC signer.
+    """
+    return bool(
+        os.environ.get("PROVENEX_RECEIPT_SECRET")
+        or os.environ.get("PROVENEX_SIGNING_SECRET")
+    )
+
+
 def _audit_signature(
     receipt: Dict[str, Any],
     public_key_path: Optional[str],
@@ -249,7 +264,8 @@ def _audit_signature(
 
     Routing:
         * ``--public-key <pem>`` provided → use Ed25519 with that public key.
-        * Else if PROVENEX_SIGNING_SECRET env var is set → use HMAC-SHA256.
+        * Else if PROVENEX_RECEIPT_SECRET (or legacy PROVENEX_SIGNING_SECRET)
+          is set → use HMAC-SHA256.
         * Else → FAIL unless ``allow_unsigned=True`` (i.e. ``--unsigned``).
 
     The receipt's own ``signature.algorithm`` field must match whichever
@@ -291,16 +307,17 @@ def _audit_signature(
         ok = verify_receipt_signature(receipt, verifier)
         return ok, f"ed25519: {'valid' if ok else 'INVALID'}"
 
-    secret = os.environ.get("PROVENEX_SIGNING_SECRET")
-    if not secret:
+    if not _signing_secret_in_env():
         if allow_unsigned:
             return True, (
-                "signature check skipped (--unsigned; "
-                "no PROVENEX_SIGNING_SECRET, no --public-key)"
+                "signature check skipped (--unsigned; no "
+                "PROVENEX_RECEIPT_SECRET / PROVENEX_SIGNING_SECRET, "
+                "no --public-key)"
             )
         return False, (
-            "no key material available — set PROVENEX_SIGNING_SECRET, "
-            "pass --public-key <pem>, or re-run with --unsigned"
+            "no key material available; set PROVENEX_RECEIPT_SECRET "
+            "(or the legacy PROVENEX_SIGNING_SECRET), pass --public-key "
+            "<pem>, or re-run with --unsigned"
         )
     if alg != "hmac-sha256":
         return False, (
@@ -613,6 +630,16 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     except json.JSONDecodeError as exc:
         print(f"error: receipt is not valid JSON: {exc}", file=sys.stderr)
         return 2
+    if not isinstance(receipt, dict):
+        # A receipt MUST be a JSON object. Bare arrays, nulls, primitives
+        # are rejected here so the rest of the audit path can rely on
+        # dict-shaped input.
+        print(
+            f"error: receipt must be a JSON object; got "
+            f"{type(receipt).__name__}",
+            file=sys.stderr,
+        )
+        return 2
 
     sig_ok, sig_msg = _audit_signature(
         receipt,
@@ -626,8 +653,11 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     # immediately that this is a degraded receipt (the wrapper failed to
     # reach the index). The signature still verifies; the receipt is
     # legitimate, but its semantic claim is "we tried to verify and could
-    # not," not "everything verified."
+    # not," not "everything verified." Defensive type check: a malformed
+    # receipt where index_status is not an object must not crash audit.
     index_status = receipt.get("index_status")
+    if index_status is not None and not isinstance(index_status, dict):
+        index_status = {"available": None, "error_class": "(malformed)"}
 
     if args.json:
         report = {
@@ -1279,9 +1309,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify a receipt independently (signature + inclusion proofs)",
         description=(
             "Validate a Provenex receipt. Checks the receipt signature (if "
-            "PROVENEX_SIGNING_SECRET is set in the environment) and verifies "
-            "each source's inclusion proof against the transparency-log tree "
-            "root carried on the receipt. Needs no database access."
+            "PROVENEX_RECEIPT_SECRET or the legacy PROVENEX_SIGNING_SECRET is "
+            "set in the environment) and verifies each source's inclusion "
+            "proof against the transparency-log tree root carried on the "
+            "receipt. Needs no database access."
         ),
     )
     p_audit.add_argument(
@@ -1306,7 +1337,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to a PEM-encoded Ed25519 public key. Required when the "
             "receipt was signed with Ed25519. Without this flag, HMAC-SHA256 "
-            "is assumed and PROVENEX_SIGNING_SECRET is read from the env."
+            "is assumed and PROVENEX_RECEIPT_SECRET (or the legacy "
+            "PROVENEX_SIGNING_SECRET) is read from the env."
         ),
     )
     p_audit.add_argument(

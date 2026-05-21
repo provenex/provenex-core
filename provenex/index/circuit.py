@@ -79,7 +79,14 @@ class CircuitBreaker:
         self._cooldown = cooldown_seconds
         self._clock = clock
         self._lock = threading.Lock()
-        self._failures: Deque[float] = deque()
+        # Cap the deque at the trip threshold. Once we have `threshold`
+        # entries inside the window the breaker is already tripping; any
+        # additional failure beyond that is redundant for the decision
+        # and would just consume memory. ``deque(maxlen=threshold)``
+        # evicts the oldest on overflow, which preserves the sliding-
+        # window semantics (the oldest entry is also the one
+        # ``_prune_locked`` would drop next).
+        self._failures: Deque[float] = deque(maxlen=threshold)
         self._state = STATE_CLOSED
         self._open_until: float = 0.0
         self._probe_in_flight = False

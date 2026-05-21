@@ -144,6 +144,18 @@ def run(
         raise ValueError(
             f"unknown scale {scale!r}; expected one of {sorted(PRESETS)}"
         )
+    if verify_samples < 1:
+        raise ValueError(
+            f"verify_samples must be >= 1, got {verify_samples}"
+        )
+    if chunk_chars < 1:
+        raise ValueError(
+            f"chunk_chars must be >= 1, got {chunk_chars}"
+        )
+    if not 0.0 <= unknown_rate <= 1.0:
+        raise ValueError(
+            f"unknown_rate must be in [0.0, 1.0], got {unknown_rate}"
+        )
     target_chunks = PRESETS[scale]
     log = log if log is not None else sys.stderr
     rng = random.Random(seed)

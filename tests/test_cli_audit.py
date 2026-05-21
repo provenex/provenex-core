@@ -431,6 +431,74 @@ def test_audit_json_output_includes_index_status_when_degraded(monkeypatch):
     }
 
 
+def test_audit_rejects_non_object_json_with_exit_2(monkeypatch, tmp_path=None):
+    """A receipt MUST be a JSON object. Bare arrays, nulls, primitives
+    are operator errors, not internal bugs. Exit 2 with a clear message;
+    DO NOT crash with an AttributeError from `.get` on a non-dict."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    for body in ["[]", "null", "42", '"hi"', "true"]:
+        p = workdir / "bad.json"
+        p.write_text(body)
+        code, _, stderr = _run_audit(str(p))
+        assert code == 2, f"body={body!r}: expected exit 2, got {code}"
+        assert "must be a JSON object" in stderr, stderr
+
+
+def test_audit_does_not_crash_on_malformed_index_status(monkeypatch):
+    """A signed receipt with a malformed index_status field (wrong type)
+    must not crash the audit CLI. Surfaces as FAIL on the signature
+    check; the audit code path stays robust."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    for bad_value in [42, "degraded", [1, 2, 3], True]:
+        p = workdir / "bad.json"
+        p.write_text(json.dumps({
+            "receipt_id": "a",
+            "schema_version": "2.5.0",
+            "index_status": bad_value,
+        }))
+        # Should return non-zero but never raise.
+        code, stdout, _ = _run_audit(str(p))
+        assert code in (0, 1, 2)  # whatever — just no traceback
+        # No traceback emitted.
+        assert "Traceback" not in stdout
+
+
+def test_audit_resolves_preferred_env_var_PROVENEX_RECEIPT_SECRET(monkeypatch):
+    """The CLI must read PROVENEX_RECEIPT_SECRET in preference to the
+    legacy PROVENEX_SIGNING_SECRET. Without this, operators following
+    current docs see a spurious FAIL until they discover the legacy var."""
+    workdir = Path(tempfile.mkdtemp())
+    # Build the receipt under the legacy var (because _write_receipt's
+    # MerkleSQLiteProvenanceIndex uses _SIGNING_SECRET for the index too).
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path, _ = _write_receipt(workdir)
+
+    # Now scrub both env vars then set ONLY the preferred one.
+    monkeypatch.delenv("PROVENEX_SIGNING_SECRET")
+    monkeypatch.setenv("PROVENEX_RECEIPT_SECRET", "test_secret_for_audit_v1")
+    code, stdout, _ = _run_audit(str(receipt_path))
+    assert code == 0
+    assert "PASS" in stdout
+    assert "valid" in stdout
+
+
+def test_audit_fails_cleanly_when_neither_env_var_set(monkeypatch):
+    """Without any key material AND without --unsigned, audit FAILs and
+    surfaces both env var names in the error message."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path, _ = _write_receipt(workdir)
+    monkeypatch.delenv("PROVENEX_SIGNING_SECRET")
+    monkeypatch.delenv("PROVENEX_RECEIPT_SECRET", raising=False)
+    code, stdout, _ = _run_audit(str(receipt_path))
+    assert code == 1
+    assert "FAIL" in stdout
+    assert "PROVENEX_RECEIPT_SECRET" in stdout
+    assert "PROVENEX_SIGNING_SECRET" in stdout
+
+
 def test_audit_json_output_index_status_is_null_when_healthy(monkeypatch):
     """JSON mode must include the index_status key even when null so
     downstream tooling has a stable shape to read."""

@@ -111,3 +111,38 @@ def test_threshold_validation():
         CircuitBreaker(window_seconds=0)
     with pytest.raises(ValueError):
         CircuitBreaker(cooldown_seconds=-1)
+
+
+def test_failure_deque_is_bounded_at_threshold():
+    """Defensive bound. A misbehaving caller that hammers ``record_failure``
+    past `allow()` saying no must not cause unbounded memory growth.
+    The deque holds at most ``threshold`` entries at any time."""
+    b = CircuitBreaker(threshold=50, window_seconds=60.0, cooldown_seconds=60.0)
+    for _ in range(10_000):
+        b.record_failure()
+    assert len(b._failures) <= 50, (
+        f"deque grew to {len(b._failures)}; should be bounded at threshold"
+    )
+    # And the trip decision is still correct: still OPEN.
+    assert b.state == "open"
+
+
+def test_bounded_deque_preserves_window_semantics():
+    """Capping the deque at threshold must NOT break the sliding-window
+    rule that old failures don't count. After threshold failures + a
+    window slide, a fresh single failure should NOT trip the breaker."""
+    clock = FakeClock()
+    b = make_breaker(clock, threshold=3)
+    b.record_failure()
+    b.record_failure()
+    b.record_failure()
+    assert b.state == STATE_OPEN
+    # Wait past the window AND past cooldown.
+    clock.advance(20.0)
+    # Probe; cooldown elapsed so the breaker is HALF_OPEN.
+    assert b.allow() is True
+    b.record_success()  # close
+    assert b.state == STATE_CLOSED
+    # A single fresh failure must NOT trip again (window slid).
+    b.record_failure()
+    assert b.state == STATE_CLOSED
