@@ -2,8 +2,15 @@
 
 Run with::
 
-    PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
+    PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
+        PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
         python examples/standalone_demo.py
+
+The two secrets are set separately on purpose. The legacy
+``PROVENEX_SIGNING_SECRET`` env var is a shared secret used for
+both halves; setting only that variable emits a deprecation warning
+because reusing one key for index-row signing AND receipt signing
+means anyone who can write a row can also forge a receipt.
 
 What it shows, in order:
 
@@ -78,10 +85,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not os.environ.get("PROVENEX_SIGNING_SECRET"):
+    # Require both role-specific env vars. The legacy
+    # PROVENEX_SIGNING_SECRET single-variable form is still accepted by
+    # the library as a fallback but we deliberately do not invite it in
+    # demo material; setting both separately matches the secure-defaults
+    # recommendation in docs/secure_defaults.md.
+    if not (
+        os.environ.get("PROVENEX_INDEX_SECRET")
+        and os.environ.get("PROVENEX_RECEIPT_SECRET")
+    ) and not os.environ.get("PROVENEX_SIGNING_SECRET"):
         print(
-            f"{RED}error:{RESET} set PROVENEX_SIGNING_SECRET first, e.g.:\n"
-            f"  export PROVENEX_SIGNING_SECRET="
+            f"{RED}error:{RESET} set the receipt + index secrets first, e.g.:\n"
+            f"  export PROVENEX_INDEX_SECRET="
+            f'"$(python3 -c \'import secrets; print(secrets.token_hex(32))\')"\n'
+            f"  export PROVENEX_RECEIPT_SECRET="
             f'"$(python3 -c \'import secrets; print(secrets.token_hex(32))\')"',
             file=sys.stderr,
         )

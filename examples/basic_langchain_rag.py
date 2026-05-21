@@ -11,7 +11,15 @@ To run with real LangChain (FAISS, Chroma, etc.), replace ``StubDoc`` with
 retriever. Everything else stays the same.
 
 Run:
-    PROVENEX_SIGNING_SECRET=demo-secret python examples/basic_langchain_rag.py
+    PROVENEX_INDEX_SECRET=demo-index-secret \
+        PROVENEX_RECEIPT_SECRET=demo-receipt-secret \
+        python examples/basic_langchain_rag.py
+
+The two secrets are set separately on purpose; the legacy
+``PROVENEX_SIGNING_SECRET`` shared form is still accepted by the
+library but emits a deprecation warning because reusing one key for
+index-row signing and receipt signing means anyone who can write a
+row can also forge a receipt. See docs/secure_defaults.md.
 """
 
 from __future__ import annotations
@@ -52,8 +60,11 @@ class StubRetriever:
 
 
 def main() -> None:
-    if "PROVENEX_SIGNING_SECRET" not in os.environ:
-        os.environ["PROVENEX_SIGNING_SECRET"] = "demo-secret-only-for-example"
+    # Default both role-specific env vars rather than the legacy
+    # shared-secret form. Demos that show people how to wire production
+    # should not model the deprecated path.
+    os.environ.setdefault("PROVENEX_INDEX_SECRET", "demo-index-secret-only-for-example")
+    os.environ.setdefault("PROVENEX_RECEIPT_SECRET", "demo-receipt-secret-only-for-example")
 
     sample_dir = Path(__file__).parent / "sample_docs"
     policy_text = (sample_dir / "sample_policy.txt").read_text()

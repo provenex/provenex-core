@@ -56,14 +56,22 @@ via ``sources[*]``, ``policy.*.policy_id``, and
 
 Run:
 
-    pip install langchain-core numpy
+    pip install "provenex-core[langchain]"
     PROVENEX_INDEX_SECRET=any-32-bytes \\
     PROVENEX_RECEIPT_SECRET=any-32-bytes \\
     python examples/attack_thwarted_demo.py [--fast]
 
-(``numpy`` is what LangChain's ``InMemoryVectorStore`` uses to compute
-cosine similarity. The demo itself is stdlib; numpy is a downstream
-requirement of the framework.)
+The ``[langchain]`` extra pulls ``langchain-core`` (which itself
+brings ``numpy`` for ``InMemoryVectorStore``'s cosine similarity).
+The demo itself is stdlib; the framework dependency is the only
+extra needed beyond the core install.
+
+The two secret env vars above are set separately on purpose. The
+legacy ``PROVENEX_SIGNING_SECRET`` env var is a shared secret used
+for both halves; setting only that one would emit a deprecation
+warning and grant anyone who can write a row in the index the
+ability to forge receipt signatures. See
+[docs/secure_defaults.md](../docs/secure_defaults.md).
 
 End: the seven questions reprinted with the specific receipt field
 that proves each answer, plus an aggregate audit walking the saved
@@ -83,8 +91,8 @@ from typing import Any, List
 
 # Real LangChain. langchain-core ships InMemoryVectorStore + @tool +
 # Document. No cloud creds; we plug in a stdlib-only deterministic
-# embedding below so the demo runs with just `pip install langchain-core`
-# (no numpy / no transformer / no API key).
+# embedding below so the demo runs with just the langchain extra
+# (no transformer / no API key).
 try:
     from langchain_core.documents import Document
     from langchain_core.embeddings import Embeddings
@@ -92,8 +100,9 @@ try:
     from langchain_core.vectorstores import InMemoryVectorStore
 except ImportError as exc:  # pragma: no cover - guard for missing dep
     print(
-        "This demo requires langchain-core. Install with:\n"
-        "    pip install langchain-core\n",
+        "This demo requires the LangChain integration. Install with:\n"
+        '    pip install "provenex-core[langchain]"\n'
+        "(equivalent to: pip install langchain-core)\n",
         file=sys.stderr,
     )
     raise SystemExit(2) from exc
