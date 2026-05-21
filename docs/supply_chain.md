@@ -135,24 +135,24 @@ Until that is complete, **only install from `provenex-core` or
 install. Reporting a typosquat: use the disclosure channel in
 [`SECURITY.md`](../SECURITY.md).
 
-## Verifying the v0.10.0 release
+## Verifying the v0.10.1 release
 
 The first release with the full supply-chain signal chain (Sigstore
-attestations + CycloneDX SBOM + trusted-publisher OIDC) is v0.10.0.
+attestations + CycloneDX SBOM + trusted-publisher OIDC) is v0.10.1.
 To confirm the release on PyPI matches the source on GitHub:
 
 ```bash
 # 1. Pull the wheel from PyPI.
-pip download --no-deps provenex-core==0.10.0
+pip download --no-deps provenex-core==0.10.1
 
 # 2. View the "Provenance" panel on the PyPI release page:
-#    https://pypi.org/project/provenex-core/0.10.0/
+#    https://pypi.org/project/provenex-core/0.10.1/
 #    It will show the GitHub Actions workflow run that produced the
 #    attestation, the OIDC issuer claims (repo, ref, workflow), and a
 #    link to the Sigstore Rekor log entry.
 
 # 3. Download the SBOM from the matching GitHub Release:
-#    https://github.com/provenex/provenex-core/releases/tag/v0.10.0
+#    https://github.com/provenex/provenex-core/releases/tag/v0.10.1
 #    The asset is `sbom.cdx.json` (CycloneDX 1.6).
 
 # 4. Optional: verify the attestation locally with sigstore.
@@ -160,13 +160,13 @@ pip download --no-deps provenex-core==0.10.0
 #    surface; the bundle URL pattern is still maturing.
 pip install sigstore
 python -m sigstore verify identity \
-  --cert-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  --cert-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.1' \
   --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  provenex_core-0.10.0-py3-none-any.whl
+  provenex_core-0.10.1-py3-none-any.whl
 ```
 
 A green verification means the wheel you have was built by the
-`release.yml` workflow at tag `v0.10.0` on this repository, by this
+`release.yml` workflow at tag `v0.10.1` on this repository, by this
 GitHub organization. No party outside that chain can produce a
 matching attestation.
 
@@ -180,18 +180,18 @@ brew install cosign  # macOS; see https://docs.sigstore.dev/cosign/ for others
 #    encodes the workflow file path + git ref; only the GitHub Actions
 #    OIDC identity for our release.yml at that tag can sign matching
 #    the constraint below.
-cosign verify ghcr.io/provenex/provenex-server:0.10.0 \
-  --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+cosign verify ghcr.io/provenex/provenex-server:0.10.1 \
+  --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.1' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
 # 3. Optional: inspect the SLSA build provenance attached to the image.
 cosign verify-attestation --type slsaprovenance \
-  --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.1' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/provenex/provenex-server:0.10.0
+  ghcr.io/provenex/provenex-server:0.10.1
 
 # 4. Optional: pull the SBOM that buildx attached.
-docker buildx imagetools inspect ghcr.io/provenex/provenex-server:0.10.0 --format '{{ json . }}'
+docker buildx imagetools inspect ghcr.io/provenex/provenex-server:0.10.1 --format '{{ json . }}'
 ```
 
 A green verification on step 2 establishes that the image at this tag

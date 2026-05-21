@@ -1,10 +1,11 @@
 {{/*
-NOTE (v0.10.0): the witness-publisher CLI subcommand referenced below
-(`provenex witness publish`) is not yet implemented. Enabling this
-CronJob will run a container that exits with "command not found" on
-every fire. The template is checked in as a placeholder for the
-v1.0 witness rollout; until then, leave witness.enabled=false.
-See docs/runbooks/witness_log.md for the manual / library API path.
+NOTE: the witness-publisher CLI subcommand referenced below
+(`provenex witness publish`) is not yet implemented as of this
+release. Enabling this CronJob will run a container that exits with
+"command not found" on every fire. The template is checked in as a
+placeholder for the v1.0 witness rollout; until then, leave
+witness.enabled=false. See docs/runbooks/witness_log.md for the
+manual / library API path.
 */}}
 {{- if .Values.witness.enabled -}}
 {{- fail "witness.enabled=true: the `provenex witness publish` CLI subcommand is not implemented in this release. Use the WitnessLog library API directly (see docs/runbooks/witness_log.md) or wait for the v1.0 witness rollout." -}}

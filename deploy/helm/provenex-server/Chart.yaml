@@ -8,8 +8,8 @@ description: |
   read from a Secret you provide (ExternalSecret-friendly) — the chart
   never holds key material.
 type: application
-version: 0.1.0
-appVersion: "0.10.0"
+version: 0.1.1
+appVersion: "0.10.1"
 keywords:
   - provenex
   - rag

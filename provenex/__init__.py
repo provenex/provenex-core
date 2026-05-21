@@ -110,7 +110,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 __all__ = [
     # Core

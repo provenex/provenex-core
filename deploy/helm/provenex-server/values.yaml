@@ -4,12 +4,12 @@
 image:
   # Published by release.yml on every tag to GitHub Container Registry.
   # Signed with cosign keyless (Sigstore via OIDC); verify with:
-  #   cosign verify ghcr.io/provenex/provenex-server:0.10.0 \
-  #     --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  #   cosign verify ghcr.io/provenex/provenex-server:0.10.1 \
+  #     --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.1' \
   #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
   # Public registry, no authentication needed for pulls.
   repository: ghcr.io/provenex/provenex-server
-  tag: "0.10.0"
+  tag: "0.10.1"
   pullPolicy: IfNotPresent
 
 # Verify deployment: stateless, horizontally scaled.

@@ -9,6 +9,31 @@ on-the-wire receipt format follows its own schema-semver, tracked in
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-21
+
+This is a release-machinery patch on top of 0.10.0. No schema change,
+no public API change. The release exists to populate the container
+image on GitHub Container Registry and to ship the Helm chart
+hardening from the same-day session.
+
+### Added
+- **Container image published to GHCR**. `ghcr.io/provenex/provenex-server:<version>` is built multi-arch (linux/amd64 + linux/arm64) on every release tag by `.github/workflows/release.yml`, signed with cosign keyless via the GitHub Actions OIDC identity (no long-lived signing key), with image SBOM and SLSA build provenance attached to the manifest. Verify with `cosign verify ghcr.io/provenex/provenex-server:0.10.1 --certificate-identity '...' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'`. See [docs/supply_chain.md](docs/supply_chain.md).
+- **Helm chart `networkPolicy` knobs**: `databaseEgressCIDRs`, `databaseEgressPort`, `monitoringNamespace`, `extraIngress`, `extraEgress`. The default chart NetworkPolicy now works for both bundled-Postgres dev and external managed Postgres production paths (previously the egress block was broken for non-pod databases).
+- **Helm chart maturity disclosure** at the top of `deploy/helm/provenex-server/README.md` listing known gaps (no `values.schema.json`, no `ServiceMonitor` template, no `PodAntiAffinity`, operator image not yet on a public registry) with workarounds and tracked release.
+- **`SECURITY.md` key inventory** clarifies the four distinct keys in the Provenex world (disclosure key, per-customer receipt signer, per-customer index-row signer, PyPI release attestation) with an explicit "two footguns to avoid in production" subsection covering the legacy shared-secret env var and HMAC's lack of non-repudiation against the verifier.
+- **`docs/supply_chain.md`**: reproducible-build gap documented explicitly (identity attestation vs SLSA L3 byte-reproducibility); PyPI typosquat awareness section listing the names we own (`provenex-core`, `provenex`) vs plausible names we do not (`provenex-sdk`, `provenex-client`, etc.); container-image verification recipe.
+
+### Changed
+- **Helm chart**: CronJob templates (`ingester`, `witness`) now carry the same container-level `securityContext` (`allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`) and resource requests/limits as the verify Deployment.
+- **Helm chart**: the `witness` CronJob template now `{{ fail ... }}` at render time when `witness.enabled=true`, because the `provenex witness publish` CLI subcommand it references is not yet implemented. Surfaces the gap loudly rather than letting the CronJob fire and fail at runtime.
+- **Helm chart `_helpers.tpl`**: emits `PROVENEX_INDEX_SECRET` (the recommended role-specific env var) rather than the legacy `PROVENEX_SIGNING_SECRET`. Eliminates the deprecation warning at server startup and models the recommended separated-secret posture.
+- **Raw manifests** at `deploy/manifests/provenex-server.yaml`: same `PROVENEX_INDEX_SECRET` switch.
+- **Operator Deployment** at `deploy/operator/operator.yaml`: liveness + readiness probes wired to kopf's built-in `--liveness` endpoint; container-level `securityContext` consistent with the verify Deployment; pod-level `runAsGroup` + `fsGroup`.
+- **Examples** `standalone_demo.py`, `attack_thwarted_demo.py`, `basic_langchain_rag.py`: switched run-hint env vars to `PROVENEX_INDEX_SECRET` + `PROVENEX_RECEIPT_SECRET` instead of the deprecated shared `PROVENEX_SIGNING_SECRET`. `attack_thwarted_demo.py` install hint references `pip install "provenex-core[langchain]"` instead of `pip install langchain-core` directly.
+
+### Fixed
+- **`scripts/check_docs_consistency.py`**: image-tag regex tolerates registry prefixes (so `ghcr.io/provenex/provenex-server:X.Y.Z` lints alongside `provenex/provenex-operator:X.Y.Z`); the `values.yaml` `image:` block regex tolerates comment lines between `image:` and `tag:`.
+
 ## [0.10.0] - 2026-05-21
 
 ### Added

@@ -24,8 +24,8 @@ customize, not a turnkey artifact. Concretely:
   with cosign keyless via the GitHub Actions OIDC identity (no
   long-lived signing key). Verify on pull with:
   ```bash
-  cosign verify ghcr.io/provenex/provenex-server:0.10.0 \
-    --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  cosign verify ghcr.io/provenex/provenex-server:0.10.1 \
+    --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.1' \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
   ```
 - The **operator image** `provenex/provenex-operator:<version>` is not
@@ -106,7 +106,7 @@ ingress rule limits scrape access to pods labelled `provenex-client`.
 
 See [docs/scaling.md#postgres-at-scale-measured-1m-chunks](../../../docs/scaling.md#postgres-at-scale-measured-1m-chunks) for the per-pod throughput numbers that back these defaults.
 
-## Customization knobs added in v0.10.0
+## Customization knobs added in v0.10.1
 
 - `networkPolicy.databaseEgressCIDRs` (list of CIDRs): egress rules for
   external databases. Empty by default.
@@ -118,7 +118,7 @@ See [docs/scaling.md#postgres-at-scale-measured-1m-chunks](../../../docs/scaling
   free-form rules merged into the generated NetworkPolicy for
   topologies the defaults do not cover.
 
-## Known gaps (v0.10.0)
+## Known gaps (v0.10.1)
 
 | Gap | Workaround | Tracked for |
 |---|---|---|
