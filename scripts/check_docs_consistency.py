@@ -300,7 +300,7 @@ def _check_helm_chart(schema: str, issuer: str) -> List[str]:
         # image.tag is nested under image:; match a 'tag: "X.Y.Z"' line that
         # follows an 'image:' block within 5 lines.
         m = re.search(
-            r'image:\s*\n(?:\s+\w+:.*\n){0,5}\s+tag:\s*"([^"]+)"',
+            r'image:\s*\n(?:\s+(?:#.*|\w+:.*)\n){0,20}\s+tag:\s*"([^"]+)"',
             text,
         )
         if m is None:
@@ -331,9 +331,11 @@ def _check_deploy_manifests(schema: str, issuer: str) -> List[str]:
         if not path.exists():
             continue
         text = path.read_text()
-        # image: provenex/provenex-XXX:Y.Y.Y - one or more occurrences per file.
+        # image: [<registry>/]provenex/provenex-XXX:Y.Y.Y -- accepts a
+        # leading registry prefix (e.g., ghcr.io/) so the GHCR-published
+        # server image and the still-private operator image both lint.
         matches = re.findall(
-            r'image:\s*provenex/provenex-[\w-]+:(\S+)', text
+            r'image:\s*(?:[\w.-]+/)?provenex/provenex-[\w-]+:(\S+)', text
         )
         if not matches:
             # Manifest exists but has no provenex/provenex-* image. Not a

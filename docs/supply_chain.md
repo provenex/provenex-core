@@ -14,6 +14,8 @@ builds, signs, and publishes:
 | **sdist + wheel** | [PyPI release page](https://pypi.org/project/provenex-core/) | `pip install provenex-core==<version>` |
 | **Sigstore-signed PEP 740 attestations** for sdist + wheel | Same PyPI release page (the "Provenance" panel) | `python -m sigstore verify identity --bundle <bundle.json> <artifact>` (see below) |
 | **CycloneDX SBOM** (JSON) for the deployment-critical install | Attached to the corresponding GitHub Release as `sbom.cdx.json` | Open the JSON; it lists every transitive component with its name, version, and PURL |
+| **Multi-arch container image** (linux/amd64 + linux/arm64) | `ghcr.io/provenex/provenex-server:<version>` | `cosign verify ghcr.io/provenex/provenex-server:<version> --certificate-identity '...' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'` (see below) |
+| **SLSA build provenance + image SBOM** for the container | Attached to the manifest list via buildx (`provenance: mode=max`, `sbom: true`) | `cosign verify-attestation --type slsaprovenance ...` or pull via `docker buildx imagetools inspect` |
 
 ## Why these specific signals
 
@@ -167,6 +169,35 @@ A green verification means the wheel you have was built by the
 `release.yml` workflow at tag `v0.10.0` on this repository, by this
 GitHub organization. No party outside that chain can produce a
 matching attestation.
+
+### Verifying the container image
+
+```bash
+# 1. Install cosign.
+brew install cosign  # macOS; see https://docs.sigstore.dev/cosign/ for others
+
+# 2. Verify the image's keyless Sigstore signature. The cert-identity
+#    encodes the workflow file path + git ref; only the GitHub Actions
+#    OIDC identity for our release.yml at that tag can sign matching
+#    the constraint below.
+cosign verify ghcr.io/provenex/provenex-server:0.10.0 \
+  --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+
+# 3. Optional: inspect the SLSA build provenance attached to the image.
+cosign verify-attestation --type slsaprovenance \
+  --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  ghcr.io/provenex/provenex-server:0.10.0
+
+# 4. Optional: pull the SBOM that buildx attached.
+docker buildx imagetools inspect ghcr.io/provenex/provenex-server:0.10.0 --format '{{ json . }}'
+```
+
+A green verification on step 2 establishes that the image at this tag
+was produced by our `release.yml` workflow at the corresponding git
+tag. The attestation chain replaces the role a static signing key
+would play in older release pipelines.
 
 ## Reporting a supply-chain concern
 

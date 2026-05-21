@@ -2,7 +2,13 @@
 # See values-large.yaml for a 500-RPS / 10M-chunk deployment shape.
 
 image:
-  repository: provenex/provenex-server
+  # Published by release.yml on every tag to GitHub Container Registry.
+  # Signed with cosign keyless (Sigstore via OIDC); verify with:
+  #   cosign verify ghcr.io/provenex/provenex-server:0.10.0 \
+  #     --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+  #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+  # Public registry, no authentication needed for pulls.
+  repository: ghcr.io/provenex/provenex-server
   tag: "0.10.0"
   pullPolicy: IfNotPresent
 

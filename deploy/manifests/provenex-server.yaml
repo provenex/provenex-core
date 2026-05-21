@@ -57,18 +57,29 @@ spec:
         fsGroup: 10001
       containers:
         - name: provenex-server
-          image: provenex/provenex-server:0.10.0
+          # Published to GHCR by release.yml. Signed with cosign keyless.
+          # See deploy/helm/provenex-server/values.yaml for the cosign verify recipe.
+          image: ghcr.io/provenex/provenex-server:0.10.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
           env:
-            - name: PROVENEX_SIGNING_SECRET
+            # Index-row HMAC secret. PROVENEX_INDEX_SECRET is the
+            # recommended role-specific env name; PROVENEX_SIGNING_SECRET
+            # is the legacy shared-secret name and emits a deprecation
+            # warning if used as the only key. Keep these two secrets
+            # separate in production.
+            - name: PROVENEX_INDEX_SECRET
               valueFrom:
                 secretKeyRef:
                   name: provenex-signing
                   key: index_secret
+            # HMAC receipt signing. Use Ed25519 (via
+            # PROVENEX_RECEIPT_PRIVATE_KEY_FILE) for any deployment
+            # whose receipts may cross an organizational boundary;
+            # HMAC has no non-repudiation against the verifier.
             - name: PROVENEX_RECEIPT_SECRET
               valueFrom:
                 secretKeyRef:

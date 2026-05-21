@@ -110,3 +110,96 @@ jobs:
         with:
           files: release-extras/sbom.cdx.json
           fail_on_unmatched_files: true
+
+  docker:
+    name: Build + push Docker image to GHCR + sign with Sigstore
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io/<owner>/...
+      id-token: write   # OIDC for cosign keyless signing
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Strip leading `v` from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Lowercase repo owner: GHCR requires the owner segment in
+      # lowercase, but github.repository_owner can be mixed case.
+      - name: Lowercase the GHCR image namespace
+        id: ns
+        run: |
+          ns="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "owner=${ns}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image labels + tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ steps.ns.outputs.owner }}/provenex-server
+          tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build + push (linux/amd64, linux/arm64)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.server
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The image SBOM is distinct from the Python-package SBOM the
+          # `build` job emits: this one covers the OS layer (base image
+          # packages) as well as the installed Python wheels.
+          sbom: true
+          # `provenance: mode=max` emits SLSA build provenance attached
+          # to the manifest, signed by buildx with the GitHub Actions
+          # OIDC identity. Verifiable via `cosign verify-attestation`.
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless signing: cosign mints a short-lived certificate from
+      # Sigstore Fulcio using the GitHub Actions OIDC token, signs the
+      # image digest, and writes the signature to the registry alongside
+      # the image. No long-lived key.
+      - name: Sign the image (Sigstore keyless via OIDC)
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ghcr.io/${{ steps.ns.outputs.owner }}/provenex-server
+        run: |
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+          echo "Signed ${IMAGE}@${DIGEST}"
+          echo "Verify with: cosign verify ${IMAGE}:${{ steps.ver.outputs.version }} \\"
+          echo "  --certificate-identity 'https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/tags/${{ github.ref_name }}' \\"
+          echo "  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'"

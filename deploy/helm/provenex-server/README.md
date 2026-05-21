@@ -18,11 +18,20 @@ documented for production shape, but it has limited production hours
 in third-party environments. Treat it as a starting point you can
 customize, not a turnkey artifact. Concretely:
 
-- The container image `provenex/provenex-server:0.10.0` is not yet
-  published to a public registry. Until it is, you must build and push
-  the image yourself before `helm install` will succeed. The Dockerfile
-  is at the repo root (`Dockerfile.server`). A `make image` target and
-  publish workflow are planned for v0.11.
+- The server container image is published to GitHub Container Registry
+  as `ghcr.io/provenex/provenex-server:<version>`. It is built
+  multi-arch (linux/amd64 + linux/arm64) on every tag, and signed
+  with cosign keyless via the GitHub Actions OIDC identity (no
+  long-lived signing key). Verify on pull with:
+  ```bash
+  cosign verify ghcr.io/provenex/provenex-server:0.10.0 \
+    --certificate-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/v0.10.0' \
+    --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+  ```
+- The **operator image** `provenex/provenex-operator:<version>` is not
+  yet built or published. Operator users must build it themselves
+  (Dockerfile not yet shipped) or stick with the in-cluster `kopf` CLI
+  path. Tracked for v0.11.
 - Image references are by tag, not by digest. Pin to digests for
   production rollouts.
 - No `values.schema.json`: typos in your values overrides go undetected
@@ -113,7 +122,7 @@ See [docs/scaling.md#postgres-at-scale-measured-1m-chunks](../../../docs/scaling
 
 | Gap | Workaround | Tracked for |
 |---|---|---|
-| Image not on a public registry | Build + push to your own registry; set `image.repository` | v0.11 |
+| Operator image not on a public registry | Build + push to your own registry; only the server image is on GHCR today | v0.11 |
 | Image tags, not digests | Pin manually via `image.tag` or templating | v0.11 |
 | No `values.schema.json` | None; read templates carefully | v0.11 |
 | No `ServiceMonitor` template | Apply your own `ServiceMonitor` CR | v0.11 |
