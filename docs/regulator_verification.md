@@ -139,38 +139,61 @@ Drop this into any environment with Python and `cryptography`, point it at a rec
 
 ## Worked example
 
-Run against the in-repo demo receipt at [provenex_demo_receipt.json](../provenex_demo_receipt.json) (HMAC-signed for portability; the audit bundle script uses Ed25519 for cross-org distribution). The receipt records one source chunk with outcome `VERIFIED`, an inclusion proof against a 25-leaf transparency log, and a 64-character HMAC signature.
+The fastest way to get a real Provenex receipt to audit is to run the
+stdlib-only end-to-end demo. It builds a Merkle-backed index in a
+tempdir, ingests a chunk, produces a signed receipt, and writes the
+receipt to the current directory as `provenex_demo_receipt.json`.
 
 ```bash
-export PROVENEX_SIGNING_SECRET="<the shared HMAC secret the producer used>"
+pip install provenex-core
+
+export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+
+python -m provenex.cli.main selftest          # sanity check the install
+python examples/standalone_demo.py            # produces provenex_demo_receipt.json in cwd
+
 provenex audit provenex_demo_receipt.json
 ```
 
-Expected output on a matching secret:
+The receipt records one source chunk with outcome `VERIFIED`, an
+inclusion proof against a small transparency log, and an HMAC
+signature. Typical output on a matching secret:
 
 ```
-Receipt: prx_c486615764acfc1854920d8002c8a1a4
-Schema:  2.4.0
-Issued:  2026-05-18T21:17:34.169Z
+Receipt: prx_<32 hex>
+Schema:  2.5.0
+Issued:  2026-05-21T...Z
 
   Signature ........... [OK] hmac-sha256: valid
-  Transparency log .... tree_size=25 tree_root=4080c581d6c87d6bfb832e6c8d9a330c...
+  Transparency log .... tree_size=25 tree_root=...
 
   Source #0  [OK]  5 hashes against tree_size=25: valid
-    fingerprint: sha256:5df8e5c2333e82c2a4f8a5f4ed6b8a9b4296f5b85072f3457261...
+    fingerprint: sha256:...
     document:    policy_v4 (VERIFIED)
 
   Overall: PASS
 ```
 
-The CLI reads the receipt, re-derives the canonical bytes, computes the HMAC, compares in constant time, walks the inclusion proof, and prints PASS or FAIL. Editing any field in the JSON (a fingerprint hex character, the verification outcome, the tree root) and re-running the audit produces FAIL.
+The CLI reads the receipt, re-derives the canonical bytes, computes
+the HMAC, compares in constant time, walks the inclusion proof, and
+prints PASS or FAIL. Editing any field in the JSON (a fingerprint
+hex character, the verification outcome, the tree root) and
+re-running the audit produces FAIL.
 
-Try it on the audit bundle for the Ed25519 path. The bundle's `receipt-3-retrieval-tampered.json` is `receipt-1` with one fingerprint rewritten; running `provenex audit receipt-3-retrieval-tampered.json --public-key provenex_public_key.pem` returns:
+For the Ed25519 path, run `scripts/generate_audit_bundle.py`. It
+emits a zip containing two clean receipts, one tampered receipt, and
+the matching Ed25519 public key. `provenex audit` against the clean
+receipts returns PASS; against the tampered one it returns:
 
 ```
   Signature ........... [FAIL] ed25519: INVALID
   Overall: FAIL
 ```
+
+That bundle is the artifact a regulator can download and run against
+locally without any access to the producing organization's
+infrastructure.
 
 The auditor refused the receipt because the bytes the signature covers no longer match the bytes on disk.
 
