@@ -63,7 +63,7 @@ spec:
         runAsUser: 10001
       containers:
         - name: operator
-          image: provenex/provenex-operator:0.9.0
+          image: provenex/provenex-operator:0.10.0
           command: ["kopf"]
           args:
             - run

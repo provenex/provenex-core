@@ -3,7 +3,7 @@
   "info": {
     "title": "Provenex",
     "description": "Provenex HTTP API. Returns signed provenance receipts for retrieval, tool-call admission, memory writes, and model inference admission. Any language with SHA-256 + HMAC or Ed25519 can verify the receipts offline using only the public key (or shared HMAC secret).",
-    "version": "0.9.0"
+    "version": "0.10.0"
   },
   "paths": {
     "/v1/verify": {

@@ -3,7 +3,7 @@
 
 image:
   repository: provenex/provenex-server
-  tag: "0.9.0"
+  tag: "0.10.0"
   pullPolicy: IfNotPresent
 
 # Verify deployment: stateless, horizontally scaled.

@@ -9,7 +9,7 @@ description: |
   never holds key material.
 type: application
 version: 0.1.0
-appVersion: "0.9.0"
+appVersion: "0.10.0"
 keywords:
   - provenex
   - rag

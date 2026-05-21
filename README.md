@@ -1,9 +1,9 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.9.0)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.10.0)](https://pypi.org/project/provenex-core/)
 [![Downloads](https://img.shields.io/pypi/dm/provenex-core.svg?cacheSeconds=3600)](https://pypistats.org/packages/provenex-core)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.9.0)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.10.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 [![SBOM](https://img.shields.io/badge/SBOM-CycloneDX-blue.svg)](https://github.com/provenex/provenex-core/blob/main/docs/supply_chain.md)
 [![Sigstore](https://img.shields.io/badge/PyPI-Sigstore--signed-blueviolet.svg)](https://docs.pypi.org/attestations/)
@@ -115,7 +115,7 @@ One signed receipt per retrieval or per tool call. Retrieval receipts carry `sou
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.5.0",
-  "issuer": "provenex-core/0.9.0",
+  "issuer": "provenex-core/0.10.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "request_binding": {
     "algorithm": "sha256",

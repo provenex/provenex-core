@@ -9,6 +9,44 @@ on-the-wire receipt format follows its own schema-semver, tracked in
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-21
+
+### Added
+- **`IndexAvailabilityPolicy` and `CircuitBreaker`**. New `policy.availability` block on the unified YAML controls behavior when the provenance index is unreachable on the verify path. Two modes: `on_index_error: block` (default, fail-closed; raises `IndexUnavailable` → HTTP 503) and `degrade` (fail-open with a signed receipt carrying the new top-level `index_status` block). Per-replica circuit breaker with configurable threshold / window / cooldown short-circuits while OPEN. See [docs/runbooks/index_unavailability.md](docs/runbooks/index_unavailability.md) and [docs/failure_modes.md](docs/failure_modes.md).
+- **Receipt schema 2.5.0**. Optional top-level `index_status` block (`{available, error_class}`) records that the verify call ran while the index was unreachable. Present only in `degrade` mode when the index actually failed; absent on the normal path. Covered by the receipt signature. A 2.4.0 receipt without the field remains a valid 2.5.0 receipt.
+- **`provenex bench` CLI**. In-process SQLite reproducer for the Pattern A verify-path numbers in [docs/scaling.md](docs/scaling.md). Reports p50/p95/p99/p999 + ingest throughput as JSON, deterministic in `--seed`. Stdlib-only.
+- **`docs/failure_modes.md`**. Per-component fail-open / fail-closed table + blast-radius matrix.
+- **`docs/runbooks/index_unavailability.md`** and **`docs/runbooks/bad_policy_rollback.md`**.
+- **`docs/supply_chain.md`**. Per-release artifacts: PyPI Sigstore (PEP 740) attestations and CycloneDX SBOM, plus the local verify recipe.
+- **`SECURITY.md` "What Provenex does NOT prove"** section. Explicit non-claims, including the SDK-enforcement limit.
+- **`docs/threat_model.md` § Unwrapped agent code that bypasses the SDK**. Coverage gap vs adversarial bypass; gateway / tool-side / receipt-rate mitigation patterns.
+- **Release workflow** at [.github/workflows/release.yml](.github/workflows/release.yml). Tag-triggered build + CycloneDX SBOM + PyPI publish with Sigstore PEP 740 attestations via OIDC trusted publisher (no long-lived API token). SBOM attached to the GitHub Release.
+- **CI SBOM job**. Test workflow runs `cyclonedx-py environment` on every PR so SBOM tooling drift is caught before release.
+- **README badges**. SBOM (CycloneDX) and Sigstore-signed PyPI attestations.
+- **README "Reproducible performance"** section. Pattern A / B / C labeled with verify p50 / p99 / p999 and the `provenex bench` reproduction command.
+- **Metrics**: `provenex_index_error_total{error_class=...}` and `provenex_verify_degraded_total{error_class=...}` on `/metrics`.
+
+### Changed
+- **`/healthz` and `/readyz` semantics distinguished**. `/healthz` is liveness (always 200 once the process is up). `/readyz` returns 503 when the circuit breaker is OPEN or the sentinel index probe fails. Kubelet probes route traffic away from a replica that cannot currently issue VERIFIED receipts. Helm chart probe wiring unchanged.
+- **`verify_chunks` and `verify_chunks_async`** accept an optional `breaker=` kwarg (a `CircuitBreaker` instance). When supplied, mediates index access across calls. The HTTP server constructs a process-wide breaker on lifespan startup.
+- **`provenex audit`** reads `PROVENEX_RECEIPT_SECRET` in preference to the legacy `PROVENEX_SIGNING_SECRET`, matching the resolver in `provenex.core.receipt`. The legacy var still works as a fallback. Help text and error messages mention both.
+- **`provenex audit` human output** surfaces an `Index status` row when the receipt has `index_status.available=false`. JSON output includes the `index_status` key on every receipt (null when healthy).
+- **OpenAPI spec**. Regenerated; documents the 503 response shape for `/v1/verify` and `/readyz`.
+- **`docs/secure_defaults.md`** gains `availability.on_index_error` and `availability.timeout_seconds` rows; cross-links to `failure_modes.md` and `runbooks/index_unavailability.md`.
+
+### Fixed
+- **`CircuitBreaker` memory bound**. Failure deque now `deque(maxlen=threshold)`. A misbehaving caller that bypasses `allow()` and hammers `record_failure()` no longer causes unbounded memory growth. Sliding-window semantics preserved.
+- **`provenex audit` crash on malformed receipts**. Bare JSON arrays / nulls / primitives at the receipt root, and wrong-type `index_status` fields, now exit 2 with a clear "must be a JSON object" error instead of raising `AttributeError`.
+- **`provenex bench` input validation**. Rejects `verify_samples < 1`, `chunk_chars < 1`, and `unknown_rate` outside `[0, 1]`.
+
+### Test coverage
+- Circuit breaker state-machine + bounded-deque invariants.
+- `IndexAvailabilityPolicy` parsing, validation, and YAML round-trip (every knob).
+- Verify path in both `block` and `degrade` modes (sync + async).
+- HTTP integration for `/healthz`, `/readyz`, `/v1/verify` (block + degrade), metrics shape under both modes.
+- CLI env-var resolution; audit graceful on every fuzzed non-object JSON; audit doesn't crash on malformed `index_status`.
+- Trajectory chain with a degraded receipt in the middle still verifies offline.
+
 ## [0.9.0] - 2026-05-20
 
 ### Added
