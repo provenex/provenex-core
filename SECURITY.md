@@ -39,9 +39,7 @@ A real signature-bypass or receipt-forgery PoC should not travel by cleartext em
 > **Provenex security age recipient:**
 >
 > ```
-> <PLACEHOLDER: real age recipient to be published here on next release;
->  request the current recipient via contact@provenex.ai if you need to
->  send an encrypted report before this is populated.>
+> age1qnrg4rue5lhqmzp437mr4uqx33wcc0jngv490xsn3me2kwy6jyyqaphavj
 > ```
 
 To encrypt:
@@ -51,7 +49,8 @@ To encrypt:
 #   macOS:  brew install age
 #   Linux:  apt install age   (or)   go install filippo.io/age/cmd/age@latest
 
-age -r age1...REAL_RECIPIENT... -o report.age report.md
+age -r age1qnrg4rue5lhqmzp437mr4uqx33wcc0jngv490xsn3me2kwy6jyyqaphavj \
+    -o report.age report.md
 
 # Attach report.age to the email; subject line ok in cleartext.
 ```
