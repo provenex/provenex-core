@@ -46,13 +46,13 @@ availability:
   breaker_cooldown_seconds: 30
 ```
 
-* `on_index_error: block` (default, fail-closed) — the verify call
+* `on_index_error: block` (default, fail-closed). The verify call
   raises `IndexUnavailable`; the HTTP server returns 503. Use this
   when a receipt that says VERIFIED must mean the index was
   consulted. Right for regulated workloads, paid customer-facing
   inference, and most production deployments.
 * `on_index_error: degrade` (fail-open with a signed degraded
-  receipt) — every chunk's outcome becomes `UNVERIFIED` and the
+  receipt). Every chunk's outcome becomes `UNVERIFIED` and the
   receipt's signed `index_status` block records the failure. Use
   this for read-mostly workloads where the agent must keep moving
   and the audit trail matters more than the gate.
@@ -77,32 +77,32 @@ in `block` mode, every request to it will 503; if you run in
 ## Triage procedure
 
 1. **Check `/readyz` on each replica.**
-   * All replicas returning 200 with `breaker_state=closed` — the
-     index is healthy; the alert was likely a brief spike.
-   * Some replicas 503 with `breaker_open` — those replicas saw
+   * All replicas returning 200 with `breaker_state=closed`: the
+     index is healthy and the alert was likely a brief spike.
+   * Some replicas 503 with `breaker_open`: those replicas saw
      enough failures to trip. Investigate per-replica logs and
      pool state. The remaining replicas may still be healthy.
-   * All replicas 503 with `index_unreachable` — the Postgres
+   * All replicas 503 with `index_unreachable`: the Postgres
      instance is the problem. Jump to step 4.
 
 2. **Look at the metrics.**
-   * `provenex_index_error_total{error_class="timeout"}` rising —
+   * `provenex_index_error_total{error_class="timeout"}` rising:
      queries are slow. Increase `timeout_seconds`, scale the pool
      up (`PROVENEX_POOL_MIN` / `PROVENEX_POOL_MAX`), or investigate
      Postgres performance.
-   * `provenex_index_error_total{error_class="connection"}` rising
-     — the pool can't talk to Postgres at all. Network / DNS /
+   * `provenex_index_error_total{error_class="connection"}` rising:
+     the pool can't talk to Postgres at all. Network / DNS /
      credentials.
-   * `provenex_index_error_total{error_class="breaker_open"}` rising
-     — the breaker is doing its job; the underlying problem is
+   * `provenex_index_error_total{error_class="breaker_open"}` rising:
+     the breaker is doing its job; the underlying problem is
      whichever class spiked first.
 
 3. **Decide whether to flip to `degrade` mode.** This is an
    operational decision, not a permanent one:
-   * If receipts in this window must be verifiable for compliance
-     — leave it on `block`. Customers / agents will see 503s.
+   * If receipts in this window must be verifiable for compliance,
+     leave it on `block`. Customers / agents will see 503s.
      Resolve the underlying issue, then traffic resumes.
-   * If the audit trail is the goal and gating is secondary —
+   * If the audit trail is the goal and gating is secondary,
      temporarily set `on_index_error: degrade` in the policy YAML
      and restart (or hot-reload, if your deployment supports it).
      Every receipt issued during the outage will carry
@@ -144,7 +144,7 @@ block:
 
 The `index_status` block is covered by the receipt signature. A
 downstream SIEM or anomaly detector should treat
-`index_status.available=false` as a strong signal — the receipt
+`index_status.available=false` as a strong signal: the receipt
 is NOT evidence of verification; it is evidence that verification
 could not happen, with the time and (via the signature) the
 issuing replica's signer recorded. Distinguish from a healthy
@@ -169,10 +169,7 @@ streaming-export integrations.
 
 ## Related runbooks
 
-* [disaster_recovery.md](disaster_recovery.md) — total index loss,
-  signing key compromise, multi-region replication.
-* [postgres_operations.md](postgres_operations.md) — pool sizing,
-  schema checks, vacuum.
-* [key_rotation.md](key_rotation.md) — signer rotation.
-* [witness_log.md](witness_log.md) — split-view defense via the
-  transparency log.
+* [disaster_recovery.md](disaster_recovery.md): total index loss, signing key compromise, multi-region replication.
+* [postgres_operations.md](postgres_operations.md): pool sizing, schema checks, vacuum.
+* [key_rotation.md](key_rotation.md): signer rotation.
+* [witness_log.md](witness_log.md): split-view defense via the transparency log.

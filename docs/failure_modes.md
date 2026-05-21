@@ -19,12 +19,12 @@ check.
 | --- | --- | --- | --- | --- |
 | **Provenance index** (Postgres / SQLite) | Refuses to start without a reachable DSN. | `on_index_error: block` raises `IndexUnavailable` → HTTP 503. `on_index_error: degrade` returns a signed receipt with all outcomes `UNVERIFIED` and a top-level `index_status` block. Circuit breaker short-circuits while OPEN. | **Yes.** `policy.availability.on_index_error` (`block` \| `degrade`), `timeout_seconds`, breaker thresholds. Default is `block`. | [runbooks/index_unavailability.md](runbooks/index_unavailability.md) |
 | **Receipt signer** (HMAC / Ed25519 / KMS) | Refuses to start without `PROVENEX_RECEIPT_PRIVATE_KEY_FILE`, `PROVENEX_RECEIPT_SECRET`, or `PROVENEX_TENANTS_FILE`. The server will not emit unsigned receipts. | A signing failure propagates as a 5xx. The receipt is not issued. | **No, and intentionally.** "Fail open" here means issuing unsigned receipts, which is unacceptable for a proof system. KMS adapters can be plugged in for HA; see [docs/kms_adapters.md](kms_adapters.md). | [runbooks/key_rotation.md](runbooks/key_rotation.md), [runbooks/disaster_recovery.md](runbooks/disaster_recovery.md) |
-| **Policy evaluator — load** (unified YAML) | A policy that fails `Policy.from_yaml(...)` raises `PolicyParseError`. Server refuses to start. In CRD mode the operator patches `status.phase=Rejected` and leaves the prior ConfigMap untouched. | n/a | **No, and intentionally.** A typo in a policy must not silently allow. | [runbooks/bad_policy_rollback.md](runbooks/bad_policy_rollback.md) |
-| **Policy evaluator — per-request** (native YAML evaluator) | n/a | The native evaluator is deterministic and side-effect-free over the policy + inputs; it does not throw at runtime in production. A custom evaluator (Rego, OPA service) that throws would surface as a 5xx. | **No.** Failing-open on the access-control gate would defeat the gate. | [runbooks/bad_policy_rollback.md](runbooks/bad_policy_rollback.md) |
+| **Policy evaluator, load** (unified YAML) | A policy that fails `Policy.from_yaml(...)` raises `PolicyParseError`. Server refuses to start. In CRD mode the operator patches `status.phase=Rejected` and leaves the prior ConfigMap untouched. | n/a | **No, and intentionally.** A typo in a policy must not silently allow. | [runbooks/bad_policy_rollback.md](runbooks/bad_policy_rollback.md) |
+| **Policy evaluator, per-request** (native YAML evaluator) | n/a | The native evaluator is deterministic and side-effect-free over the policy + inputs; it does not throw at runtime in production. A custom evaluator (Rego, OPA service) that throws would surface as a 5xx. | **No.** Failing-open on the access-control gate would defeat the gate. | [runbooks/bad_policy_rollback.md](runbooks/bad_policy_rollback.md) |
 | **Verification gate** (`policy.verification`) | n/a | Pure function of `VerificationOutcome` per chunk. Cannot fail at runtime. | n/a | n/a |
 | **Transparency / witness log** (commercial) | Server runs without it. | A witness fetch failure does not block the verify path. Receipts continue to issue without inclusion proofs. | Witness URL configured via env; absence means no witness. | [runbooks/witness_log.md](runbooks/witness_log.md) |
 | **Tenant signer registry** (multi-tenant mode) | `PROVENEX_TENANTS_FILE` required when in multi-tenant mode. | A request with `X-Provenex-Tenant: <unknown>` returns 404. A request without the header to a multi-tenant-only server returns 503. | Tenant identity is the operator's concern; the server enforces. | [runbooks/disaster_recovery.md](runbooks/disaster_recovery.md) |
-| **Streaming export sink** (Kafka / file / stdout) | Sink construction failures surface at startup. | Per-receipt sink failures are swallowed with a `warnings.warn(...)` event and the verify path continues. RetryQueueSink buffers up to its `maxlen`. Failure to publish does NOT block the request. | Sink class is the operator's choice; retry policy lives on the sink. | n/a (no recovery needed — the receipt is still emitted to the caller) |
+| **Streaming export sink** (Kafka / file / stdout) | Sink construction failures surface at startup. | Per-receipt sink failures are swallowed with a `warnings.warn(...)` event and the verify path continues. RetryQueueSink buffers up to its `maxlen`. Failure to publish does NOT block the request. | Sink class is the operator's choice; retry policy lives on the sink. | n/a (no recovery needed, the receipt is still emitted to the caller) |
 | **Drift detector webhook** | Optional. Off if `PROVENEX_DRIFT_WEBHOOK_URL` is unset. | Webhook send failures are swallowed; the detector keeps counting. | URL + window + threshold configurable via env. | n/a |
 | **Index drift detector → registry** | Optional. | Lookup error short-circuits the warning; no impact on verify. | n/a | n/a |
 
@@ -36,7 +36,7 @@ which degrade, and which keep working untouched.
 
 | Failure | Verify | Tool-call admission | Ingest | `/healthz` | `/readyz` | Receipts already issued |
 | --- | --- | --- | --- | --- | --- | --- |
-| **Provenance index unreachable** (timeout / connection / pool exhausted) | `block`: 503. `degrade`: signed receipt with all-UNVERIFIED + `index_status`. | Unaffected. Admission decisions do not consult the index. | Fails — the receipt-producing `add_async` path also touches the index. | 200 | 503 (`breaker_open` or `index_unreachable`) | Untouched. Receipt signatures are independent of index state. |
+| **Provenance index unreachable** (timeout / connection / pool exhausted) | `block`: 503. `degrade`: signed receipt with all-UNVERIFIED + `index_status`. | Unaffected. Admission decisions do not consult the index. | Fails. The receipt-producing `add_async` path also touches the index. | 200 | 503 (`breaker_open` or `index_unreachable`) | Untouched. Receipt signatures are independent of index state. |
 | **Signer key file missing or unreadable at startup** | Server refuses to start. | Server refuses to start. | Server refuses to start. | n/a | n/a | Untouched. |
 | **Per-request signing failure** (KMS outage on a KMS-backed signer) | 5xx for the duration. | 5xx for the duration. | Unaffected (ingest does not sign). | 200 | 503 if signer is the blocker. | Untouched. |
 | **Policy file parse error at deploy** | Server refuses to start. Operator marks CR Rejected. | Server refuses to start. | Server refuses to start. | n/a | n/a | Untouched. |
@@ -48,7 +48,7 @@ which degrade, and which keep working untouched.
 | **Postgres replica failover** (primary down, replica promoted) | Brief 503 spike (timeout + connection error_class) while the pool reconnects. Breaker may trip and self-recover. | Unaffected. | Brief failure during the same window. | 200 | 503 during the window. | Untouched. |
 | **Entire deployment down** (process / node loss) | Total outage. | Total outage. | Total outage. | n/a | n/a | Untouched. Receipts already in the SIEM are verifiable offline by anyone with the public key / shared secret. |
 
-## Fail-open vs fail-closed — the design choice
+## Fail-open vs fail-closed, the design choice
 
 The product principle: the receipt's claim is the asset. A
 `VERIFIED` outcome must mean the index was consulted and the chunk
@@ -98,19 +98,12 @@ mode.
 
 ## Companion runbooks
 
-* [runbooks/index_unavailability.md](runbooks/index_unavailability.md)
-  — provenance index down or slow.
-* [runbooks/bad_policy_rollback.md](runbooks/bad_policy_rollback.md)
-  — wrong policy reached production.
-* [runbooks/key_rotation.md](runbooks/key_rotation.md) — signer
-  rotation, scheduled and emergency.
-* [runbooks/disaster_recovery.md](runbooks/disaster_recovery.md)
-  — total Postgres loss, signing key compromise, vector-store
-  drift, multi-region replication.
-* [runbooks/postgres_operations.md](runbooks/postgres_operations.md)
-  — pool sizing, schema checks, vacuum.
-* [runbooks/witness_log.md](runbooks/witness_log.md)
-  — transparency log gossip and split-view defense.
+* [runbooks/index_unavailability.md](runbooks/index_unavailability.md): provenance index down or slow.
+* [runbooks/bad_policy_rollback.md](runbooks/bad_policy_rollback.md): wrong policy reached production.
+* [runbooks/key_rotation.md](runbooks/key_rotation.md): signer rotation, scheduled and emergency.
+* [runbooks/disaster_recovery.md](runbooks/disaster_recovery.md): total Postgres loss, signing key compromise, vector-store drift, multi-region replication.
+* [runbooks/postgres_operations.md](runbooks/postgres_operations.md): pool sizing, schema checks, vacuum.
+* [runbooks/witness_log.md](runbooks/witness_log.md): transparency log gossip and split-view defense.
 
 ## What this document does NOT cover
 

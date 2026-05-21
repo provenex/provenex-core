@@ -30,7 +30,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from ..core.receipt import ProvenanceReceipt, ReceiptSigner
 from ..core.signer_registry import SignerRegistry, TenantNotFound
 from ..index.circuit import STATE_OPEN, CircuitBreaker
-from ..policy.availability import IndexUnavailable
+from ..policy.availability import IndexAvailabilityPolicy, IndexUnavailable
 from .keys import load_index_secret, load_receipt_signer
 from .metrics import Metrics
 from .models import (
@@ -209,8 +209,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # or from the IndexAvailabilityPolicy defaults otherwise. Per
     # replica: a breaker that learned one replica's pool was sick
     # should not also freeze a healthy replica.
-    from ..policy.availability import IndexAvailabilityPolicy
-
     availability = (
         policy.availability
         if policy is not None
@@ -229,7 +227,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.metrics = metrics
     app.state.drift_detector = _load_drift_detector()
     app.state.breaker = breaker
-    app.state.availability = availability
     app.state.started_at = time.time()
     try:
         yield

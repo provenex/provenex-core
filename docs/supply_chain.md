@@ -49,14 +49,19 @@ builds, signs, and publishes:
 # Install sigstore
 pip install sigstore
 
-# Download the wheel and its attestation bundle from the PyPI release page.
-# The bundle is exposed via the PyPI JSON API:
-curl -L -o provenex_core-X.Y.Z-py3-none-any.whl \
-  https://files.pythonhosted.org/packages/.../provenex_core-X.Y.Z-py3-none-any.whl
-curl -L -o provenex_core-X.Y.Z-py3-none-any.whl.publish.attestation \
-  https://pypi.org/integrity/.../provenex_core-X.Y.Z-py3-none-any.whl/provenance
+# 1) Download the wheel from PyPI.
+#    The PyPI "Provenance" panel for the release shows the download URL
+#    for the wheel and links to its attestation bundle. Use whichever
+#    file PyPI lists; the exact URLs change with each release.
+pip download --no-deps provenex-core==X.Y.Z
 
-# Verify the attestation against this repository's GitHub Actions identity.
+# 2) Fetch the attestation bundle.
+#    The bundle URL is documented under PyPI's PEP 740 attestations API.
+#    See https://docs.pypi.org/attestations/ for the current endpoint; we
+#    deliberately don't pin the URL here because PyPI's integrity API is
+#    still maturing.
+
+# 3) Verify the attestation against this repository's GitHub Actions identity.
 python -m sigstore verify identity \
   --bundle provenex_core-X.Y.Z-py3-none-any.whl.publish.attestation \
   --cert-identity 'https://github.com/provenex/provenex-core/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
@@ -93,7 +98,7 @@ actually present at build time.
   a baseline.
 
 If you need either of these as a procurement signal before we ship
-them, reach out — we have prioritized them above other backlog items
+them, reach out, we have prioritized them above other backlog items
 when customers have asked.
 
 ## Reporting a supply-chain concern

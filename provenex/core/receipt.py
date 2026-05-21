@@ -1103,7 +1103,7 @@ class ReceiptBuilder:
             request_binding=(
                 dict(request_binding) if request_binding else None
             ),
-            index_status=dict(index_status) if index_status else None,
+            index_status=dict(index_status) if index_status is not None else None,
         )
         if signer is not None:
             receipt.signature_algorithm = signer.algorithm

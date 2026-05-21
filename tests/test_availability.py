@@ -359,3 +359,102 @@ availability:
 def test_yaml_no_availability_block_uses_defaults():
     policy = Policy.from_text("version: 1\n")
     assert policy.availability == IndexAvailabilityPolicy()
+
+
+def test_yaml_availability_block_round_trips_every_knob():
+    """Every documented availability key parses with the exact value, so
+    we catch a future drift where one knob silently falls back to its
+    dataclass default."""
+    text = """
+version: 1
+availability:
+  on_index_error: degrade
+  timeout_seconds: 7.5
+  breaker_threshold: 12
+  breaker_window_seconds: 45.0
+  breaker_cooldown_seconds: 90.0
+"""
+    policy = Policy.from_text(text)
+    a = policy.availability
+    assert a.on_index_error == ON_ERROR_DEGRADE
+    assert a.timeout_seconds == pytest.approx(7.5)
+    assert a.breaker_threshold == 12
+    assert a.breaker_window_seconds == pytest.approx(45.0)
+    assert a.breaker_cooldown_seconds == pytest.approx(90.0)
+
+
+def test_yaml_availability_block_rejects_negative_timeout():
+    """Numeric validation in IndexAvailabilityPolicy.__post_init__ must
+    surface as a PolicyParseError, not a bare ValueError, so the operator
+    sees the same parse-error path as any other bad YAML key."""
+    from provenex.policy.evaluator import PolicyParseError
+
+    text = """
+version: 1
+availability:
+  timeout_seconds: -1.0
+"""
+    with pytest.raises(PolicyParseError):
+        Policy.from_text(text)
+
+
+# --------------------------------------------------------------------------- #
+# Offline audit of a degraded receipt                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_degraded_receipt_signature_survives_json_round_trip():
+    """A degraded receipt must remain offline-verifiable after a
+    JSON serialize / deserialize round-trip, which is the auditor's
+    actual path (the receipt was streamed to a sink, read back later,
+    verified with the public material)."""
+    import json as _json
+
+    from provenex import verify_receipt_signature
+
+    policy = Policy(
+        verification=VerificationPolicy(block_unverified=False),
+        availability=IndexAvailabilityPolicy(on_index_error=ON_ERROR_DEGRADE),
+    )
+    idx = _SyncFailingIndex(ConnectionRefusedError("boom"))
+    result = verify_chunks(
+        chunks=["alpha"], index=idx, signer=SIGNER, policy=policy
+    )
+
+    # Round-trip through JSON, then verify with a freshly-constructed
+    # signer holding the same secret (the auditor's posture).
+    payload = _json.dumps(result.receipt.to_dict())
+    parsed = _json.loads(payload)
+    assert parsed["index_status"]["available"] is False
+    assert parsed["index_status"]["error_class"] == "connection"
+
+    fresh_signer = HmacSha256Signer(secret=SECRET)
+    assert verify_receipt_signature(parsed, fresh_signer) is True
+
+
+def test_index_status_is_covered_by_signature():
+    """If a degraded receipt is rewritten to claim availability without
+    re-signing, the signature must NOT verify. This is the property
+    that distinguishes a signed annotation from a hint."""
+    import json as _json
+
+    from provenex import verify_receipt_signature
+
+    policy = Policy(
+        verification=VerificationPolicy(block_unverified=False),
+        availability=IndexAvailabilityPolicy(on_index_error=ON_ERROR_DEGRADE),
+    )
+    idx = _SyncFailingIndex(ConnectionRefusedError("boom"))
+    result = verify_chunks(
+        chunks=["alpha"], index=idx, signer=SIGNER, policy=policy
+    )
+    d = result.receipt.to_dict()
+    # Tamper: drop the index_status block while leaving the signature.
+    d_tampered = dict(d)
+    d_tampered.pop("index_status")
+    assert verify_receipt_signature(d_tampered, HmacSha256Signer(secret=SECRET)) is False
+
+    # And: rewriting error_class also breaks the signature.
+    d_rewritten = _json.loads(_json.dumps(d))
+    d_rewritten["index_status"]["error_class"] = "other"
+    assert verify_receipt_signature(d_rewritten, HmacSha256Signer(secret=SECRET)) is False

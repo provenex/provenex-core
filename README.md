@@ -446,9 +446,9 @@ Three deployment patterns, each with separate latency numbers. The bench code th
 
 | Pattern | Where the index lives | Verify p50 / p99 / p999 | Throughput | Best for |
 | --- | --- | --- | --- | --- |
-| **A — In-process SQLite** | Same process as the agent | **37.6 µs / 54.4 µs / 106.7 µs** (100K-chunk warm cache) | 24.4k ops/s single-threaded | Dev, demos, single-node deployments, anywhere a Postgres dependency is unwelcome |
-| **B — Sidecar HTTP** | Adjacent container on the same host | Between A and C; localhost network adds ~100–300 µs per call | Equal to A modulo loopback overhead | Multi-language agents, polyglot fleets, or where the agent runtime can't import Python |
-| **C — Centralized async Postgres** | Shared Postgres cluster, async pool | **p50 1.57 ms / p99 2.48 ms** at 4 concurrent readers, 1M chunks; **p50 7.30 ms / p99 16.10 ms** at 16 concurrent readers | 2.1k–2.5k ops/s per replica; horizontal scaling on read replicas | Multi-pod, multi-region deployments; everything where ingest and verify run in different processes |
+| **A. In-process SQLite** | Same process as the agent | **37.6 µs / 54.4 µs / 106.7 µs** (100K-chunk warm cache) | 24.4k ops/s single-threaded | Dev, demos, single-node deployments, anywhere a Postgres dependency is unwelcome |
+| **B. Sidecar HTTP** | Adjacent container on the same host | Between A and C; localhost network adds ~100–300 µs per call | Equal to A modulo loopback overhead | Multi-language agents, polyglot fleets, or where the agent runtime can't import Python |
+| **C. Centralized async Postgres** | Shared Postgres cluster, async pool | **p50 1.57 ms / p99 2.48 ms** at 4 concurrent readers, 1M chunks; **p50 7.30 ms / p99 16.10 ms** at 16 concurrent readers | 2.1k–2.5k ops/s per replica; horizontal scaling on read replicas | Multi-pod, multi-region deployments; everything where ingest and verify run in different processes |
 
 Reproduce Pattern A on your hardware:
 

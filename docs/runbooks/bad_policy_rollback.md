@@ -34,14 +34,14 @@ If the policy passes validation but is semantically wrong, the
 operator updates the ConfigMap with annotation
 `provenex.io/policy-version-hash=<hash>` and the server picks up
 the new policy on its next reload (depends on your reload
-mechanism — sidecar reloader, restart, or volume remount).
+mechanism: sidecar reloader, restart, or volume remount).
 
 ### B. Plain server (`PROVENEX_POLICY_FILE`)
 
 The server reads `PROVENEX_POLICY_FILE` once at startup. Policy
 parse errors prevent the server from starting; this is intentional
-fail-closed behavior. Updating the policy means redeploying with a
-new file content — typically a ConfigMap update + pod restart.
+fail-closed behavior. Updating the policy means redeploying with
+new file content (typically a ConfigMap update + pod restart).
 
 ## Detection
 
@@ -94,7 +94,7 @@ The rollback shape depends on which deployment path is in use.
 1. **Confirm the current state.**
    ```bash
    kubectl get policy.provenex.io -n <ns> <name> -o yaml
-   # Note status.policyVersionHash — that is the active hash.
+   # Note status.policyVersionHash; that is the active hash.
    ```
 
 2. **Re-apply the prior CR.** If your Policy CR is managed by
@@ -110,7 +110,7 @@ The rollback shape depends on which deployment path is in use.
 
 3. **Wait for the server to reload.** Reload mechanism is your
    choice; common patterns:
-   * Configmap-reload sidecar — the server picks up the new file
+   * Configmap-reload sidecar: the server picks up the new file
      on its next poll (usually within 60s).
    * Pod restart via rollout. This is the safest pattern for a
      bad policy: receipts after the rollback carry the prior
@@ -180,8 +180,6 @@ those receipts as evidence to investigate:
 
 ## Related runbooks
 
-* [index_unavailability.md](index_unavailability.md) — what happens
-  when the verify backend can't be reached.
-* [key_rotation.md](key_rotation.md) — signer rotation.
-* [disaster_recovery.md](disaster_recovery.md) — total loss
-  scenarios.
+* [index_unavailability.md](index_unavailability.md): what happens when the verify backend can't be reached.
+* [key_rotation.md](key_rotation.md): signer rotation.
+* [disaster_recovery.md](disaster_recovery.md): total loss scenarios.

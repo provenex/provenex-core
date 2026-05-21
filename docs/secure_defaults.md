@@ -24,6 +24,8 @@ This is a reference checklist, not a runbook. The operational procedures (key ro
 | Index backend | SQLite (`SQLiteProvenanceIndex`) | Postgres (`PostgresProvenanceIndex`) for multi-node production | SQLite is the development default and supports single-node deployments cleanly. Postgres is the production backend; identical receipt format, same `ProvenanceIndex` interface. See [scaling.md § Multi-node deployment shape](scaling.md#multi-node-deployment-shape-postgres-backend). |
 | Transparency log | Off (`SQLiteProvenanceIndex` is HMAC-rows-only) | On (`MerkleSQLiteProvenanceIndex` or `MerklePostgresProvenanceIndex`) when an external auditor may hold receipts | Without the Merkle log, the per-row HMAC catches single-row tampering but not insertion / removal by a key-holder. The log closes that gap when paired with witness publication. |
 | Caller-hash mode | Bare SHA-256 (`sha256:<hex>` prefix) | HMAC-SHA256 with a per-deployment salt (`hmac-sha256:<hex>` prefix) for multi-tenant deployments | Bare SHA-256 lets any auditor with the original caller dict re-derive `caller_hash`. In multi-tenant deployments where two customers' detectors should not cross-correlate users, salt via `caller_hash_salt=b"..."`. See [receipt_format.md § Top-level `caller_hash`](receipt_format.md#top-level-caller_hash-schema-230). |
+| `policy.availability.on_index_error` | `"block"` (fail-closed) | `"block"` (fail-closed) for every deployment where a receipt that says `VERIFIED` must mean the index was consulted | When the provenance index is unreachable, `block` raises `IndexUnavailable` and the HTTP server returns 503. `degrade` issues a signed receipt with all-`UNVERIFIED` outcomes plus a signed top-level `index_status` block. Use `degrade` only for read-mostly workloads where the audit trail matters more than the gate. See [failure_modes.md](failure_modes.md) and [runbooks/index_unavailability.md](runbooks/index_unavailability.md). |
+| `policy.availability.timeout_seconds` | `2.0` (async path) | `2.0` for most deployments; tune up if your Postgres p99 is consistently above 1s | Bounds the verify-path index call. Sync callers should set Postgres `statement_timeout` instead. A timeout counts as an index failure for the circuit breaker. |
 
 ## block_unverified: the default that will flip
 
@@ -76,8 +78,10 @@ For the regulatory analysis around peppered fingerprints and PII classification,
 ## Read next
 
 - [threat_model.md](threat_model.md): the attacker model that every default in the table above is calibrated against.
+- [failure_modes.md](failure_modes.md): per-component fail-open / fail-closed behavior and the blast-radius table for every failure listed above.
 - [runbooks/key_rotation.md](runbooks/key_rotation.md): the operational procedure for the signing-key storage row.
 - [runbooks/witness_log.md](runbooks/witness_log.md): the operational procedure for the witness-log row.
+- [runbooks/index_unavailability.md](runbooks/index_unavailability.md): operational procedure for the `availability` rows.
 - [scaling.md](scaling.md): the Postgres / multi-node story that the index-backend row points at.
 
 Conformance: `provenex selftest` exercises peppered-mode unlinkability, the five-outcome precedence, the receipt signature roundtrip, the request-binding determinism, and witness-log chain integrity against the installed binary. Run it after every change to the signer, the index, or the pepper.
