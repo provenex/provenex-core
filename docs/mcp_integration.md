@@ -22,7 +22,7 @@ A successful MCP admission produces a receipt with `trajectory.step_kind="tool_c
 ```json
 {
   "receipt_id": "prx_...",
-  "schema_version": "2.4.0",
+  "schema_version": "2.5.0",
   "issuer": "provenex-core/0.9.0",
   "caller_hash": "sha256:7a2bf01...",
   "request_binding": { ... },

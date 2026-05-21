@@ -103,7 +103,7 @@ themselves are unchanged.
       "name": "provenex-core",
       "version": "0.9.0",
       "vendor_name": "Provenex",
-      "feature": { "name": "provenex-receipt", "version": "2.4.0" }
+      "feature": { "name": "provenex-receipt", "version": "2.5.0" }
     },
     "correlation_uid": "trj_…",
     "session_uid": "session-2026-002",

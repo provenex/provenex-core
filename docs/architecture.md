@@ -80,10 +80,13 @@ the canonical signing payload.
 - [`k8s_deployment.md`](k8s_deployment.md) - Helm chart walkthrough plus sizing guide for the `provenex-server` workload.
 - [`key_management.md`](key_management.md) - HMAC vs Ed25519 vs KMS / HSM, rotation procedures, threat model.
 - [`receipt_retention.md`](receipt_retention.md) - 7-year compliance retention pattern (S3 Object Lock + Glacier + Athena); maps to GCP and Azure.
+- [`failure_modes.md`](failure_modes.md) - per-component fail-open/fail-closed behavior, blast-radius table, and pointers to every runbook.
 - [`runbooks/key_rotation.md`](runbooks/key_rotation.md) - HMAC and Ed25519 rotation procedures.
 - [`runbooks/witness_log.md`](runbooks/witness_log.md) - running the witness / checkpoint log in production.
 - [`runbooks/postgres_operations.md`](runbooks/postgres_operations.md) - schema management, failover, replica lag, backup and restore, index rebuild.
 - [`runbooks/disaster_recovery.md`](runbooks/disaster_recovery.md) - total Postgres loss, signing-key compromise, ingestion drift, multi-region patterns.
+- [`runbooks/index_unavailability.md`](runbooks/index_unavailability.md) - block / degrade modes, the circuit breaker, `/healthz` vs `/readyz` semantics.
+- [`runbooks/bad_policy_rollback.md`](runbooks/bad_policy_rollback.md) - detecting and rolling back a wrong policy push.
 - [`runbooks/sizing_guide.md`](runbooks/sizing_guide.md) - reference deployment shapes and the SQLite-vs-Postgres-vs-shard decision tree.
 - [`streaming_export_ops.md`](streaming_export_ops.md) - sink-failure semantics, backpressure, recovery, OCSF quirks.
 - [`data_sovereignty.md`](data_sovereignty.md) - multi-region deployment patterns and GDPR Article 17 mechanics.

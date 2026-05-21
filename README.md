@@ -112,7 +112,7 @@ One signed receipt per retrieval or per tool call. Retrieval receipts carry `sou
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "2.4.0",
+  "schema_version": "2.5.0",
   "issuer": "provenex-core/0.9.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "request_binding": {
@@ -527,9 +527,10 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 - [`docs/architecture.md`](https://github.com/provenex/provenex-core/blob/main/docs/architecture.md): the technical documentation entry point and source map
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): unified policy reference (verification + access control + tool-call admission), DSL, worked examples, commercial roadmap
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): full algorithm, threat model, and architectural comparison to embedding-based systems
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.4.0 specification (current); full version history table inside
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.5.0 specification (current); full version history table inside
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started, including a policy-driven retrieval path
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended/undefended threats, trust model for policy decisions
+- [`docs/failure_modes.md`](https://github.com/provenex/provenex-core/blob/main/docs/failure_modes.md): per-component fail-open/fail-closed behavior + blast-radius table; pointers into the runbooks
 - [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): 1M-chunk benchmark numbers and policy-evaluation latency profile
 
 **Project:**

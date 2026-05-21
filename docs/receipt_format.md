@@ -2,7 +2,7 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`2.4.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`. Schema 2.4.0 (v0.8.0) adds the `request_binding` block and per-source `entry_kind`.
+This document specifies the schema. The current schema version is **`2.5.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`. Schema 2.4.0 (v0.8.0) adds the `request_binding` block and per-source `entry_kind`. Schema 2.5.0 adds the optional top-level `index_status` block recording that the verify call ran while the provenance index was unreachable.
 
 Schema history:
 
@@ -19,6 +19,7 @@ Schema history:
 | `2.2.0` | **Tool-call admission.** Optional top-level `actions[]` array (tool-call records, parallel to `sources[]`); optional `policy.tool_call_control` subsection (admission decision record, parallel to `policy.access_control`); `summary` gains `total_actions` / `actions_allowed` / `actions_denied` when actions are present. Additive: a 2.1.0 receipt with no actions is a valid 2.2.0 receipt; a 2.1.0 verifier that ignores unknown fields validates a 2.2.0 receipt with actions. |
 | `2.3.0` | **Source-of-record fields for downstream anomaly detectors / SIEMs.** Top-level `caller_hash` - SHA-256 over the canonical JSON of `request_context.caller`, emitted on every receipt produced with a `RequestContext` in scope. Optional `trajectory.session_id` - caller-chosen opaque multi-trajectory correlation key. Both fields are decision-and-proof artifacts (do not influence policy decisions; `inputs_hash` is unchanged when only `session_id` differs). Additive: a 2.2.0 receipt remains a valid 2.3.0 receipt; a 2.2.0 verifier that ignores unknown fields validates a 2.3.0 receipt unchanged; no signing-format change. |
 | `2.4.0` | **Window-aligned splice control + request-to-receipt binding (v0.8.0).** Optional top-level `request_binding` block cryptographically ties a receipt to the triggering query and request_context (so a valid receipt cannot be presented as evidence for a different query). Optional per-source `entry_kind` field reports the index row class that was matched (`"whole_chunk"` vs `"window"`); only `whole_chunk` rows produce VERIFIED. Both fields are part of the canonical signing payload. Additive on the wire: a 2.3.0 receipt without either field is a valid 2.4.0 receipt. The underlying index storage change (an `entry_kind` column in the canonical signing payload) is breaking - pre-v0.8.0 indexes must be re-ingested. |
+| `2.5.0` | **Index-availability annotation.** Optional top-level `index_status` block (`{ "available": false, "error_class": "timeout" \| "connection" \| "breaker_open" \| "other" }`) records that the verify call ran while the provenance index was unreachable. Present only in `on_index_error="degrade"` mode when the index actually failed; absent on the normal path. The block is covered by the receipt signature, so a degraded receipt cannot be silently promoted. Additive on the wire: a 2.4.0 receipt without the field is a valid 2.5.0 receipt. |
 
 Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
 
@@ -50,7 +51,7 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "2.4.0",
+  "schema_version": "2.5.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
   "issuer": "provenex-core/0.9.0",
   "caller_hash": "sha256:<64 hex chars>",   // optional (schema 2.3.0+)
@@ -59,6 +60,10 @@ The schema is intentionally:
     "query_hash": "sha256:<64 hex chars>",
     "request_context_hash": "sha256:<64 hex chars>",
     "request_hash": "sha256:<64 hex chars>"
+  },
+  "index_status": {                          // optional (schema 2.5.0+)
+    "available": false,
+    "error_class": "timeout"
   },
   "output": { ... },
   "sources": [ ... ],
@@ -78,11 +83,12 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. Always `2.4.0` for receipts produced by this SDK. |
+| `schema_version` | string | Semver. Always `2.5.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
 | `issuer` | string | Software identifier, e.g. `provenex-core/0.9.0`. |
 | `caller_hash` | string | Optional (2.3.0+). `"sha256:<hex>"` over the canonical JSON of `request_context.caller`. Present on every receipt produced from a `RequestContext`; absent on the standalone-builder path. See **Top-level `caller_hash`** below. |
 | `request_binding` | object | Optional (2.4.0+). Cryptographically ties this receipt to the triggering query / prompt + request_context. Present when `verify_chunks(..., request_text=...)` or `admission_check(..., request_text=...)` is called with at least one of `request_text` or `request_context` supplied. See **Top-level `request_binding`** below. |
+| `index_status` | object | Optional (2.5.0+). Present only when this receipt was produced in `on_index_error="degrade"` mode AND the provenance index was actually unavailable for this call. Shape: `{ "available": false, "error_class": "timeout" \| "connection" \| "breaker_open" \| "other" }`. Distinguishes a "we tried to verify but could not reach the index" receipt from a receipt where every chunk happened to be a genuine miss. Covered by the receipt signature. See **Top-level `index_status`** below. |
 | `output` | object | See below. |
 | `sources` | array | One entry per retrieved chunk. See below. |
 | `actions` | array | Optional (2.2.0+). One entry per tool-call attempt. Present only when the receipt covers tool-call admissions; absent for pure-retrieval receipts. See below. |
@@ -178,6 +184,28 @@ A cryptographic binding between the receipt and the request that produced it. Wi
 **The verbatim query text is never stored on the receipt.** Only its hash. Operators who omit `request_text` get `query_hash: null` and the block records that the binding is incomplete - the omission is auditable, not hidden.
 
 **Covered by the signature.** Any modification to `query_hash`, `request_context_hash`, or `request_hash` invalidates the receipt signature. A receipt cannot be re-presented as evidence for a different query without breaking the signature.
+
+## Top-level `index_status` *(schema 2.5.0+)*
+
+A signed annotation that the verify call ran while the provenance index was unreachable. Present **only** when the operator configured `policy.availability.on_index_error="degrade"` AND the index actually failed for this call. Absent on the normal path - which is the common case and remains shape-identical to a 2.4.0 receipt.
+
+```json
+{
+  "index_status": {
+    "available": false,
+    "error_class": "timeout"
+  }
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `available` | boolean | Always `false` when the block is present. (The block is omitted entirely on the normal path; there is no `available: true` shape.) |
+| `error_class` | string | One of `"timeout"` (the verify call exceeded `availability.timeout_seconds`), `"connection"` (the index pool refused or dropped the connection), `"breaker_open"` (the circuit breaker had already tripped and this call was short-circuited without going near the index), or `"other"` (an index-side error the wrapper could not classify). The HTTP server emits a matching `provenex_index_error_total{error_class="..."}` counter sample for every degraded receipt. |
+
+**Why this matters.** Without this block, a degraded receipt looks identical to a healthy receipt where every chunk just happened to be a genuine miss. Anyone consuming receipts downstream - SIEM, anomaly detector, regulator - would have to reason about whether the all-UNVERIFIED case is "the index was down" or "the agent retrieved un-indexed content." The block makes the difference explicit and tamper-evident: it is part of the canonical signing payload, so a degraded receipt cannot be silently promoted to a healthy one without invalidating the signature.
+
+**Block vs. degrade.** Operators who run in `on_index_error="block"` (the default) never see this block on a receipt - the verify call raises `IndexUnavailable` instead, and the HTTP server returns 503 with `error_class` in the response body. Use degrade mode when the agent's audit trail matters more than the gating, block mode when the gate matters more than continued availability.
 
 ## `sources[]`
 
