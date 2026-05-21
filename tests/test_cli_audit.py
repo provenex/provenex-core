@@ -364,3 +364,81 @@ def test_audit_receipt_without_transparency_log_still_works(monkeypatch):
     code, stdout, _ = _run_audit(str(receipt_path))
     assert code == 0
     assert "No inclusion proofs" in stdout
+
+
+def _write_degraded_receipt(workdir: Path) -> Path:
+    """Build a degraded receipt and return its path."""
+    from provenex import (
+        IndexAvailabilityPolicy,
+        Policy,
+        VerificationPolicy,
+        verify_chunks,
+    )
+
+    class _FailingIndex:
+        def verify_batch(self, fingerprints):
+            raise ConnectionRefusedError("simulated outage")
+
+    secret = b"test_secret_for_audit_v1"
+    signer = HmacSha256Signer(secret=secret)
+    policy = Policy(
+        verification=VerificationPolicy(block_unverified=False),
+        availability=IndexAvailabilityPolicy(on_index_error="degrade"),
+    )
+    result = verify_chunks(
+        chunks=["alpha chunk"], index=_FailingIndex(),
+        signer=signer, policy=policy,
+    )
+    out = workdir / "degraded.json"
+    out.write_text(result.receipt.to_json())
+    return out
+
+
+def test_audit_human_output_flags_degraded_receipt(monkeypatch):
+    """A receipt with index_status.available=false must show a DEGRADED
+    line in the human summary so a degraded receipt is visually
+    distinguishable from a healthy one."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path = _write_degraded_receipt(workdir)
+    code, stdout, _ = _run_audit(str(receipt_path))
+    assert code == 0  # signature is still valid
+    assert "DEGRADED" in stdout
+    assert "connection" in stdout  # error_class surfaced
+
+
+def test_audit_human_output_does_not_show_index_status_for_healthy_receipt(monkeypatch):
+    """Healthy receipts must NOT print the Index status line."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path, _ = _write_receipt(workdir)
+    code, stdout, _ = _run_audit(str(receipt_path))
+    assert code == 0
+    assert "Index status" not in stdout
+    assert "DEGRADED" not in stdout
+
+
+def test_audit_json_output_includes_index_status_when_degraded(monkeypatch):
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path = _write_degraded_receipt(workdir)
+    code, stdout, _ = _run_audit(str(receipt_path), "--json")
+    assert code == 0
+    report = json.loads(stdout)
+    assert report["index_status"] == {
+        "available": False,
+        "error_class": "connection",
+    }
+
+
+def test_audit_json_output_index_status_is_null_when_healthy(monkeypatch):
+    """JSON mode must include the index_status key even when null so
+    downstream tooling has a stable shape to read."""
+    workdir = Path(tempfile.mkdtemp())
+    monkeypatch.setenv("PROVENEX_SIGNING_SECRET", "test_secret_for_audit_v1")
+    receipt_path, _ = _write_receipt(workdir)
+    code, stdout, _ = _run_audit(str(receipt_path), "--json")
+    assert code == 0
+    report = json.loads(stdout)
+    assert "index_status" in report
+    assert report["index_status"] is None

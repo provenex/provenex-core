@@ -261,6 +261,17 @@ def create_app() -> FastAPI:
         response_model=VerifyResponse,
         tags=["verify"],
         summary="Verify retrieved chunks; emit a signed receipt.",
+        responses={
+            503: {
+                "description": (
+                    "Provenance index unavailable and the operator chose "
+                    "`on_index_error=block`. The response body carries "
+                    "`{error: 'index_unavailable', error_class: "
+                    "'timeout'|'connection'|'breaker_open'|'other', "
+                    "message: '...'}`."
+                ),
+            },
+        },
     )
     async def verify(body: VerifyRequest, request: Request) -> VerifyResponse:
         from ..core.verify import verify_chunks_async
@@ -487,6 +498,15 @@ def create_app() -> FastAPI:
         "/readyz",
         tags=["health"],
         summary="Readiness probe: can this replica issue VERIFIED receipts now?",
+        responses={
+            503: {
+                "description": (
+                    "Not ready. Response body carries "
+                    "`{error: 'breaker_open'|'index_unreachable', "
+                    "message: '...'}`."
+                ),
+            },
+        },
     )
     async def readyz(request: Request) -> JSONResponse:
         """Readiness: the index is reachable AND the circuit breaker

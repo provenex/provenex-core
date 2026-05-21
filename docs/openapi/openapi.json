@@ -34,6 +34,9 @@
               }
             }
           },
+          "503": {
+            "description": "Provenance index unavailable and the operator chose `on_index_error=block`. The response body carries `{error: 'index_unavailable', error_class: 'timeout'|'connection'|'breaker_open'|'other', message: '...'}`."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -217,6 +220,7 @@
           "health"
         ],
         "summary": "Liveness probe.",
+        "description": "Liveness: the process is up and running.\n\nDoes NOT consult the index. Use ``/readyz`` to check whether\nthis replica can currently issue VERIFIED receipts.",
         "operationId": "healthz_healthz_get",
         "responses": {
           "200": {
@@ -235,7 +239,8 @@
         "tags": [
           "health"
         ],
-        "summary": "Readiness probe.",
+        "summary": "Readiness probe: can this replica issue VERIFIED receipts now?",
+        "description": "Readiness: the index is reachable AND the circuit breaker\nis closed.\n\nA replica that returns 200 here is ready to serve a verify\nrequest whose receipt may carry a VERIFIED outcome. A replica\nwhose breaker is OPEN is still alive (``/healthz`` returns\n200) and may still serve verify requests in\n``on_index_error=degrade`` mode, but every receipt it issues\nright now will be degraded. The distinction matters to a\nload balancer or k8s controller that wants to route traffic\naway from a replica that can't see the index.\n\nReturns 503 with a structured detail when not ready.",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
@@ -245,6 +250,9 @@
                 "schema": {}
               }
             }
+          },
+          "503": {
+            "description": "Not ready. Response body carries `{error: 'breaker_open'|'index_unreachable', message: '...'}`."
           }
         }
       }

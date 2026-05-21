@@ -99,9 +99,13 @@ witness:
 networkPolicy:
   enabled: true
 
-# Probes — readyz hits the pool with a sentinel verify so it fails only
-# when the backend pool is truly unhealthy. The liveness probe is a
-# cheap /healthz.
+# Probes. /readyz fails (503) when the index pool is unreachable OR when
+# this replica's circuit breaker is OPEN, so a replica that cannot
+# currently issue VERIFIED receipts gets routed out of the load balancer
+# until it recovers. /healthz is a cheap process-up check and stays 200
+# even when the breaker is OPEN, so kubelet does not restart a replica
+# that is correctly degraded.
+# See docs/runbooks/index_unavailability.md.
 probes:
   liveness:
     initialDelaySeconds: 5

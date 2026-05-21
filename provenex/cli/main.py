@@ -622,6 +622,13 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     proof_results = _audit_inclusion_proofs(receipt)
     all_ok = sig_ok and all(ok for _, ok, _ in proof_results)
 
+    # Schema 2.5.0: surface index_status when present so the auditor sees
+    # immediately that this is a degraded receipt (the wrapper failed to
+    # reach the index). The signature still verifies; the receipt is
+    # legitimate, but its semantic claim is "we tried to verify and could
+    # not," not "everything verified."
+    index_status = receipt.get("index_status")
+
     if args.json:
         report = {
             "receipt_id": receipt.get("receipt_id"),
@@ -631,6 +638,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
                 {"source_index": i, "ok": ok, "message": msg}
                 for i, ok, msg in proof_results
             ],
+            "index_status": index_status,
             "overall": "PASS" if all_ok else "FAIL",
         }
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -644,6 +652,21 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
         mark = _green("OK") if sig_ok else _red("FAIL")
         print(f"  Signature ........... [{mark}] {sig_msg}")
+
+        if index_status is not None:
+            available = index_status.get("available")
+            error_class = index_status.get("error_class", "?")
+            if available is False:
+                print(
+                    f"  Index status ........ [{_red('DEGRADED')}] "
+                    f"index was unavailable when issued "
+                    f"(error_class={error_class})"
+                )
+            else:
+                print(
+                    f"  Index status ........ available={available} "
+                    f"error_class={error_class}"
+                )
 
         log = receipt.get("transparency_log") or {}
         if log:
