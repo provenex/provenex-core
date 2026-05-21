@@ -90,6 +90,21 @@ Out of scope (please do not report):
 - Third-party dependencies (PyYAML, psycopg, cryptography, kafka-python, boto3, google-cloud-pubsub, fastapi, uvicorn, kopf, kubernetes, PyJWT, and the rest). Report those upstream; we will track and adopt fixes when available.
 - Theoretical attacks against the underlying primitives (SHA-256 collision, Ed25519 forgery) absent a concrete exploit. Cryptographic primitive choices are documented in [docs/how_it_works.md](docs/how_it_works.md).
 
+## What Provenex does NOT prove
+
+This is a deliberate non-claim list. A security or procurement reviewer should know what is out of scope *before* they ask. Each item here has a deeper treatment in [docs/threat_model.md § Threats we explicitly do not protect against](docs/threat_model.md#threats-we-explicitly-do-not-protect-against); this section is the index.
+
+- **Provenex does not prove that an LLM answer is correct.** Receipts record what chunks the retriever returned and the SHA-256 of the answer text. They do NOT detect hallucinations, faithfulness violations, or wrong inferences over correct inputs. Use a separate grounding / faithfulness layer for that.
+- **Provenex does not prove that a tool call ran.** Receipts record the admission decision before the tool was invoked. Whether the tool actually executed, succeeded, or had the side effects it claimed is outside the receipt's claim. The execution log is the customer's existing observability stack.
+- **Provenex does not prove that the agent process called Provenex at all.** Provenex is a library the agent imports. An agent that bypasses the wrapper (or a parallel process running unwrapped) produces no Provenex evidence — and the absence of a receipt is not, on its own, proof of misbehavior. See [docs/threat_model.md § Unwrapped agent code that bypasses the SDK](docs/threat_model.md#unwrapped-agent-code-that-bypasses-the-sdk) for the mitigation pattern.
+- **Provenex does not prove that retrieved chunks are safe to feed an LLM.** Prompt-injection content inside a chunk that was correctly fingerprinted and authorized by the operator still becomes part of the LLM context. Provenex verifies provenance, not content safety. Pair with an input-sanitization or jailbreak-detection layer when prompt injection matters.
+- **Provenex does not prove that the policy was the right policy.** The receipt records the policy that was in effect and the decision it produced. Whether that policy was authored correctly is an upstream governance question; the receipt makes it answerable (every decision is tied to a `policy_version_hash`), but does not answer it.
+- **Provenex does not prove that the operator and the auditor are different parties.** An operator who controls both the signing key and the policy file can produce internally-consistent receipts that say anything. Defence is organizational (separation of duties, transparency-log gossip with external witnesses on the commercial path). See [docs/threat_model.md § Operator-with-everything can produce any decision](docs/threat_model.md#operator-with-everything-can-produce-any-decision).
+- **Provenex does not prove that the vector database returned authorized content.** If an attacker rewrites embeddings or row metadata in the vector DB itself, the retriever may return chunks that are semantically unrelated to what was authorized but whose *text* still matches a fingerprinted entry; that text verifies. Vector-DB-level integrity is a separate concern.
+- **Provenex does not prove anything about a compromised signing key.** A held key forges receipts. The defence is operational: rotate, store in HSM / KMS, treat the signer host as you would a TLS server key. See [docs/runbooks/key_rotation.md](docs/runbooks/key_rotation.md).
+
+What the receipt DOES prove is narrow and precise: under the named policy with the named version hash, evaluating the recorded `(chunk, request)` pair, the evaluator returned the recorded decision, and the SHA-256 of the LLM output text is bound to that evaluation by signature. Everything else listed above is somebody else's job.
+
 ## Disclosure
 
 The default disclosure window is **90 days** from the date of the initial assessment, extended by mutual agreement if a fix is in progress. We credit reporters in the release notes for the fix unless asked to do so anonymously.

@@ -102,6 +102,29 @@ Provenex records *what chunks the retriever returned*, not *what the model did w
 
 The receipt does include a SHA-256 of the LLM output text, so an auditor can confirm the model's answer hasn't been modified after the fact. But "did the answer accurately reflect the chunks" is out of scope.
 
+### Unwrapped agent code that bypasses the SDK
+
+Provenex is a library: an agent emits a receipt **only when its code calls into Provenex**. An agent that retrieves a chunk without going through `verify_chunks(...)` or invokes a tool without going through `admission_check(...)` produces no receipt at all. The absence of a receipt is not, on its own, proof of misbehavior — it is the absence of evidence.
+
+This matters in two operationally distinct cases:
+
+1. **Honest gaps in coverage.** An engineering team rolls out Provenex on the chat retrieval path but a sidecar pipeline (overnight batch enrichment, an evals harness, a customer-support tool) still calls the same retriever or the same external API directly. The omission is not adversarial; it is a coverage rollout problem. Treat it the way you would treat "we have IAM on the prod tier but not on the staging tier" — find every code path that touches retrieval or tool execution and wrap it.
+
+2. **Adversarial bypass.** An attacker who controls the agent process (RCE in the agent container, malicious extension, compromised CI that rebuilds the agent image) can simply remove the Provenex calls before invoking the retriever or the tool. The verify path can't catch this from the outside; from the verifier's point of view, the attacker's path produces no receipts, indistinguishable from honest gap (1).
+
+**Why no in-band defence.** A library that lives in the same process as the caller cannot prove it was actually invoked. Any check we added inside the SDK is removable by the same attacker who removed the wrapper. This is the SDK-enforcement limit. It is the same boundary you accept when you say "OpenTelemetry tracing requires you to instrument your code" or "IAM SDKs only authorize calls that go through the SDK".
+
+**Mitigation patterns:**
+
+* **Proxy / gateway mode.** Put the tool or LLM provider behind a network endpoint that requires a Provenex receipt header on every request and rejects calls without one. The agent still has to mint the receipt, but a process that skips the wrapper now also loses access to the tool. This pushes the enforcement boundary out of the agent process. Provenex composes with this pattern but does not ship the gateway in the OSS core; common gateways (Envoy, Kong, Apigee, custom MCP proxies) can validate the receipt header against the public key.
+* **Tool-side acceptance check.** For tools you control, have the tool itself require a fresh signed Provenex receipt bound to the request (via `request_binding.query_hash`) before executing. A tool that refuses requests without a valid recent receipt forces the agent to go through Provenex even on attacker-controlled paths.
+* **Receipt-rate alerting.** A path that should produce one receipt per request but suddenly produces fewer (or none) is a strong signal. Alert on the ratio of `provenex_verify_total` / inferred-traffic, or on a sudden caller-side drop in the SIEM. This catches both honest gaps and adversarial bypass after the fact.
+* **Build / lint enforcement.** Static checks at CI time that flag direct calls to the unwrapped retriever or the bare tool client. This catches case (1) at the code-review boundary, but does not defend against (2) — an attacker rewriting the binary at runtime is not constrained by your lint rules.
+
+**What the receipt itself can offer.** When a *wrapped* request is honest, the receipt's `request_binding` block ties the receipt to the specific query and request context. If a downstream tool acceptance check (mitigation 2) validates this binding, the agent has no path that produces a useful artifact without going through Provenex — the wrapper is enforced not by us, but by the system that consumes the receipt.
+
+This threat is the reason the gateway / proxy story matters more than additional in-SDK hardening would. We have prioritized the binding primitives (`request_binding`, `caller_hash`) so downstream enforcement layers have something concrete to validate against.
+
 ### Coordinated tampering at both ingest and verify time
 
 If an attacker controls both the code that writes to the provenance index *and* the code that reads from it (and holds the signing key), they can produce a fully internally-consistent fake provenance trail. No purely software-side solution catches this. Defence here is organizational: separation of duties, code review on the ingest path, independent verification by a party that doesn't share the operations team's access.
