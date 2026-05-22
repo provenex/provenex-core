@@ -46,7 +46,7 @@ the canonical signing payload.
      key-holding operator.
 
 3. [`receipt_format.md`](receipt_format.md) - the wire schema.
-   - Field-by-field reference for receipts at schema version 2.4.0.
+   - Field-by-field reference for receipts at schema version 2.5.0.
    - The schema-history table for every prior version.
    - Canonical JSON serialization rules used by the signature payload.
 

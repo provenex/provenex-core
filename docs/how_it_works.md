@@ -146,12 +146,12 @@ See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator prot
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `2.4.0`) and `issuer` (`provenex-core/0.8.0`)
+- `schema_version` (currently `2.5.0`) and `issuer` (`provenex-core/0.10.1`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
 - The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied, `entry_kind`)
 - The unified `policy` block: `policy.verification` (always present) and `policy.access_control` (optional, with per-chunk decisions)
-- A `caller_hash` top-level field (schema 2.3.0+) and a `request_binding` block (schema 2.4.0+, see below)
+- A `caller_hash` top-level field (schema 2.3.0+), a `request_binding` block (schema 2.4.0+, see below), and an optional `index_status` block (schema 2.5.0+) when the index was unreachable under a `degrade`-mode availability policy
 - A summary (`total_chunks`, counts per outcome, `overall_status` of `PASS` / `PARTIAL` / `FAIL`)
 - A signature block (`algorithm`, `value`)
 

@@ -27,6 +27,7 @@ The authoritative table lives in [receipt_format.md § Schema history](receipt_f
 | `2.2.0` | Tool-call admission. Optional top-level `actions[]`; optional `policy.tool_call_control`; `summary` gains action counters. | 0.6.0 |
 | `2.3.0` | Source-of-record fields for SIEMs. Top-level `caller_hash`; optional `trajectory.session_id`. | 0.6.4 |
 | `2.4.0` | Window-aligned splice control + request-to-receipt binding. Optional top-level `request_binding`; optional per-source `entry_kind`. | 0.8.0 |
+| `2.5.0` | Degraded-index annotation. Optional top-level `index_status` block (present iff `policy.availability.on_index_error="degrade"` AND the index failed on this call). Additive on the wire: a 2.4.0 receipt without `index_status` is a valid 2.5.0 receipt; a 2.4.0 verifier that ignores unknown fields validates a 2.5.0 receipt unchanged. | 0.10.0 |
 
 Schema version is sourced from [provenex/core/receipt.py](../provenex/core/receipt.py); the docs-consistency lint catches any drift.
 

@@ -7,9 +7,12 @@ sinks for stdout, file, Kafka, SQS, S3, and Pub/Sub. Available since
 **0.6.6**.
 
 Schema is unchanged on the sink-protocol side - sinks consume
-serialised receipts; the current wire format is 2.4.0 (each receipt
-carries the v0.8.0 additions: optional `entry_kind` per source and
-optional top-level `request_binding`).
+serialised receipts; the current wire format is 2.5.0. v0.8.0 added
+the optional `entry_kind` per source and the optional top-level
+`request_binding`; v0.10.0 added the optional top-level `index_status`
+block that surfaces degraded-index calls. All three are additive on
+the wire, so a sink that was correct for 2.4.0 receipts is still
+correct for 2.5.0 receipts.
 
 ## TL;DR
 
