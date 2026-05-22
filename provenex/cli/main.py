@@ -35,6 +35,13 @@ Subcommands:
         Useful for confirming what hash will appear in receipts and (in
         what gets published to the transparency log.
 
+    provenex chain verify --log <witness.jsonl> [--index <db>]
+        Verify the integrity of a witness checkpoint log. Confirms that
+        every record's signature verifies, ``previous_checkpoint_hash``
+        links match, and ``checkpoint_index`` runs without gaps. With
+        ``--index``, also compares the latest checkpoint's tree head
+        against the live Merkle index.
+
 The CLI is intentionally minimal. For production use, embed the Python SDK
 directly.
 """
@@ -1183,6 +1190,241 @@ def _cmd_index_audit(args: argparse.Namespace) -> int:
     return 0 if not stale_rows and not concerning_dups else 1
 
 
+def _cmd_chain_verify(args: argparse.Namespace) -> int:
+    """Verify the integrity of a witness checkpoint log.
+
+    Reads the JSONL log, verifies each record's signature, confirms
+    ``previous_checkpoint_hash`` links match, and confirms
+    ``checkpoint_index`` runs 0, 1, 2, ... without gaps. With
+    ``--index``, also compares the latest checkpoint against the live
+    Merkle index tree head so an operator can confirm the published
+    log matches current state.
+    """
+    from ..core.witness import WitnessLog
+
+    log_path = args.log
+    if not os.path.exists(log_path):
+        print(f"error: log file not found: {log_path}", file=sys.stderr)
+        return 2
+
+    # Scan every record to confirm a single, consistent signature
+    # algorithm. A mixed-algorithm log is rejected up front so the
+    # human-readable "Algorithm: X" line below cannot mislead.
+    algorithms: set = set()
+    with open(log_path, "r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError as exc:
+                print(
+                    f"error: malformed JSON in {log_path} at line "
+                    f"{line_no}: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            sig = d.get("signature") or {}
+            alg = sig.get("algorithm")
+            if alg is None:
+                print(
+                    f"error: {log_path} line {line_no} has no signature "
+                    f"algorithm; every record must be signed",
+                    file=sys.stderr,
+                )
+                return 2
+            algorithms.add(alg)
+    if not algorithms:
+        print(f"error: log is empty: {log_path}", file=sys.stderr)
+        return 2
+    if len(algorithms) > 1:
+        print(
+            f"error: log mixes signature algorithms ({sorted(algorithms)}) "
+            f"in {log_path}; chain verify expects one algorithm per log",
+            file=sys.stderr,
+        )
+        return 2
+    sig_alg = algorithms.pop()
+
+    # Build the matching signer for verification.
+    if sig_alg == "ed25519":
+        if not args.public_key:
+            print(
+                "error: log was signed with ed25519; pass --public-key <pem>",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            from ..core.ed25519 import Ed25519Signer
+        except ImportError:
+            print(
+                "error: --public-key requires the [ed25519] extra: "
+                "pip install provenex-core[ed25519]",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            pem = Path(args.public_key).read_bytes()
+            signer = Ed25519Signer.from_public_key_pem(pem)
+        except Exception as exc:
+            print(
+                f"error: could not load public key from {args.public_key}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+    elif sig_alg == "hmac-sha256":
+        if not _signing_secret_in_env():
+            print(
+                "error: log was signed with hmac-sha256 but no "
+                "PROVENEX_RECEIPT_SECRET (or legacy PROVENEX_SIGNING_SECRET) "
+                "is set in the environment",
+                file=sys.stderr,
+            )
+            return 2
+        signer = HmacSha256Signer()
+    else:
+        print(
+            f"error: unsupported signature algorithm: {sig_alg!r}",
+            file=sys.stderr,
+        )
+        return 2
+
+    log = WitnessLog(log_path, signer)
+    chain_ok = log.verify()
+    records = log.records()
+    if not records:
+        print("error: log is empty", file=sys.stderr)
+        return 2
+
+    first = records[0]
+    latest = records[-1]
+
+    # Optional live-state cross-check against the Merkle index.
+    live_match: Optional[bool] = None
+    live_size: Optional[int] = None
+    live_root: Optional[str] = None
+    if args.index:
+        # 1. Require the path to exist. MerkleSQLiteProvenanceIndex's
+        #    constructor would silently create a new empty DB at the
+        #    given path otherwise, masking a typo.
+        if not os.path.exists(args.index):
+            print(
+                f"error: --index path does not exist: {args.index}",
+                file=sys.stderr,
+            )
+            return 2
+        # 2. Confirm this is a Merkle-backed index. Opening a plain
+        #    SQLiteProvenanceIndex DB via MerkleSQLiteProvenanceIndex
+        #    would mutate the customer's file (adds an empty
+        #    merkle_leaves table) and then report tree_size=0, which
+        #    would produce a false FAIL on the checkpoint comparison.
+        import sqlite3
+
+        try:
+            probe = sqlite3.connect(f"file:{args.index}?mode=ro", uri=True)
+            try:
+                row = probe.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='merkle_leaves'"
+                ).fetchone()
+            finally:
+                probe.close()
+        except sqlite3.Error as exc:
+            print(
+                f"error: could not read --index file {args.index}: {exc}",
+                file=sys.stderr,
+            )
+            return 2
+        if row is None:
+            print(
+                f"error: --index path {args.index} is not a Merkle-backed "
+                f"index (no merkle_leaves table). Use a "
+                f"MerkleSQLiteProvenanceIndex, or omit --index for "
+                f"chain-only verification.",
+                file=sys.stderr,
+            )
+            return 2
+
+        from ..index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
+
+        index = MerkleSQLiteProvenanceIndex(args.index)
+        try:
+            live_size = index.tree_size()
+            live_root = index.tree_root()
+        finally:
+            index.close()
+        live_match = (
+            live_size == latest.tree_size and live_root == latest.tree_root
+        )
+
+    overall_ok = chain_ok and (live_match is not False)
+
+    if args.json:
+        out: Dict[str, Any] = {
+            "log_path": log_path,
+            "checkpoint_count": len(records),
+            "signature_algorithm": sig_alg,
+            "chain_integrity": chain_ok,
+            "first_checkpoint": {
+                "checkpoint_index": first.checkpoint_index,
+                "tree_size": first.tree_size,
+                "tree_root": first.tree_root,
+                "issued_at": first.issued_at,
+            },
+            "latest_checkpoint": {
+                "checkpoint_index": latest.checkpoint_index,
+                "tree_size": latest.tree_size,
+                "tree_root": latest.tree_root,
+                "issued_at": latest.issued_at,
+            },
+        }
+        if live_match is not None:
+            out["live_index"] = {
+                "tree_size": live_size,
+                "tree_root": live_root,
+                "matches_latest_checkpoint": live_match,
+            }
+        out["overall_status"] = "PASS" if overall_ok else "FAIL"
+        print(json.dumps(out, indent=2))
+        return 0 if overall_ok else 1
+
+    # Human-readable mode.
+    print(f"Witness log: {log_path}")
+    print(f"Algorithm:   {sig_alg}")
+    print(f"Checkpoints: {len(records)}")
+    print()
+    chain_marker = _green("[OK]") if chain_ok else _red("[FAIL]")
+    print(f"  Chain integrity ......... {chain_marker}")
+    detail = (
+        "(signatures verify, previous_checkpoint_hash links match, "
+        "checkpoint_index runs 0, 1, 2, ...)"
+    )
+    print(f"    {_dim(detail)}")
+    print()
+    print(
+        f"  First checkpoint:  #{first.checkpoint_index}  "
+        f"tree_size={first.tree_size}"
+    )
+    print(f"    {_dim(first.issued_at)}")
+    print(f"    {_dim(first.tree_root)}")
+    print(
+        f"  Latest checkpoint: #{latest.checkpoint_index}  "
+        f"tree_size={latest.tree_size}"
+    )
+    print(f"    {_dim(latest.issued_at)}")
+    print(f"    {_dim(latest.tree_root)}")
+    if live_match is not None:
+        print()
+        print(f"  Live index tree_size={live_size}")
+        print(f"  Live index tree_root={live_root}")
+        marker = _green("yes") if live_match else _red("NO")
+        print(f"  Matches latest checkpoint: {marker}")
+    print()
+    print(f"  Overall: {_green('PASS') if overall_ok else _red('FAIL')}")
+    return 0 if overall_ok else 1
+
+
 def _print_policy_block(receipt: Dict[str, Any]) -> None:
     """Render the unified ``policy`` block for ``provenex audit --show-policy``.
 
@@ -1546,6 +1788,65 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_index_audit.set_defaults(func=_cmd_index_audit)
+
+    # chain subcommands (witness log integrity).
+    p_chain = sub.add_parser(
+        "chain",
+        help="Witness checkpoint log operations (verify)",
+        description=(
+            "Operations on a Provenex witness checkpoint log (see "
+            "provenex.core.witness.WitnessLog). The log is the producer-"
+            "side artifact that closes non-repudiation against a "
+            "key-holding operator: each signed checkpoint commits to a "
+            "Merkle tree head, with the hash chain making any retroactive "
+            "edit detectable. 'chain verify' confirms the log itself is "
+            "intact; pair it with publication to an external append-only "
+            "store for the full property."
+        ),
+    )
+    p_chain_sub = p_chain.add_subparsers(dest="chain_command", required=True)
+    p_chain_verify = p_chain_sub.add_parser(
+        "verify",
+        help="Verify the integrity of a witness checkpoint log",
+        description=(
+            "Read a witness JSONL log, verify each record's signature, "
+            "confirm previous_checkpoint_hash links match, and confirm "
+            "checkpoint_index runs 0, 1, 2, ... without gaps. With "
+            "--index, also compares the latest checkpoint's tree head "
+            "against the live Merkle index so an operator can confirm "
+            "the published log matches current state."
+        ),
+    )
+    p_chain_verify.add_argument(
+        "--log",
+        required=True,
+        help="Path to the witness JSONL log file.",
+    )
+    p_chain_verify.add_argument(
+        "--index",
+        default=None,
+        help=(
+            "Optional path to the underlying Merkle SQLite index. When "
+            "supplied, the latest checkpoint's tree_size and tree_root "
+            "are compared against the live index state."
+        ),
+    )
+    p_chain_verify.add_argument(
+        "--public-key",
+        default=None,
+        help=(
+            "Path to a PEM-encoded Ed25519 public key. Required when the "
+            "log was signed with Ed25519. Without this, HMAC-SHA256 is "
+            "assumed and PROVENEX_RECEIPT_SECRET (or the legacy "
+            "PROVENEX_SIGNING_SECRET) is read from the environment."
+        ),
+    )
+    p_chain_verify.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of human-readable output.",
+    )
+    p_chain_verify.set_defaults(func=_cmd_chain_verify)
 
     return parser
 
