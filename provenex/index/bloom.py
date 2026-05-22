@@ -24,9 +24,14 @@ fingerprint algorithm, or any caller-visible API. See provenex.ai.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import List, Optional, Sequence, Tuple
 
-from .base import IndexEntry, ProvenanceIndex, VerificationOutcome
+from .base import (
+    ENTRY_KIND_WHOLE_CHUNK,
+    IndexEntry,
+    ProvenanceIndex,
+    VerificationOutcome,
+)
 
 
 class BloomFilterIndex(ABC):
@@ -130,7 +135,13 @@ class BloomAcceleratedIndex(ProvenanceIndex):
         chunk_offset: int,
         chunk_length: int,
         authorized: bool = True,
+        entry_kind: str = ENTRY_KIND_WHOLE_CHUNK,
     ) -> None:
+        # entry_kind MUST be forwarded; without it the base class's
+        # default of whole_chunk would silently promote window-only
+        # locator rows to verification-eligible rows, which would then
+        # return VERIFIED instead of UNVERIFIED on retrieval. Real
+        # correctness bug if dropped.
         self._base.add(
             fingerprint=fingerprint,
             document_id=document_id,
@@ -138,6 +149,7 @@ class BloomAcceleratedIndex(ProvenanceIndex):
             chunk_offset=chunk_offset,
             chunk_length=chunk_length,
             authorized=authorized,
+            entry_kind=entry_kind,
         )
         self._bloom.add(fingerprint)
 
@@ -145,6 +157,41 @@ class BloomAcceleratedIndex(ProvenanceIndex):
         if not self._bloom.probably_contains(fingerprint):
             return VerificationOutcome.UNVERIFIED
         return self._base.verify(fingerprint)
+
+    def verify_batch(
+        self,
+        fingerprints: "Sequence[str]",
+    ) -> "List[Tuple[VerificationOutcome, Optional[IndexEntry]]]":
+        """Bloom-screen the batch, then delegate hits to the base in one call.
+
+        The base class's default ``verify_batch`` loops per-fingerprint,
+        which works correctly but pays the backend's per-row round-trip
+        cost once per call. Backends override ``verify_batch`` for bulk
+        ``IN (...)``-style queries. Without an override here, the wrapped
+        backend's bulk optimisation would be bypassed. Bloom screening
+        plus a bulk query for the residual hits recovers both savings.
+
+        Bloom misses are returned as ``(UNVERIFIED, None)``. Bloom
+        false-positives (the only kind a Bloom filter produces) flow
+        through to the base ``verify_batch``, which resolves them
+        correctly against the underlying rows.
+        """
+        contains = [self._bloom.probably_contains(fp) for fp in fingerprints]
+        hits = [fp for fp, ok in zip(fingerprints, contains) if ok]
+        if not hits:
+            return [
+                (VerificationOutcome.UNVERIFIED, None) for _ in fingerprints
+            ]
+        hit_results = self._base.verify_batch(hits)
+        # Stitch back into the original order.
+        hit_iter = iter(hit_results)
+        out = []
+        for fp, ok in zip(fingerprints, contains):
+            if ok:
+                out.append(next(hit_iter))
+            else:
+                out.append((VerificationOutcome.UNVERIFIED, None))
+        return out
 
     def lookup(self, fingerprint: str) -> Optional[IndexEntry]:
         if not self._bloom.probably_contains(fingerprint):
