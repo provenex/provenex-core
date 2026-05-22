@@ -286,3 +286,207 @@ def test_ingest_request_accepts_batch_within_limit():
     # A few-thousand-entry request should still parse.
     req = IngestRequest(entries=[entry] * 5_000)
     assert len(req.entries) == 5_000
+
+
+# --------------------------------------------------------------------------- #
+# MCP decorator: non-tools/call passthrough                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_mcp_decorator_passes_through_non_tools_call_method():
+    """A request whose method isn't ``tools/call`` (resources/list,
+    prompts/get, initialize) must bypass admission entirely and reach
+    the handler unchanged. Otherwise the decoder would build a
+    ToolCallContext with an empty name and the policy would fire on
+    meaningless metadata.
+    """
+    from provenex import HmacSha256Signer, Policy, RequestContext
+    from provenex.tool_call.integrations.mcp import provenex_mcp_admission
+
+    policy = Policy.from_text(
+        "version: 1\npolicy_id: mcp-passthrough-test\n"
+        "tool_call_control:\n  rules: []\n  defaults:\n    unknown_metadata: deny\n",
+        source="mcp-passthrough-test",
+    )
+    request_ctx = RequestContext(
+        caller={"id": "u_1"},
+        jurisdiction="US",
+        purpose="test",
+        timestamp="2026-05-22T00:00:00Z",
+    )
+
+    receipts: list = []
+
+    @provenex_mcp_admission(
+        policy=policy,
+        signer=HmacSha256Signer(secret=b"mcp-passthrough-secret-32-bytes!"),
+        request_factory=lambda req: request_ctx,
+        receipts_sink=receipts,
+    )
+    def handler(request):
+        return {"echoed_method": request.get("method")}
+
+    # tools/list is a real MCP method; it must reach handler() unchanged.
+    out = handler({"method": "tools/list", "id": 1})
+    assert out == {"echoed_method": "tools/list"}
+    # No receipt should have been emitted for a passthrough call.
+    assert receipts == []
+
+
+def test_mcp_decorator_admission_still_runs_for_tools_call():
+    """Sanity check: the passthrough only fires for non-tools/call.
+    A tools/call request still flows through admission and produces
+    a receipt.
+    """
+    from provenex import HmacSha256Signer, Policy, RequestContext
+    from provenex.tool_call.integrations.mcp import provenex_mcp_admission
+
+    policy = Policy.from_text(
+        "version: 1\npolicy_id: mcp-passthrough-sanity\n"
+        "tool_call_control:\n  rules: []\n  defaults:\n    unknown_metadata: allow\n",
+        source="mcp-passthrough-sanity",
+    )
+    request_ctx = RequestContext(
+        caller={"id": "u_1"},
+        jurisdiction="US",
+        purpose="test",
+        timestamp="2026-05-22T00:00:00Z",
+    )
+    receipts: list = []
+
+    @provenex_mcp_admission(
+        policy=policy,
+        signer=HmacSha256Signer(secret=b"mcp-sanity-secret-32-bytes-min!a"),
+        request_factory=lambda req: request_ctx,
+        receipts_sink=receipts,
+    )
+    def handler(request):
+        return {"ok": True}
+
+    handler({
+        "method": "tools/call",
+        "params": {"name": "noop", "arguments": {}},
+        "id": 1,
+    })
+    assert len(receipts) == 1
+
+
+# --------------------------------------------------------------------------- #
+# LlamaIndex: broader exception handling in get_content()                      #
+# --------------------------------------------------------------------------- #
+
+
+def test_llamaindex_extract_text_falls_back_on_attribute_error():
+    """If a node's ``get_content()`` raises AttributeError (some older
+    LlamaIndex versions when the internal text store is unset), the
+    extractor must fall back to ``.text`` rather than crashing.
+    """
+    pytest.importorskip("llama_index")
+    from provenex.integrations.llamaindex.retriever import ProvenexRetriever
+
+    class _BrokenNode:
+        text = "fallback-text"
+
+        def get_content(self, *args, **kwargs):
+            raise AttributeError("internal text store missing")
+
+    # ProvenexRetriever._extract_text is the relevant private helper.
+    extractor = ProvenexRetriever.__dict__.get("_extract_text")
+    assert extractor is not None, "extractor helper present in retriever"
+    # Bind via __get__ on a dummy instance; the helper is logically static
+    # except for ``self``, which it never uses.
+    assert extractor(None, _BrokenNode()) == "fallback-text"
+
+
+# --------------------------------------------------------------------------- #
+# OCSF: opt-in event validation                                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_ocsf_validate_accepts_real_events():
+    """validate=True on a normal receipt must NOT raise."""
+    from provenex import HmacSha256Signer, Policy, RequestContext, admission_check
+    from provenex.tool_call.context import ToolCallContext
+    from provenex.export.ocsf import receipt_to_ocsf
+
+    request = RequestContext(
+        caller={"id": "u_1", "role": "engineer"},
+        jurisdiction="US",
+        purpose="test",
+        timestamp="2026-05-22T00:00:00Z",
+    )
+    policy = Policy.from_text(
+        "version: 1\npolicy_id: ocsf-validate\n"
+        "tool_call_control:\n  rules: []\n  defaults:\n    unknown_metadata: allow\n",
+        source="ocsf-validate",
+    )
+    result = admission_check(
+        tool=ToolCallContext(
+            name="noop", operation="invoke", parameters={"k": "v"}
+        ),
+        request=request,
+        policy=policy,
+        signer=HmacSha256Signer(secret=b"ocsf-test-secret-32-bytes-min!ab"),
+    )
+    events = receipt_to_ocsf(result.receipt.to_dict(), validate=True)
+    assert events  # at least one event for the allowed action
+
+
+def test_validate_ocsf_event_rejects_bad_severity():
+    from provenex.export.ocsf import validate_ocsf_event
+
+    event = {
+        "class_uid": 6003,
+        "category_uid": 6,
+        "activity_id": 1,
+        "severity_id": 6,  # out of valid 1..5 range
+        "type_uid": 600301,
+    }
+    with pytest.raises(ValueError) as exc:
+        validate_ocsf_event(event)
+    assert "severity_id" in str(exc.value)
+
+
+def test_validate_ocsf_event_rejects_inconsistent_type_uid():
+    from provenex.export.ocsf import validate_ocsf_event
+
+    event = {
+        "class_uid": 6003,
+        "category_uid": 6,
+        "activity_id": 1,
+        "severity_id": 1,
+        "type_uid": 999_999,  # not class_uid*100 + activity_id
+    }
+    with pytest.raises(ValueError) as exc:
+        validate_ocsf_event(event)
+    assert "type_uid" in str(exc.value)
+
+
+def test_validate_ocsf_event_rejects_unknown_class_uid():
+    from provenex.export.ocsf import validate_ocsf_event
+
+    event = {
+        "class_uid": 9999,  # not in our emit set
+        "category_uid": 6,
+        "activity_id": 1,
+        "severity_id": 1,
+        "type_uid": 999_901,
+    }
+    with pytest.raises(ValueError) as exc:
+        validate_ocsf_event(event)
+    assert "class_uid" in str(exc.value)
+
+
+def test_validate_ocsf_event_rejects_missing_required_field():
+    from provenex.export.ocsf import validate_ocsf_event
+
+    event = {
+        "class_uid": 6003,
+        "category_uid": 6,
+        "activity_id": 1,
+        # severity_id missing
+        "type_uid": 600301,
+    }
+    with pytest.raises(ValueError) as exc:
+        validate_ocsf_event(event)
+    assert "severity_id" in str(exc.value)
