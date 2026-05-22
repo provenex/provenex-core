@@ -122,9 +122,9 @@ chart's metrics port (8080) into your existing monitor template.
 
 ## Rolling out a policy change
 
-The recommended shape is the Policy CRD (Phase 2.3): apply a Policy
-CR, the operator reconciles the ConfigMap, the verify pods roll over
-on next pod restart. The chart's deployment.yaml mounts the
+The recommended shape is the Policy CRD: apply a Policy CR, the
+operator reconciles the ConfigMap, the verify pods roll over on next
+pod restart. The chart's deployment.yaml mounts the
 ConfigMap read-only at `/etc/provenex/policy.yaml`; `PROVENEX_POLICY_FILE`
 is set to that path when `policyConfigMap.enabled=true`.
 
@@ -140,5 +140,5 @@ ConfigMap directly and `kubectl rollout restart deploy/provenex-server`.
   Manager / Vault / etc. is one common shape, but the chart doesn't
   enforce it.
 - Multi-tenant ingress (Pattern C with per-tenant routing). The
-  signer registry (Phase 3.2) is server-side; the chart deploys one
-  Service. Per-tenant ingress is handled at your gateway.
+  signer registry is server-side; the chart deploys one Service.
+  Per-tenant ingress is handled at your gateway.

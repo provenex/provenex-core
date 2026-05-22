@@ -306,7 +306,7 @@ is a human summary.
 ## Design: end-to-end RAG overhead bench
 
 The numbers above answer "how fast is Provenex on its own?" They do not
-answer the question a buyer will ask, which is:
+answer the practical question, which is:
 
 > If I bolt Provenex onto our existing RAG pipeline, how much slower
 > does it get?
@@ -394,7 +394,7 @@ or audit-trail discontinuity.
 | Tier | Backend | Pods | Reason |
 |---|---|---|---|
 | **Verify** (per-request, latency-critical) | Postgres read replicas | Many | Verify is a point-lookup on the indexed `fingerprint` column. Scales horizontally across replicas. |
-| **Ingest** (batch, throughput-oriented) | Postgres primary | One ingester pod recommended | Postgres handles multi-writer ingest correctly (row-locked supersession), but the Merkle-augmented index keeps an in-process tree that is per-process. Single ingester avoids tree-divergence under multi-writer until that becomes a multi-process tree (commercial roadmap). |
+| **Ingest** (batch, throughput-oriented) | Postgres primary | One ingester pod recommended | Postgres handles multi-writer ingest correctly (row-locked supersession), but the Merkle-augmented index keeps an in-process tree that is per-process. Single ingester avoids tree-divergence under multi-writer. |
 
 For deployments that only need the non-Merkle properties - verification,
 five outcomes, signed rows, no transparency log - multiple ingester pods
@@ -525,10 +525,9 @@ to measure that curve on your own hardware.
 
 The next ceiling above all of these is the receipt-construction +
 signing cost per chunk, which is Python-bound and not Postgres-bound.
-That ceiling is what the commercial Rust core in the roadmap
-addresses; the OSS levers above land you in the same throughput
-range as the SQLite single-process bench at the top of this doc,
-with all the multi-pod, multi-replica properties Postgres provides.
+The OSS levers above land you in the same throughput range as the
+SQLite single-process bench at the top of this doc, with all the
+multi-pod, multi-replica properties Postgres provides.
 
 ### Deployment patterns for big-enterprise / polyglot stacks
 
@@ -639,8 +638,7 @@ before Python overhead dominates. Above that, the levers in order:
    at k=25: p50 9.88 ms → 0.76 ms (~13×). SQLite gains ~3× at k=10
    because the savings there come from collapsing function-call
    overhead rather than network hops. Receipt format unchanged; the
-   per-chunk receipt-construction / signing cost is the next ceiling
-   (commercial Rust core in the roadmap).
+   per-chunk receipt-construction / signing cost is the next ceiling.
 4. **Bloom filter acceleration** (commercial) - the `BloomFilterIndex`
    ABC is in the OSS core; a production implementation absorbs the
    "fingerprint not in index" case in process memory, eliminating the
@@ -648,8 +646,7 @@ before Python overhead dominates. Above that, the levers in order:
    is a small-but-nonzero fraction of traffic at scale.
 5. **Rust core with language bindings** (not in the OSS core today) -
    the algorithm is small enough that a Rust core would 50-100x
-   per-call throughput and remove the install-Python constraint
-   entirely.
+   per-call throughput and remove the install-Python constraint.
 
 Levers 1 and 2 are operational and require no Provenex changes. Lever 3
 is a library API addition. Levers 4 and 5 are out of scope for the OSS

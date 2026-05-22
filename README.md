@@ -18,14 +18,14 @@ One CISO question this answers in plain English: **Can this agent access Jira, S
 
 **What it is.** Decision and proof, not execution. Library, not service. The OSS Python core wraps any retrieval, tool call, memory write, or model inference with a unified YAML policy decision and a signed receipt. Your code keeps the credentials; Provenex never holds OAuth tokens, never proxies traffic, never sits on the response-data path.
 
-### Read this if you are...
+### Quick navigation
 
-| You are | Jump to |
+| If you want | Jump to |
 | --- | --- |
-| **VP of Engineering** evaluating whether to add this to a roadmap | [Where Provenex fits in your stack](#where-provenex-fits-in-your-stack) |
-| **Security Architect** wanting to greenlight procurement | [Cryptographic architecture](#cryptographic-architecture) |
-| **Compliance Lead** asking what evidence ends up on the receipt | [What you declare. What you get back.](#what-you-declare-what-you-get-back) |
-| **Staff Engineer** writing the integration | [Easy integration](#easy-integration) |
+| Where Provenex sits in a RAG/agent stack | [Where Provenex fits in your stack](#where-provenex-fits-in-your-stack) |
+| The cryptographic guarantees and threat model | [Cryptographic architecture](#cryptographic-architecture) |
+| The receipt schema and the evidence each call records | [What you declare. What you get back.](#what-you-declare-what-you-get-back) |
+| Integration code | [Easy integration](#easy-integration) |
 
 ## What you declare. What you get back.
 
@@ -392,7 +392,7 @@ result = admission_check(..., sink=sink)   # the only line that changes
 
 Sink failures are swallowed and logged via `warnings.warn`. Provenex never breaks the agent's hot path because export is degraded. Receipts also map to **OCSF v1.3** events for cross-vendor SIEM compatibility via `receipt_to_ocsf(...)` and `OCSFAdapter`. Full reference: [`docs/streaming_export.md`](https://github.com/provenex/provenex-core/blob/main/docs/streaming_export.md) and [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md).
 
-## What this looks like for a buyer
+## Worked example: the regulator's seven questions
 
 [`examples/attack_thwarted_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/attack_thwarted_demo.py) is the in-repo headline demo. It runs end-to-end with real LangChain (`InMemoryVectorStore` + `@tool`, no mocks) and walks four common attack shapes:
 
@@ -513,7 +513,7 @@ export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.toke
 python provenex-core/examples/standalone_demo.py
 ```
 
-For the integration-pattern story (a poisoned chunk added directly to the vector store, bypassing Provenex ingest, gets caught and blocked at the retrieval boundary), run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). For the tool-call admission tour, run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py). For the four-attack regulator demo, see [What this looks like for a buyer](#what-this-looks-like-for-a-buyer).
+For the integration-pattern story (a poisoned chunk added directly to the vector store, bypassing Provenex ingest, gets caught and blocked at the retrieval boundary), run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). For the tool-call admission tour, run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py). For the four-attack regulator demo, see [Worked example: the regulator's seven questions](#worked-example-the-regulators-seven-questions).
 
 ### Verify in 30 seconds (auditor path)
 
@@ -569,7 +569,7 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 
 - [Five Things People Mean by "AI Provenance" (And Which One Is For You)](https://provenex.ai/blog/five-things-ai-provenance): the category map, and where Provenex sits
 - [`docs/architecture.md`](https://github.com/provenex/provenex-core/blob/main/docs/architecture.md): the technical documentation entry point and source map
-- [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): unified policy reference (verification + access control + tool-call admission), DSL, worked examples, commercial roadmap
+- [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): unified policy reference (verification + access control + tool-call admission), DSL, worked examples
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): full algorithm, threat model, and architectural comparison to embedding-based systems
 - [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.5.0 specification (current); full version history table inside
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started, including a policy-driven retrieval path

@@ -139,7 +139,7 @@ The verification outcome and the policy decision are independent. A `VERIFIED` c
 
 The policy bundle is canonicalized (key-sorted JSON, no whitespace) and hashed with SHA-256 to produce the `policy_version_hash`. Two policies that differ only in formatting hash to the same value. This is the field that would be published to a transparency log in the commercial transparency-log integration, so auditors can independently confirm which policy was in effect at the time of a decision.
 
-See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator protocol, worked examples, and the commercial roadmap. See [`docs/threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model for policy decisions specifically.
+See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator protocol, and worked examples. See [`docs/threat_model.md`](threat_model.md#trust-model-for-policy-decisions) for the trust model for policy decisions specifically.
 
 ## The receipt
 

@@ -1,6 +1,6 @@
 # Procurement and supply-chain FAQ
 
-This document answers the questions a procurement team asks before approving an open-source dependency. It is for the buyer's legal, supply-chain security, and platform teams. The threat model is in [threat_model.md](threat_model.md); this doc is the supply-chain and license side of the same review.
+This document answers the questions a procurement team asks before approving an open-source dependency. It is for procurement, legal, supply-chain security, and platform reviewers. The threat model is in [threat_model.md](threat_model.md); this doc is the supply-chain and license side of the same review.
 
 ## License
 

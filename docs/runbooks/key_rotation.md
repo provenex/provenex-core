@@ -91,13 +91,13 @@ Ed25519 keypairs are asymmetric: the private key signs, the public key verifies.
 
 7. **Document the cutover.** Record the time, the new public key's fingerprint, and the schedule for any subsequent rotations. Auditors will reference these when verifying historical receipts.
 
-The same procedure works whether the private key lives in process memory (the default `Ed25519Signer`) or in a future KMS-backed signer (see below). The signer interface stays the same; the loader changes.
+The same procedure works whether the private key lives in process memory (the default `Ed25519Signer`) or in one of the shipped KMS-backed signers (see below). The signer interface stays the same; the loader changes.
 
-## KMS-backed rotation (forward-looking)
+## KMS-backed rotation
 
-A KMS-backed Ed25519 signer is on the commercial roadmap; see [provenex.ai](https://provenex.ai). Once it ships, the rotation procedure simplifies on the signing host because the KMS handles key generation, storage, and rotation natively. The auditor-side procedure does not change: the verifier still holds a public key (or a list of public keys across rotations) and validates receipts against them.
+KMS-backed signers ship in the OSS core today under the `[kms-aws]`, `[kms-gcp]`, `[kms-azure]`, and `[pkcs11]` extras (see [`provenex/kms/`](../../provenex/kms/)). When the signing key lives in a managed KMS, the rotation procedure simplifies on the signing host because the KMS handles key generation, storage, and rotation natively. The auditor-side procedure does not change: the verifier still holds a public key (or a list of public keys across rotations) and validates receipts against them.
 
-Until the KMS-backed signer ships, the Ed25519 procedure above is the right pattern. Store the encrypted private PEM in your secrets manager and read it at signer-startup; do not check the key into source control.
+If you cannot use a managed KMS, the bare `Ed25519Signer` procedure above is the right pattern. Store the encrypted private PEM in your secrets manager and read it at signer-startup; do not check the key into source control.
 
 ## Failure modes mid-rotation
 

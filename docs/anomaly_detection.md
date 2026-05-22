@@ -344,7 +344,7 @@ The receipt is the cryptographic source-of-truth. The detector's downstream guar
 
 ### What the receipt does NOT guarantee
 
-- **Sequence ordering** - a malicious transport can drop, duplicate, or reorder receipts in transit. Detectors that rely on sequence reconstruction need a transport with delivery guarantees (Kafka with min.insync.replicas, SQS FIFO queues, the transparency-log integration on the commercial Provenex roadmap) - or they need to reconstruct ordering from `issued_at` + `trajectory.parent_step_ids[]` and accept that a sophisticated attacker can manipulate either.
+- **Sequence ordering** - a malicious transport can drop, duplicate, or reorder receipts in transit. Detectors that rely on sequence reconstruction need a transport with delivery guarantees (Kafka with `min.insync.replicas`, SQS FIFO queues) or they need to reconstruct ordering from `issued_at` + `trajectory.parent_step_ids[]` and accept that a sophisticated attacker can manipulate either.
 - **Completeness** - the receipt asserts what *was* decided. It does not assert that *every* decision the agent made resulted in a receipt. An agent that bypasses Provenex (calls a tool without going through `admission_check`) produces no receipt at all; the detector cannot detect what was never recorded. Mitigation: framework-level wrappers (LangChain `ProvenexToolWrapper`, LangGraph nodes, MCP middleware) that make bypass syntactically inconvenient.
 
 ### Recommended detector posture

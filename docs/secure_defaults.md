@@ -57,7 +57,7 @@ Recommended posture:
 
 - **Development:** environment variables sourced from a developer-only secrets file, never committed.
 - **Production HMAC:** the secret lives in your secrets manager (AWS Secrets Manager, GCP Secret Manager, HashiCorp Vault). Application pods read it at startup or per-request via the secrets manager's SDK, never logged.
-- **Production Ed25519:** the private key lives in an HSM or a KMS that exposes a sign-only interface. The OSS core's `Ed25519Signer` uses a private key in process memory; a KMS-backed signer is on the commercial roadmap. Until then, store the encrypted private key in your secrets manager (the `Ed25519Signer.private_key_pem(password=...)` helper produces an encrypted PEM) and decrypt at startup.
+- **Production Ed25519:** the private key lives in an HSM or a KMS that exposes a sign-only interface. The OSS core ships KMS signer adapters under `[kms-aws]`, `[kms-gcp]`, `[kms-azure]`, and `[pkcs11]` (see `provenex/kms/`); use those when the deployment has a managed KMS. If you cannot use a KMS, the bare `Ed25519Signer` holds the private key in process memory, which is acceptable when the encrypted PEM lives in your secrets manager (the `Ed25519Signer.private_key_pem(password=...)` helper produces an encrypted PEM) and is decrypted at startup only.
 
 Rotation does not invalidate prior receipts: the public key (or the shared secret) is what an auditor needs to verify, and a rotated key joins the verification chain rather than replacing it. The rotation procedure is in [runbooks/key_rotation.md](runbooks/key_rotation.md).
 
