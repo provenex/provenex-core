@@ -211,19 +211,37 @@ class WitnessLog:
         if not os.path.exists(self._path):
             return
         with open(self._path, "r", encoding="utf-8") as f:
-            for line in f:
+            for line_no, line in enumerate(f, start=1):
                 line = line.strip()
                 if not line:
                     continue
-                d = json.loads(line)
-                yield WitnessRecord(
-                    checkpoint_index=int(d["checkpoint_index"]),
-                    tree_size=int(d["tree_size"]),
-                    tree_root=str(d["tree_root"]),
-                    issued_at=str(d["issued_at"]),
-                    previous_checkpoint_hash=d.get("previous_checkpoint_hash"),
-                    signature=d.get("signature"),
-                )
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    # Surface the file + line so a caller iterating a
+                    # damaged log can pinpoint the bad record. The bare
+                    # JSONDecodeError carries the column but not the
+                    # source path.
+                    raise ValueError(
+                        f"malformed JSON in witness log {self._path} at "
+                        f"line {line_no}: {exc}"
+                    ) from exc
+                try:
+                    yield WitnessRecord(
+                        checkpoint_index=int(d["checkpoint_index"]),
+                        tree_size=int(d["tree_size"]),
+                        tree_root=str(d["tree_root"]),
+                        issued_at=str(d["issued_at"]),
+                        previous_checkpoint_hash=d.get(
+                            "previous_checkpoint_hash"
+                        ),
+                        signature=d.get("signature"),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"malformed witness record in {self._path} at "
+                        f"line {line_no}: {exc}"
+                    ) from exc
 
     def latest(self) -> Optional[WitnessRecord]:
         last: Optional[WitnessRecord] = None

@@ -319,6 +319,21 @@ def _validate_rule(
             f"{source}: rule '{name}': 'require' must be a mapping"
         )
     _check_no_reserved_keys(require, where=f"{source}: rule '{name}' require")
+
+    # A rule with neither `when` conditions nor `require` constraints
+    # matches everything and gates nothing. With `on_violation: deny`
+    # it cannot fire (no require to violate); with `on_violation: allow`
+    # it becomes a catch-all allow. Either way it almost certainly
+    # reflects an authoring mistake, so we surface it at parse time
+    # rather than silently letting the receipt record the no-op.
+    if not when and not require:
+        raise PolicyParseError(
+            f"{source}: rule '{name}' has no 'when' conditions and no "
+            f"'require' constraints. Add at least one: a 'when' clause "
+            f"to scope the rule, 'require' constraints to gate it, or "
+            f"both. A rule with neither is a no-op (or, with "
+            f"on_violation=allow, a catch-all allow)."
+        )
     # Validate operator-style require values eagerly: unknown operators,
     # bad duration strings, and wrong shapes (in/not_in not a list) should
     # all fail at load time, not silently allow at evaluation time.

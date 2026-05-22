@@ -316,3 +316,73 @@ def test_signature_portable_with_sqlite_backend(index):
         SECRET,
     )
     assert entry.signature == expected
+
+
+def test_receipt_portability_across_backends(index, tmp_path):
+    """End-to-end portability: a chunk indexed in BOTH SQLite and Postgres
+    produces signed receipts that each independently verify, with
+    matching fingerprints and matching VERIFIED outcomes.
+
+    This is the README's "receipts verify bit-identically across
+    backends" claim, at the receipt level (the existing
+    test_signature_portable_with_sqlite_backend covers the row level).
+    """
+    from provenex import (
+        ENTRY_KIND_WHOLE_CHUNK,
+        Fingerprinter,
+        HmacSha256Signer,
+        verify_chunks,
+    )
+    from provenex.core.receipt import verify_receipt_signature
+    from provenex.index.sqlite_index import SQLiteProvenanceIndex
+
+    chunk_text = (
+        "Backups must be encrypted with AES-256-GCM and keys managed "
+        "by the central KMS. Restore drills run quarterly."
+    )
+    fp = Fingerprinter()
+    fingerprint_result = fp.fingerprint(chunk_text)
+    chunk_fp = fp.fingerprint_chunk(chunk_text)
+
+    # 1. Ingest the same chunk into both backends with identical metadata.
+    common = dict(
+        fingerprint=chunk_fp,
+        document_id="security_policy_v4",
+        document_version=fingerprint_result.document_version,
+        chunk_offset=0,
+        chunk_length=len(chunk_text),
+        entry_kind=ENTRY_KIND_WHOLE_CHUNK,
+    )
+    index.add(**common)  # Postgres
+
+    sqlite_path = tmp_path / "portability.db"
+    sqlite_index = SQLiteProvenanceIndex(
+        str(sqlite_path), signing_secret=SECRET
+    )
+    try:
+        sqlite_index.add(**common)
+
+        # 2. Generate a receipt against each backend with the same signer.
+        receipt_secret = b"receipt-portability-32-bytes-min!"
+        signer = HmacSha256Signer(secret=receipt_secret)
+
+        result_pg = verify_chunks(
+            chunks=[chunk_text], index=index, signer=signer
+        )
+        result_sq = verify_chunks(
+            chunks=[chunk_text], index=sqlite_index, signer=signer
+        )
+    finally:
+        sqlite_index.close()
+
+    # 3. Both surfaces report VERIFIED with matching fingerprints.
+    src_pg = result_pg.receipt.sources[0]
+    src_sq = result_sq.receipt.sources[0]
+    assert src_pg.fingerprint == src_sq.fingerprint == chunk_fp
+    assert src_pg.verification_outcome.value == "VERIFIED"
+    assert src_sq.verification_outcome.value == "VERIFIED"
+
+    # 4. Both receipts independently verify with the same signer.
+    fresh = HmacSha256Signer(secret=receipt_secret)
+    assert verify_receipt_signature(result_pg.receipt.to_dict(), fresh)
+    assert verify_receipt_signature(result_sq.receipt.to_dict(), fresh)

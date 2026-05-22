@@ -125,3 +125,44 @@ def test_empty_log_verifies_trivially(tmp_path):
     signer = HmacSha256Signer(secret=SECRET)
     log = WitnessLog(log_path, signer=signer)
     assert log.verify()
+
+
+def test_iter_reports_malformed_jsonl_with_file_and_line(tmp_path):
+    """A damaged line surfaces as ValueError(file, line), not bare JSONDecodeError.
+
+    The bare json.JSONDecodeError carries column but not the source
+    path. A library caller iterating a damaged log needs both to
+    pinpoint the bad record.
+    """
+    # Start with one valid record so the parse error lands on line 2.
+    log_path = str(tmp_path / "bad.jsonl")
+    signer = HmacSha256Signer(secret=SECRET)
+    WitnessLog(log_path, signer=signer).append(
+        tree_size=10, tree_root="sha256:" + "0" * 64
+    )
+    # Append an unparseable line.
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write("{this is not json\n")
+
+    log = WitnessLog(log_path, signer=signer)
+    with pytest.raises(ValueError) as exc_info:
+        list(log.iter())
+    msg = str(exc_info.value)
+    assert "bad.jsonl" in msg
+    assert "line 2" in msg
+
+
+def test_iter_reports_missing_required_field(tmp_path):
+    """A record missing required fields raises a clear ValueError."""
+    log_path = tmp_path / "missing_field.jsonl"
+    # Valid JSON, but missing checkpoint_index (required by WitnessRecord).
+    log_path.write_text(
+        '{"tree_size": 10, "tree_root": "sha256:0", "issued_at": "x"}\n',
+        encoding="utf-8",
+    )
+    log = WitnessLog(str(log_path), signer=HmacSha256Signer(secret=SECRET))
+    with pytest.raises(ValueError) as exc_info:
+        list(log.iter())
+    msg = str(exc_info.value)
+    assert "missing_field.jsonl" in msg
+    assert "line 1" in msg

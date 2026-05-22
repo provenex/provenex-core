@@ -466,3 +466,65 @@ def test_validate_policy_file_on_invalid(tmp_path):
     ok, err = validate_policy_file(str(p))
     assert ok is False
     assert "version" in err
+
+
+def test_policy_rejects_rule_with_empty_when_and_require(tmp_path):
+    """A rule with neither `when` nor `require` is a no-op (or, with
+    `on_violation: allow`, a catch-all allow). Reject it at parse time
+    so the surprise lands on the author, not the auditor.
+    """
+    p = tmp_path / "empty_rule.yaml"
+    p.write_text(
+        "version: 1\n"
+        "policy_id: empty-rule-test\n"
+        "access_control:\n"
+        "  rules:\n"
+        "    - name: catch_all_allow\n"
+        "      on_violation: allow\n",
+        encoding="utf-8",
+    )
+    ok, err = validate_policy_file(str(p))
+    assert ok is False
+    assert err is not None
+    assert "catch_all_allow" in err
+    assert "no 'when' conditions and no 'require' constraints" in err
+
+
+def test_policy_accepts_rule_with_only_when_no_require(tmp_path):
+    """A rule with `when` but no `require` is a degenerate but valid
+    construct: it matches everything where `when` is true and has no
+    constraints to violate. Only fully-empty rules are rejected.
+    """
+    p = tmp_path / "when_only.yaml"
+    p.write_text(
+        "version: 1\n"
+        "policy_id: when-only-test\n"
+        "access_control:\n"
+        "  rules:\n"
+        "    - name: scoped_noop\n"
+        "      when:\n"
+        "        request.jurisdiction: EU\n"
+        "      on_violation: deny\n",
+        encoding="utf-8",
+    )
+    ok, err = validate_policy_file(str(p))
+    assert ok is True, f"expected accept, got error: {err}"
+
+
+def test_policy_accepts_rule_with_only_require_no_when(tmp_path):
+    """The common rule shape: require only, no when scoping."""
+    p = tmp_path / "require_only.yaml"
+    p.write_text(
+        "version: 1\n"
+        "policy_id: require-only-test\n"
+        "access_control:\n"
+        "  rules:\n"
+        "    - name: must_have_residency\n"
+        "      require:\n"
+        "        chunk.metadata.residency:\n"
+        "          in: [EU, EEA]\n"
+        "      on_violation: deny\n",
+        encoding="utf-8",
+    )
+    ok, err = validate_policy_file(str(p))
+    assert ok is True, f"expected accept, got error: {err}"

@@ -35,7 +35,7 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..index.base import VerificationOutcome
 from ..policy.policy import VerificationPolicy, overall_status
@@ -597,6 +597,37 @@ def _resolve_receipt_secret() -> bytes:
     )
 
 
+_JSON_PRIMITIVE_TYPES = (str, int, float, bool, type(None))
+
+
+def _find_non_json_value(
+    value: Any, path: str = "caller"
+) -> Optional[Tuple[str, Any]]:
+    """Walk a structure and return the first non-JSON-serializable (path, value).
+
+    Returns ``None`` when every leaf is JSON-compatible. The booleans
+    are checked before ints because ``bool`` is a subclass of ``int``;
+    both are acceptable here so the order does not matter.
+    """
+    if isinstance(value, _JSON_PRIMITIVE_TYPES):
+        return None
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if not isinstance(k, str):
+                return (f"{path} (non-string key {k!r})", k)
+            found = _find_non_json_value(v, f"{path}.{k}")
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            found = _find_non_json_value(item, f"{path}[{i}]")
+            if found is not None:
+                return found
+        return None
+    return (path, value)
+
+
 def compute_caller_hash(
     caller: Dict[str, Any], salt: Optional[bytes] = None
 ) -> str:
@@ -655,12 +686,31 @@ def compute_caller_hash(
         identifier; a downstream consumer dispatches on it the same
         way it does for ``signature.algorithm``.
     """
-    payload = json.dumps(
-        caller,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
+    try:
+        payload = json.dumps(
+            caller,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except TypeError as exc:
+        # Identity systems often pass datetime, set, custom objects, or
+        # other non-JSON-serializable values via the caller dict. Surface
+        # the offending value instead of letting a bare TypeError bubble
+        # up through the receipt pipeline.
+        offending = _find_non_json_value(caller)
+        hint = (
+            f" (offending value at {offending[0]!r}: type "
+            f"{type(offending[1]).__name__})"
+            if offending is not None
+            else ""
+        )
+        raise ValueError(
+            f"caller dict is not JSON-serializable{hint}: {exc}. "
+            f"Pass only JSON types (str, int, float, bool, None, list, "
+            f"dict) in RequestContext.caller; ISO-8601 string for "
+            f"datetimes, list for sets, dict-of-primitives for objects."
+        ) from exc
     if salt is None:
         global _warned_about_unsalted_caller_hash
         if not _warned_about_unsalted_caller_hash:

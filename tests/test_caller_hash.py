@@ -218,3 +218,72 @@ def test_signature_covers_caller_hash():
     assert not verify_receipt_signature(
         receipt_json, HmacSha256Signer(secret=SECRET)
     )
+
+
+# ---------- non-JSON-serializable caller validation ---------- #
+
+
+def test_caller_with_datetime_raises_value_error_with_path():
+    """A datetime in the caller dict surfaces as ValueError, not bare TypeError.
+
+    Identity systems sometimes pass datetime objects (e.g., last-login
+    timestamps from an Okta claim) through the caller dict. The bare
+    json.dumps TypeError is hostile; the wrapped ValueError names the
+    offending path so the operator can fix the wiring.
+    """
+    import datetime
+
+    import pytest
+
+    from provenex.core.receipt import compute_caller_hash
+
+    bad = {
+        "id": "u_42",
+        "session": {"last_login": datetime.datetime(2026, 5, 22)},
+    }
+    with pytest.raises(ValueError) as exc_info:
+        compute_caller_hash(bad)
+    msg = str(exc_info.value)
+    assert "caller.session.last_login" in msg
+    assert "datetime" in msg
+
+
+def test_caller_with_set_raises_value_error_with_path():
+    """A set in the caller dict (common when iterating role membership)."""
+    import pytest
+
+    from provenex.core.receipt import compute_caller_hash
+
+    bad = {"id": "u_1", "roles": {"engineer", "admin"}}
+    with pytest.raises(ValueError) as exc_info:
+        compute_caller_hash(bad)
+    assert "caller.roles" in str(exc_info.value)
+
+
+def test_caller_with_non_string_dict_key_raises_value_error():
+    """A non-string key inside the caller dict (an int from a buggy mapper)."""
+    import pytest
+
+    from provenex.core.receipt import compute_caller_hash
+
+    bad = {"id": "u_1", 99: "value"}
+    with pytest.raises(ValueError) as exc_info:
+        compute_caller_hash(bad)
+    assert "non-string key" in str(exc_info.value)
+
+
+def test_caller_with_only_json_primitives_succeeds():
+    """Confirm the validation is not too strict: lists, nested dicts,
+    null, bool, float all pass through cleanly.
+    """
+    from provenex.core.receipt import compute_caller_hash
+
+    good = {
+        "id": "u_42",
+        "role": "admin",
+        "groups": ["g1", "g2"],
+        "metadata": {"tenant": "acme", "verified": True, "weight": 1.5},
+        "nullable_field": None,
+    }
+    result = compute_caller_hash(good)
+    assert result.startswith("sha256:")
