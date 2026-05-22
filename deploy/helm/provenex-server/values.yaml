@@ -76,12 +76,16 @@ policyConfigMap:
   enabled: false
 
 # Bundled Postgres for kind / dev clusters. Use externalDsnSecret in
-# production.
+# production. The subchart auto-generates a random password when
+# `auth.password` is unset; this avoids shipping a hardcoded default
+# that would be a cluster-wide footgun if `helm install` is run with
+# only the chart's defaults. Retrieve the generated password from the
+# Secret `<release-name>-postgresql` after install. To pin a value
+# yourself, pass `--set postgresql.auth.password=...` at install time.
 postgresql:
   enabled: true
   auth:
     username: provenex
-    password: provenex-dev-only
     database: provenex
   primary:
     persistence:

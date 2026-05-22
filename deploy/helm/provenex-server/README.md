@@ -41,9 +41,10 @@ customize, not a turnkey artifact. Concretely:
   need to add their own `ServiceMonitor` CR.
 - No `PodAntiAffinity` or `TopologySpreadConstraints`: all replicas can
   land on the same node, defeating the PDB during node drains.
-- The bundled `bitnami/postgresql` subchart uses a hardcoded weak
-  password (`provenex-dev-only`) suitable only for kind and CI. Switch
-  to `externalDsnSecret` for any environment with real data.
+- The bundled `bitnami/postgresql` subchart auto-generates a random
+  password on first install; the Secret `<release>-postgresql` holds it.
+  Switch to `externalDsnSecret` for any environment that needs a fixed
+  password or a managed-Postgres DSN.
 - The witness-publisher `CronJob` is a template placeholder; the
   `provenex witness publish` CLI subcommand it expects is not yet
   implemented. Leave `witness.enabled=false` until v1.0.
