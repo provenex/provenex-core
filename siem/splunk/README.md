@@ -65,8 +65,14 @@ typically expect.
 
 `Apps → Provenex → Overview` shows three panels:
 
-1. **Denied tool calls (last 24h)** — `actions[*].admission.decision="deny"`
-2. **UNVERIFIED chunks by jurisdiction** — count by `request.jurisdiction`
-3. **Drift detector alerts** — pulls from the
-   `provenex.index_drift` webhook events when Provenex' drift webhook
-   posts to a Splunk HEC endpoint
+1. **Denied tool calls (last 24h)** - filters
+   `policy.tool_call_control.decisions{}.decision="deny"` (the
+   decisions array runs parallel to `actions[]` and is joined by
+   `action_index`).
+2. **UNVERIFIED chunks by jurisdiction** - count by
+   `policy.access_control.decisions{}.inputs.request_context.jurisdiction`
+   (request_binding holds only hashes; the verbatim request_context
+   lives on the per-decision inputs subtree).
+3. **Drift detector alerts** - pulls from the
+   `provenex.index_drift` webhook events when Provenex's drift webhook
+   posts to a Splunk HEC endpoint.
