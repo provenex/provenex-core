@@ -1,4 +1,4 @@
-"""Phase 1.2 bench: async verify throughput vs sync-in-threadpool.
+"""Async verify throughput vs sync-in-threadpool.
 
 Two configurations against the same pre-ingested Postgres backend:
 

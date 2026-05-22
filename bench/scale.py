@@ -1,16 +1,16 @@
-"""Provenex scale benchmark — CLI entry point.
+"""Provenex scale benchmark, CLI entry point.
 
 Usage::
 
     python -m bench.scale --scale 10k    # smoke test (~5s)
-    python -m bench.scale --scale 100k   # mid-enterprise (~30s)
-    python -m bench.scale --scale 1m     # large enterprise (target tier)
+    python -m bench.scale --scale 100k   # mid-size run (~30s)
+    python -m bench.scale --scale 1m     # large run (~10 min)
     python -m bench.scale --scale 1m --out-dir reports/
 
 Output: two files in ``--out-dir`` (default: ``./bench_reports``)::
 
     bench_<scale>_<timestamp>.json     # full metrics, machine-readable
-    bench_<scale>_<timestamp>.md       # customer-facing report
+    bench_<scale>_<timestamp>.md       # human-readable Markdown summary
 
 The benchmark is deterministic: a given ``--seed`` produces bit-identical
 fingerprints, the same tree head, and comparable latency distributions

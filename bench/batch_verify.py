@@ -1,9 +1,10 @@
-"""Phase 1.1 benchmark — single-fingerprint vs batched verify on the index.
+"""Single-fingerprint vs batched verify on the index.
 
 Measures the per-call latency of the **serial** path (loop calling
 ``verify`` + ``lookup`` per fingerprint, mirroring what
-``verify_chunks`` did pre-1.1) against the **batched** path
-(:meth:`ProvenanceIndex.verify_batch` with the whole list).
+``verify_chunks`` did before the batched path landed) against the
+**batched** path (:meth:`ProvenanceIndex.verify_batch` with the whole
+list).
 
 Runs against the SQLite backend always, and against Postgres when
 ``PROVENEX_TEST_POSTGRES_DSN`` is set. Reports throughput and the
