@@ -128,6 +128,24 @@ ignore = ["E501"]  # line length handled by black
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+# Silence Provenex's own design-time deprecation nudges during test
+# runs. These warnings exist to push callers toward strict defaults
+# before a future major flips them; many tests exercise the lax path
+# on purpose to verify the warning fires, and updating all of them
+# to opt in explicitly is busywork.
+#
+# The filter format is action:message:category:module:lineno where
+# message is a re.match regex. The Provenex warning texts contain
+# colons, which would confuse the colon-separated filter syntax, so
+# we match on the unambiguous prefix before the first colon. The
+# last entry restores the "show each unknown deprecation once" default
+# so third-party deprecations still surface.
+filterwarnings = [
+    "ignore:VerificationPolicy:DeprecationWarning",
+    "ignore:compute_caller_hash called without a salt:DeprecationWarning",
+    "ignore:Provenex index secret resolved via legacy:DeprecationWarning",
+    "ignore:Provenex receipt secret resolved via legacy:DeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["provenex"]
