@@ -23,10 +23,11 @@ Set up environment:
 
 ```bash
 export PINECONE_API_KEY="pcsk_..."
-export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 ```
 
-The signing secret goes in your secrets manager in production. The Pinecone API key is from the Pinecone console.
+The signing secrets go in your secrets manager in production. The Pinecone API key is from the Pinecone console. Provenex uses two role-specific HMAC keys (index-row signing and receipt signing) to keep ingest authority separate from issuance authority; see [`secure_defaults.md`](secure_defaults.md) for the rationale.
 
 ## Wiring
 

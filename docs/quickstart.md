@@ -10,15 +10,18 @@ pip install "provenex-core[langchain]"   # or [langgraph] / [crewai] / [llamaind
 
 For the core SDK with no framework integration, drop the extras. Pure stdlib core; everything else is opt-in. Python 3.10+.
 
-## Set a signing secret
+## Set signing secrets
 
-The provenance index and receipt signer both need an HMAC key. In production this lives in your secrets manager. For local development, export it:
+Provenex uses two role-specific HMAC keys: one for index-row signing and one for receipt signing. Keep them separate so anyone who can write a row in the index cannot also forge a receipt signature. In production both live in your secrets manager. For local development, export them:
 
 ```bash
-export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 ```
 
-Anything calling Provenex in this shell will pick it up automatically. You can also pass `signing_secret=b"..."` explicitly to `SQLiteProvenanceIndex` and `HmacSha256Signer`.
+Anything calling Provenex in this shell picks them up automatically. You can also pass `signing_secret=b"..."` explicitly to `SQLiteProvenanceIndex` and `HmacSha256Signer`.
+
+The legacy `PROVENEX_SIGNING_SECRET` env var is still honoured (both halves fall back to it), but using it emits a one-time `DeprecationWarning`: a single shared secret across the index and the receipt signer means anyone who can produce an index row can also forge a receipt. See [`secure_defaults.md`](secure_defaults.md) for the threat model.
 
 ## Path A: drop into an existing LangChain pipeline
 
