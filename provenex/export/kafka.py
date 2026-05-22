@@ -66,11 +66,17 @@ class KafkaSink:
         KafkaProducer = _require_kafka_python()
         self._topic = topic
         self._key_field = key_field
+        # acks="all" by default: receipts are audit records, so durability
+        # outweighs throughput. kafka-python's default is acks=1 (broker
+        # leader only), which can silently lose messages on broker
+        # failure. Callers can override via producer_kwargs.
+        merged_kwargs: Dict[str, Any] = {"acks": "all"}
+        merged_kwargs.update(producer_kwargs or {})
         self._producer = KafkaProducer(
             bootstrap_servers=bootstrap_servers,
             value_serializer=lambda v: v.encode("utf-8"),
             key_serializer=lambda v: v.encode("utf-8") if v else None,
-            **(producer_kwargs or {}),
+            **merged_kwargs,
         )
         self._closed = False
 

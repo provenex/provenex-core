@@ -15,7 +15,14 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
+
+_logger = logging.getLogger("provenex.export.gcp")
+
+# Pub/Sub hard limit per message (10 MB).
+# https://cloud.google.com/pubsub/quotas#resource_limits
+_PUBSUB_MESSAGE_MAX_BYTES = 10 * 1024 * 1024
 
 
 def _require_pubsub():
@@ -73,6 +80,20 @@ class PubSubSink:
             raise SinkClosedError("PubSubSink is closed")
         receipt_dict = receipt.to_dict()
         data = receipt.to_json(indent=None).encode("utf-8")
+        if len(data) > _PUBSUB_MESSAGE_MAX_BYTES:
+            # See SQSSink for the same rationale: surface the size +
+            # receipt id so the operator can locate the offending
+            # receipt rather than chasing a silent drop.
+            receipt_id = receipt_dict.get("receipt_id", "?")
+            _logger.warning(
+                "PubSubSink: receipt %s body is %d bytes, exceeds Pub/Sub "
+                "limit (%d); skipping publish.",
+                receipt_id, len(data), _PUBSUB_MESSAGE_MAX_BYTES,
+            )
+            raise ValueError(
+                f"Pub/Sub message body {len(data)} bytes exceeds limit "
+                f"of {_PUBSUB_MESSAGE_MAX_BYTES} bytes (receipt {receipt_id})"
+            )
         # Attributes must be strings.
         attrs: Dict[str, str] = {"receipt_id": str(receipt_dict["receipt_id"])}
         if "caller_hash" in receipt_dict:

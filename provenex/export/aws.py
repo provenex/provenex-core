@@ -13,8 +13,15 @@ Both lazy-import boto3 so the core stays stdlib-only.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+
+_logger = logging.getLogger("provenex.export.aws")
+
+# SQS hard limit per message (262144 bytes).
+# https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
+_SQS_MESSAGE_MAX_BYTES = 262_144
 
 
 def _require_boto3():
@@ -66,6 +73,25 @@ class SQSSink:
 
             raise SinkClosedError("SQSSink is closed")
         body = receipt.to_json(indent=None)
+        body_bytes = len(body.encode("utf-8"))
+        if body_bytes > _SQS_MESSAGE_MAX_BYTES:
+            # Surface the size + receipt id so the operator can locate
+            # the offending receipt; raise so _safe_publish records a
+            # warning that the publish failed. SQS would reject the
+            # send with InvalidParameterException anyway, but the
+            # operator can't connect that to "your receipt is too big"
+            # without this preflight.
+            receipt_id = getattr(receipt, "receipt_id", "?")
+            _logger.warning(
+                "SQSSink: receipt %s body is %d bytes, exceeds SQS limit "
+                "(%d); skipping publish. Route large receipts through "
+                "S3AppendSink or split the trajectory.",
+                receipt_id, body_bytes, _SQS_MESSAGE_MAX_BYTES,
+            )
+            raise ValueError(
+                f"SQS message body {body_bytes} bytes exceeds SQS limit "
+                f"of {_SQS_MESSAGE_MAX_BYTES} bytes (receipt {receipt_id})"
+            )
         kwargs: Dict[str, Any] = {"QueueUrl": self._queue_url, "MessageBody": body}
         if self._attrs:
             kwargs["MessageAttributes"] = self._attrs
