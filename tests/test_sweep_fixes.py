@@ -490,3 +490,150 @@ def test_validate_ocsf_event_rejects_missing_required_field():
     with pytest.raises(ValueError) as exc:
         validate_ocsf_event(event)
     assert "severity_id" in str(exc.value)
+
+
+# --------------------------------------------------------------------------- #
+# Bloom wrapper: entry_kind forwarding (correctness)                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_bloom_wrapper_forwards_entry_kind_to_base():
+    """Without forwarding, window-only rows would silently get promoted
+    to whole_chunk and start returning VERIFIED instead of UNVERIFIED.
+    """
+    from provenex import HmacSha256Signer, VerificationOutcome
+    from provenex.index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW
+    from provenex.index.bloom import BloomAcceleratedIndex
+    from provenex.index.sqlite_index import SQLiteProvenanceIndex
+
+    fp_chunk = "sha256:" + "a" * 64
+    fp_window = "sha256:" + "b" * 64
+    secret = b"bloom-entry-kind-test-32-bytes!a"
+
+    base = SQLiteProvenanceIndex(":memory:", signing_secret=secret)
+    try:
+        wrapped = BloomAcceleratedIndex(base=base)
+        # Whole-chunk goes through with the default kind.
+        wrapped.add(
+            fingerprint=fp_chunk,
+            document_id="d1",
+            document_version="sha256:" + "c" * 64,
+            chunk_offset=0,
+            chunk_length=100,
+        )
+        # Window entry: MUST forward entry_kind=ENTRY_KIND_WINDOW.
+        wrapped.add(
+            fingerprint=fp_window,
+            document_id="d1",
+            document_version="sha256:" + "c" * 64,
+            chunk_offset=10,
+            chunk_length=20,
+            entry_kind=ENTRY_KIND_WINDOW,
+        )
+
+        # Whole-chunk row returns VERIFIED on verify.
+        assert wrapped.verify(fp_chunk) == VerificationOutcome.VERIFIED
+        # Window row MUST return UNVERIFIED (locator only); if entry_kind
+        # had been dropped, it would have been promoted to whole_chunk
+        # and returned VERIFIED.
+        assert wrapped.verify(fp_window) == VerificationOutcome.UNVERIFIED
+    finally:
+        base.close()
+
+
+def test_bloom_wrapper_verify_batch_routes_through_base_bulk_query():
+    """verify_batch should screen via Bloom and then issue ONE bulk
+    call to the wrapped backend for the hits, not N per-fingerprint
+    calls.
+    """
+    from unittest.mock import patch
+
+    from provenex import VerificationOutcome
+    from provenex.index.bloom import BloomAcceleratedIndex
+    from provenex.index.sqlite_index import SQLiteProvenanceIndex
+
+    fp_a = "sha256:" + "a" * 64
+    fp_b = "sha256:" + "b" * 64
+    fp_c = "sha256:" + "c" * 64
+    secret = b"bloom-verify-batch-test-32-bytes"
+
+    base = SQLiteProvenanceIndex(":memory:", signing_secret=secret)
+    try:
+        base.add(
+            fingerprint=fp_a,
+            document_id="d",
+            document_version="sha256:" + "0" * 64,
+            chunk_offset=0,
+            chunk_length=50,
+        )
+        base.add(
+            fingerprint=fp_b,
+            document_id="d",
+            document_version="sha256:" + "0" * 64,
+            chunk_offset=50,
+            chunk_length=50,
+        )
+        wrapped = BloomAcceleratedIndex(base=base)
+
+        with patch.object(
+            base, "verify_batch", wraps=base.verify_batch
+        ) as spy:
+            results = wrapped.verify_batch([fp_a, fp_b, fp_c])
+            assert spy.call_count == 1, "expected exactly one delegated bulk call"
+            args, kwargs = spy.call_args
+            # The delegated bulk call must include only the bloom-hit
+            # fingerprints. With the NoopBloomFilter (OSS default) every
+            # fingerprint reports "probably contains", so all three go
+            # through; this still tests the bulk routing.
+            assert list(args[0]) == [fp_a, fp_b, fp_c]
+        outcomes = [r[0] for r in results]
+        assert outcomes == [
+            VerificationOutcome.VERIFIED,
+            VerificationOutcome.VERIFIED,
+            VerificationOutcome.UNVERIFIED,
+        ]
+    finally:
+        base.close()
+
+
+# --------------------------------------------------------------------------- #
+# Simulator: zero-decision warning                                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_simulator_warns_on_zero_decisions(tmp_path):
+    """A corpus of receipts with no access_control decisions (e.g.,
+    verification-only or schema 1.4.0) used to produce a silent
+    empty diff. Now the report carries a note explaining the cause.
+    """
+    import json
+
+    from provenex.policy.simulator import simulate
+    from provenex.policy.unified import Policy
+
+    # Two verification-only receipts: no policy.access_control block.
+    for i in range(2):
+        receipt = {
+            "receipt_id": f"prx_{i}",
+            "policy": {"verification": {"block_unverified": False}},
+            "sources": [],
+            "signature": {"algorithm": "hmac-sha256", "value": "0" * 64},
+        }
+        (tmp_path / f"r{i}.json").write_text(json.dumps(receipt))
+
+    new_policy = Policy.from_text(
+        "version: 1\npolicy_id: sim-warn-test\n"
+        "access_control:\n  rules:\n    - name: r\n"
+        "      require:\n        chunk.metadata.x: y\n"
+        "      on_violation: deny\n",
+        source="sim-warn-test",
+    )
+    report = simulate(new_policy, tmp_path)
+    assert report.receipts_examined == 2
+    assert report.decisions_examined == 0
+    assert len(report.notes) == 1
+    assert "no decisions examined" in report.notes[0]
+    assert "verification-only" in report.notes[0]
+    # The note is also reflected in human + JSON output.
+    assert "Notes" in report.to_human_diff()
+    assert report.to_dict()["notes"] == report.notes
