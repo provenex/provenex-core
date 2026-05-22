@@ -3,7 +3,7 @@
   "description": "Fires when one caller_hash hits more than 20 admission denials inside 30 minutes. Typical patterns: a misconfigured agent retrying a denied tool call, or an explore-the-perimeter probe by a compromised account.",
   "severity": "High",
   "enabled": true,
-  "query": "Provenex_Receipt_CL\n| where TimeGenerated > ago(30m)\n| extend actions = parse_json(actions_s)\n| mv-expand action = actions\n| where action.admission.decision == \"deny\"\n| summarize deny_count = count() by caller = tostring(caller_hash_s), bin(TimeGenerated, 30m)\n| where deny_count > 20",
+  "query": "Provenex_Receipt_CL\n| where TimeGenerated > ago(30m)\n| extend tcc = parse_json(policy_s).tool_call_control\n| mv-expand decision = tcc.decisions to typeof(dynamic)\n| where tostring(decision.decision) == \"deny\"\n| summarize deny_count = count() by caller = tostring(caller_hash_s), bin(TimeGenerated, 30m)\n| where deny_count > 20",
   "queryFrequency": "PT10M",
   "queryPeriod": "PT30M",
   "triggerOperator": "GreaterThan",

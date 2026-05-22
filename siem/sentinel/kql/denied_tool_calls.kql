@@ -1,15 +1,31 @@
 // Tool-call admissions denied by Provenex in the last 24 hours.
 // Receipts arrive on the Provenex_Receipt_CL custom log.
 //
-// Field paths in the custom log come from the Sentinel JSON ingestion
-// "$.path" syntax; adjust if your ingestion pipeline flattens fields
-// differently.
+// Field paths come from the schema 2.5.0 receipt format
+// (docs/receipt_format.md):
+//
+//   * actions[*].action_index, .name, .operation, .target_system
+//   * policy.tool_call_control.decisions[*].action_index, .decision,
+//     .rules_fired
+//
+// The decision is NOT a sub-field of the action; the two arrays are
+// parallel and joined by action_index. The query below expands both
+// and filters to matching index pairs where decision == "deny".
+//
+// The Sentinel JSON ingestion convention names parsed arrays with the
+// "_s" suffix (actions_s, policy_s, caller_hash_s); adjust if your
+// pipeline flattens differently.
 
 Provenex_Receipt_CL
 | where TimeGenerated > ago(24h)
-| extend actions = parse_json(actions_s)
-| mv-expand action = actions
-| where action.admission.decision == "deny"
+| extend tcc = parse_json(policy_s).tool_call_control,
+         actions = parse_json(actions_s)
+| mv-expand decision = tcc.decisions to typeof(dynamic)
+| where tostring(decision.decision) == "deny"
+| extend ai = toint(decision.action_index),
+         rules_fired = tostring(decision.rules_fired)
+| mv-expand action = actions to typeof(dynamic)
+| where toint(action.action_index) == ai
 | extend tool_name        = tostring(action.name),
          tool_operation   = tostring(action.operation),
          target_system    = tostring(action.target_system),

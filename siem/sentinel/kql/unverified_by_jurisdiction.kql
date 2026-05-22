@@ -1,13 +1,22 @@
 // UNVERIFIED chunks in the last 24h, grouped by request jurisdiction.
 // A spike in any one jurisdiction usually means a corpus for that
 // jurisdiction is missing a recent ingest cycle.
+//
+// Jurisdiction lives at
+// policy.access_control.decisions[].inputs.request_context.jurisdiction
+// (schema 2.5.0). request_binding holds only hashes, not the verbatim
+// request_context, so we read jurisdiction from the per-decision
+// inputs. When the operator redacts inputs (sets inputs: null on the
+// receipt) the value is absent; those rows fall into "unknown".
 
 Provenex_Receipt_CL
 | where TimeGenerated > ago(24h)
 | extend sources = parse_json(sources_s),
-         jurisdiction = tostring(parse_json(request_binding_s).request_context.jurisdiction)
-| mv-expand source = sources
-| where source.verification_outcome == "UNVERIFIED"
+         ac = parse_json(policy_s).access_control
+| mv-expand source = sources to typeof(dynamic)
+| where tostring(source.verification_outcome) == "UNVERIFIED"
+| extend first_decision = parse_json(tostring(ac.decisions))[0],
+         jurisdiction = tostring(first_decision.inputs.request_context.jurisdiction)
 | extend jurisdiction = iif(isempty(jurisdiction), "unknown", jurisdiction)
 | summarize unverified_count = count() by jurisdiction
 | order by unverified_count desc
