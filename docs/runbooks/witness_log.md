@@ -68,6 +68,8 @@ publish_to_s3_object_lock(record.to_json(), bucket="audit-witness", key=f"witnes
 
 `WitnessLog.append(...)` reads the prior record from the local file, hashes it, signs the new record over `(previous_checkpoint_hash, checkpoint_index, tree_size, tree_root, issued_at)`, appends to the local file, and returns the new `WitnessRecord` so the publication step can ship it elsewhere. If the publication step fails, the local log still has the new record; the operator catches up at the next cron tick (publishing the backlog).
 
+**Concurrent appends are serialised.** Since v0.10.x, `append(...)` acquires an exclusive advisory file lock on a sidecar `<log_path>.lock` file for the duration of the read-then-write window. Two cron jobs racing against the same log (or two threads in a sidecar process) cannot both observe the same predecessor and produce duplicate `checkpoint_index` values. Caveat: `fcntl.flock` on NFS is unreliable without `rpc.lockd`; keep the log on local disk, or run a single-writer deployment when the log lives on a network filesystem.
+
 ## How an auditor verifies a witness chain
 
 Given a receipt that carries `transparency_log.tree_root` and a set of witness records published to the operator's chosen external store, the auditor:

@@ -66,6 +66,15 @@ for a faithful end-to-end test.
 
 ## Companion piece
 
-The Helm chart's witness-publisher CronJob is what writes new receipts
-to this bucket on a schedule. See
-[deploy/helm/provenex-server/templates/cronjob-witness.yaml](../../helm/provenex-server/templates/cronjob-witness.yaml).
+The publication side lives in `WitnessLog.append(...)`; the operator's
+job is to take each appended record and write it to this bucket. See
+[`docs/runbooks/witness_log.md`](../../../docs/runbooks/witness_log.md)
+for the full publication procedure (the runbook ships sample
+`publish_to_s3_object_lock` glue).
+
+The Helm chart's
+[`templates/cronjob-witness.yaml`](../../helm/provenex-server/templates/cronjob-witness.yaml)
+is currently a disabled-by-default placeholder; the
+`provenex witness publish` CLI it references is not yet implemented.
+Stand the publisher up as a tiny custom CronJob calling the library
+API directly, as shown in the runbook.
