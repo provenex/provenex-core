@@ -159,7 +159,7 @@ The signature covers `caller_hash` via the existing canonical-JSON rule - tamper
 
 ## Top-level `request_binding` *(schema 2.4.0+)*
 
-A cryptographic binding between the receipt and the request that produced it. Without this block, the receipt's link to the triggering query is implicit and operator-controlled: a valid signed receipt could be presented as evidence for any query. With it, an auditor who has the original query and request_context can re-derive the hashes and confirm a match.
+A cryptographic binding between the receipt and the request that produced it. Without this block, the receipt's link to the triggering query is implicit and operator-controlled: a valid signed receipt could be presented as evidence for any query (the audit-replay attack class). With it, an auditor who has the original query and request_context can re-derive the hashes and confirm a match.
 
 ```json
 {

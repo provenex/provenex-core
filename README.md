@@ -23,7 +23,7 @@ One CISO question this answers in plain English: **Can this agent access Jira, S
 | You are | Jump to |
 | --- | --- |
 | **VP of Engineering** evaluating whether to add this to a roadmap | [Where Provenex fits in your stack](#where-provenex-fits-in-your-stack) |
-| **Security Architect** wanting to greenlight procurement | [Built for security architects](#built-for-security-architects) |
+| **Security Architect** wanting to greenlight procurement | [Cryptographic architecture](#cryptographic-architecture) |
 | **Compliance Lead** asking what evidence ends up on the receipt | [What you declare. What you get back.](#what-you-declare-what-you-get-back) |
 | **Staff Engineer** writing the integration | [Easy integration](#easy-integration) |
 
@@ -410,24 +410,24 @@ export PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.toke
 python examples/attack_thwarted_demo.py --fast
 ```
 
-Three denies + 3 UNVERIFIED + 1 forged signature, every attempt captured on a signed audit anchor the regulator can re-verify offline.
+Three denies + 3 UNVERIFIED + 1 forged signature, every attempt captured on a signed audit anchor the regulator can re-verify offline. The demo's closing scene writes a `regulator_bundle/` directory and prints the literal one-liner an auditor on a different machine would run against it. No DB connection, no API callback to the producing organisation.
 
-## Built for security architects
+## Cryptographic architecture
 
-The core is small on purpose: pure-stdlib Python, HMAC-SHA256 default, optional Ed25519 for cross-org receipts, optional Postgres for multi-node deployments. A reviewer can read every load-bearing function in one sitting.
+The optional Merkle transparency log (`MerkleSQLiteProvenanceIndex`) layers an RFC 6962 tree over the same HMAC-signed rows so insertion or removal of rows by a key-holder is detectable by anyone holding a previous tree head. The OSS `WitnessLog` is the hash-chained, signed checkpoint log operators publish to a store they cannot retroactively edit, closing split-view resistance against a key-holding operator. An operator who holds the signing key cannot silently drop, reorder, or rewrite past receipts without breaking the chain.
 
 The five verification outcomes (`VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED`) are the discrete cryptographic states. They are not graded scores. The receipt records the verification outcome and the policy decision independently for every item, so an auditor can reason about them separately. The fixed precedence (`TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED`) is codified as `OUTCOME_PRECEDENCE` in code so callers reason about it the same way the engine does.
 
-The receipt commits cryptographically to the request that produced it. The top-level `request_binding` block hashes the triggering query and the canonical request context into the signed payload, so a valid receipt cannot be presented as evidence for a different query. The verbatim query is never recorded; only its hash.
+The receipt commits cryptographically to the request that produced it. The top-level `request_binding` block hashes the triggering query and the canonical request context into the signed payload, so a valid receipt cannot be presented as evidence for a different query (the audit-replay attack class). The verbatim query is never recorded; only its hash.
 
-The optional Merkle transparency log (`MerkleSQLiteProvenanceIndex`) layers an RFC 6962 tree over the same HMAC-signed rows so insertion or removal of rows by a key-holder is detectable by anyone holding a previous tree head. The OSS `WitnessLog` is the hash-chained, signed checkpoint log operators publish to a store they cannot retroactively edit, closing split-view resistance against a key-holding operator.
+The core is small on purpose: pure-stdlib Python, HMAC-SHA256 default, optional Ed25519 for cross-org receipts, optional Postgres for multi-node deployments. A reviewer can read every load-bearing function in one sitting.
 
 For dive-deep reading:
 
 - [`docs/architecture.md`](https://github.com/provenex/provenex-core/blob/main/docs/architecture.md): the entry point. Points at every other doc and the source map.
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): the algorithm end-to-end. Normalization, Rabin-Karp recurrence over Mersenne prime `2^61 - 1`, sliding-window construction, `entry_kind` promotion rule, Merkle leaf hash `SHA256(0x00 || leaf)`, canonical signing payload, peppered fingerprint mode.
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended and undefended threats, the witness log for split-view resistance.
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): the receipt schema 2.4.0 wire spec and the full schema-history table.
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): the receipt schema 2.5.0 wire spec and the full schema-history table.
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): the YAML DSL, supported operators, worked examples, and the per-decision purity rationale (why the DSL refuses trajectory-level rules, cross-decision aggregation, and external-data lookups).
 - [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): Postgres topology, 1M-chunk benchmark numbers, policy-evaluation latency profile.
 - [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md): how receipts compose with downstream UEBA / SIEM. Provenex is the firewall, your detector is the SIEM. Five worked detection patterns.
@@ -515,6 +515,27 @@ python provenex-core/examples/standalone_demo.py
 
 For the integration-pattern story (a poisoned chunk added directly to the vector store, bypassing Provenex ingest, gets caught and blocked at the retrieval boundary), run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). For the tool-call admission tour, run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py). For the four-attack regulator demo, see [What this looks like for a buyer](#what-this-looks-like-for-a-buyer).
 
+### Verify in 30 seconds (auditor path)
+
+The point of the receipt is that someone outside your deployment can verify it. Same machine or a different one, same network or a different one, with nothing of yours installed except an open-source package. `scripts/generate_audit_bundle.py` produces a runnable proof bundle (two clean Ed25519-signed receipts, one deliberately tampered receipt, the matching public key) so you can try the auditor flow against real artifacts:
+
+```bash
+# In the producing org.
+pip install "provenex-core[ed25519]"
+git clone https://github.com/provenex/provenex-core.git
+export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+python provenex-core/scripts/generate_audit_bundle.py     # writes dist/audit_bundle.zip
+
+# Hand the zip to an auditor. On their machine. No connection to your infra.
+unzip audit_bundle.zip && cd audit_bundle
+pip install "provenex-core[ed25519]"
+provenex audit receipt-1-retrieval-verified.json --public-key provenex_public_key.pem    # PASS
+provenex audit receipt-3-retrieval-tampered.json --public-key provenex_public_key.pem    # FAIL
+```
+
+No database, no API call back to the producing org, no shared secret. The auditor holds the Ed25519 public key (in the bundle, published once openly), the receipt JSON, and a copy of `provenex audit`. The signature math is SHA-256 + Ed25519; any standards-compliant crypto library reproduces it in ~25 lines, see [`docs/regulator_verification.md`](https://github.com/provenex/provenex-core/blob/main/docs/regulator_verification.md).
+
 ## CLI
 
 ```bash
@@ -527,10 +548,12 @@ provenex audit   --trajectory ./receipts/            # validate a whole agentic 
 provenex policy  validate hr_policy.yaml             # parse + validate a policy file
 provenex policy  hash     hr_policy.yaml             # print canonical policy_version_hash(es)
 provenex index   audit --index prov.db --threshold-days 180   # supersession lint
+provenex chain   verify --log witness.jsonl                    # witness log integrity (chain + signatures)
+provenex chain   verify --log witness.jsonl --index prov.db    # also cross-check live Merkle tree head
 provenex selftest                                              # conformance check
 ```
 
-`provenex policy validate` is the CI-time check for policy files. `provenex policy hash` prints the canonical `policy_version_hash` that will appear on every receipt produced under that policy. `provenex index audit` is the cron-style check that catches a re-ingest path that skipped Provenex (and would otherwise leave stale chunks marked VERIFIED). `provenex selftest` is the one-command conformance check security teams ask for. For receipts signed with Ed25519, pass `--public-key audit.pub` to verify with only the public key.
+`provenex policy validate` is the CI-time check for policy files. `provenex policy hash` prints the canonical `policy_version_hash` that will appear on every receipt produced under that policy. `provenex index audit` is the cron-style check that catches a re-ingest path that skipped Provenex (and would otherwise leave stale chunks marked VERIFIED). `provenex chain verify` confirms that the signed checkpoint log (the `WitnessLog`) has not been retroactively rewritten: an operator who holds the signing key cannot silently drop, reorder, or edit past checkpoints without breaking the chain, and the command surfaces the break. `provenex selftest` is the one-command conformance check security teams ask for. For receipts and logs signed with Ed25519, pass `--public-key audit.pub` to verify with only the public key.
 
 ## Privacy and data sovereignty
 
@@ -551,6 +574,7 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 - [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.5.0 specification (current); full version history table inside
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started, including a policy-driven retrieval path
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended/undefended threats, trust model for policy decisions
+- [`docs/compliance/`](https://github.com/provenex/provenex-core/blob/main/docs/compliance/): clause-by-clause mappings for EU AI Act Art. 12, DORA Art. 17-19, ISO 42001, SR 11-7
 - [`docs/failure_modes.md`](https://github.com/provenex/provenex-core/blob/main/docs/failure_modes.md): per-component fail-open/fail-closed behavior + blast-radius table; pointers into the runbooks
 - [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): 1M-chunk benchmark numbers and policy-evaluation latency profile
 
