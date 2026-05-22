@@ -158,9 +158,23 @@ class IngestEntry(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    """POST /v1/ingest request body."""
+    """POST /v1/ingest request body.
 
-    entries: List[IngestEntry]
+    The ``entries`` list is bounded server-side (default 10_000 per
+    request). Higher batch sizes should be split across multiple
+    requests; the index serializes ingest at the row level either way,
+    so a single huge batch is not faster than several small ones, and
+    a missing bound here would let a single request exhaust verify-pod
+    memory before validation completes.
+    """
+
+    entries: List[IngestEntry] = Field(
+        ..., min_length=1, max_length=10_000,
+        description=(
+            "Up to 10000 entries per request. Split larger batches "
+            "across multiple requests."
+        ),
+    )
 
 
 class IngestResponse(BaseModel):

@@ -19,6 +19,7 @@ policy file (if any) is read once at startup.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -26,6 +27,8 @@ from typing import Any, AsyncIterator, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
+
+_logger = logging.getLogger("provenex.server")
 
 from ..core.receipt import ProvenanceReceipt, ReceiptSigner
 from ..core.signer_registry import SignerRegistry, TenantNotFound
@@ -543,11 +546,24 @@ def create_app() -> FastAPI:
                 "sha256:" + "0" * 64
             )
         except Exception as exc:  # pragma: no cover - probe error path
+            # Log the underlying exception (the operator needs the
+            # detail to diagnose) but do not leak driver-level text
+            # (DSN fragments, host:port, SQL state) into the HTTP
+            # response, which is scraped by probers and proxied through
+            # load balancers.
+            _logger.warning(
+                "readyz: index probe failed (exc_type=%s)",
+                type(exc).__name__,
+                exc_info=True,
+            )
             raise HTTPException(
                 status_code=503,
                 detail={
                     "error": "index_unreachable",
-                    "message": str(exc),
+                    "message": (
+                        "index probe failed; see server logs for "
+                        "exception detail"
+                    ),
                 },
             )
         return JSONResponse(
