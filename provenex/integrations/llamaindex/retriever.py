@@ -132,7 +132,12 @@ class ProvenexRetriever:
         if hasattr(inner, "get_content"):
             try:
                 return inner.get_content()
-            except TypeError:
+            except (TypeError, AttributeError):
+                # LlamaIndex node shapes vary across versions: some
+                # ``get_content`` implementations raise TypeError on
+                # missing args, others AttributeError when the node's
+                # internal text store is unset. Either way, fall back
+                # to the older ``.text`` accessor below.
                 pass
         if hasattr(inner, "text"):
             return inner.text
