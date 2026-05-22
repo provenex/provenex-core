@@ -51,6 +51,12 @@ from ..admission import AdmissionResult, admission_check
 from ..context import ToolCallContext
 
 
+# Size at which the wrapper warns about undrained receipts. Tuned to
+# survive a typical agent loop with hundreds of tool calls while still
+# catching a forgotten drain before it becomes a memory issue.
+_RECEIPTS_DRAIN_WARN_THRESHOLD = 1000
+
+
 # A RequestFactory is any callable invocation_payload → RequestContext.
 # Provenex does not own identity. The factory is the seam where the
 # host application injects caller / jurisdiction / purpose / timestamp.
@@ -127,8 +133,11 @@ class ProvenexToolWrapper:
         # Receipt log surfaced for the application to drain after each
         # agent step. The wrapper does not assume the framework knows
         # about Provenex receipts; the caller is responsible for reading
-        # and persisting these.
+        # and persisting these. We emit a one-time warning when the list
+        # grows past a soft threshold so a long-running agent that
+        # forgets to drain doesn't grow unbounded silently.
         self._receipts: List[Any] = []
+        self._receipts_growth_warned: bool = False
 
     # ---- LangChain-facing surface ---- #
 
@@ -199,6 +208,23 @@ class ProvenexToolWrapper:
             sink=self._sink,
         )
         self._receipts.append(result.receipt)
+        # One-time warning when an undrained list crosses the threshold.
+        if (
+            not self._receipts_growth_warned
+            and len(self._receipts) >= _RECEIPTS_DRAIN_WARN_THRESHOLD
+        ):
+            import warnings
+
+            warnings.warn(
+                f"ProvenexToolWrapper.receipts holds "
+                f"{len(self._receipts)} receipts; drain via "
+                f"`wrapper.receipts.clear()` (or route to a sink at "
+                f"construction time) to avoid unbounded growth in "
+                f"long-running agents. This warning fires once per "
+                f"wrapper instance.",
+                stacklevel=2,
+            )
+            self._receipts_growth_warned = True
 
         if not result.allowed:
             if self._on_deny is not None:
