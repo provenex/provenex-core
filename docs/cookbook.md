@@ -471,6 +471,38 @@ Unsuperseded older versions (1):
 
 Wire into cron at a cadence matching your re-ingest discipline. Exit 0 on a clean run, 1 on any drift. See [runbooks/postgres_operations.md § Index audit](runbooks/postgres_operations.md#index-audit-provenex-index-audit) for the remediation procedure.
 
+### 21. Verify the witness log's integrity
+
+The `provenex chain verify` CLI confirms that the signed checkpoint log (`WitnessLog`) has not been retroactively rewritten by an operator who holds the signing key.
+
+```bash
+# Same-org HMAC verification (env-set secret).
+export PROVENEX_RECEIPT_SECRET="<the secret the witness publisher signed with>"
+provenex chain verify --log /var/provenex/witness.jsonl
+```
+
+Output on a clean log:
+
+```
+Witness log: /var/provenex/witness.jsonl
+Algorithm:   hmac-sha256
+Checkpoints: 1463
+
+  Chain integrity ......... [OK]
+    (signatures verify, previous_checkpoint_hash links match, checkpoint_index runs 0, 1, 2, ...)
+
+  First checkpoint:  #0  tree_size=42
+    2026-02-01T00:00:00.000Z
+    sha256:...
+  Latest checkpoint: #1462  tree_size=982147
+    2026-05-22T07:00:00.000Z
+    sha256:...
+
+  Overall: PASS
+```
+
+For Ed25519-signed logs (recommended when handing the log to an external auditor), pass `--public-key witness.pub` instead of setting the env var. With `--index <db>`, the command additionally cross-checks the latest checkpoint's `tree_size` and `tree_root` against the live Merkle index, so an operator can confirm the published log matches current state. See [runbooks/witness_log.md](runbooks/witness_log.md) for the full publication procedure and threat model.
+
 ## Read next
 
 - [examples/](../examples/): runnable end-to-end versions of most of the recipes above.

@@ -475,7 +475,10 @@
               "$ref": "#/components/schemas/IngestEntry"
             },
             "type": "array",
-            "title": "Entries"
+            "minItems": 1,
+            "maxItems": 10000,
+            "title": "Entries",
+            "description": "Up to 10000 entries per request. Split larger batches across multiple requests."
           }
         },
         "type": "object",

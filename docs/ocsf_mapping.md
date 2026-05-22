@@ -8,6 +8,14 @@ and is shipped with the OSS core in `provenex.export.ocsf`. The
 function `receipt_to_ocsf(receipt_dict)` is the public entrypoint;
 `OCSFAdapter` is the streaming-sink wrapper.
 
+Pass `validate=True` to `receipt_to_ocsf(...)` to run an in-process
+schema check against the OCSF v1.3 enum ranges Provenex emits
+(`class_uid`, `category_uid`, `activity_id`, `severity_id`, plus the
+`type_uid == class_uid * 100 + activity_id` invariant). The check is
+off by default for hot-path callers; enable it in tests or before a
+strict-SIEM rollout. The same check is available standalone as
+`validate_ocsf_event(event)` for callers that build events by hand.
+
 ## OCSF version targeted
 
 **v1.3.0**. The mapping is forward-compatible - OCSF treats new

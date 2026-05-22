@@ -111,6 +111,8 @@ The decorator wraps `handle_tools_call` with the admission check. Each call:
 
 The receipt is emitted regardless of outcome. If you wired a sink, the receipt lands there; if you wired a `receipts_sink` list, the receipt is appended.
 
+**Non-`tools/call` methods bypass admission.** The decorator inspects `request["method"]` (or the `method` attribute on duck-typed objects). Anything other than `"tools/call"` (e.g. `"resources/list"`, `"prompts/get"`, `"initialize"`) is forwarded to the wrapped handler unchanged, with no admission check and no receipt. This is deliberate: those methods carry no tool name or arguments to evaluate a policy against, and decoding them as `tools/call` would either always allow or fire the wrong rule. Apply the decorator to a `tools/call`-specific handler when you want fine-grained control, or to the dispatcher when you want the passthrough.
+
 ## The `on_deny` callback (JSON-RPC error responses)
 
 By default, a deny raises `ToolCallDenied`. The MCP server is expected to translate that into a JSON-RPC error response. The cleaner path is to supply an `on_deny` callback that produces the JSON-RPC error directly:
