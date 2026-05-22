@@ -109,6 +109,38 @@ def reconcile_policy(
         data={file_name: body},
     )
 
+    # Collision check: if the target ConfigMap exists and was created
+    # by a DIFFERENT Policy CR (per the source-policy annotation),
+    # refuse to overwrite. Without this guard the second Policy would
+    # silently overwrite the first, leaving verify pods enforcing
+    # whichever policy reconciled last.
+    from . import _check_owner_collision
+
+    try:
+        existing = core.read_namespaced_config_map(target_cm, namespace)
+    except kubernetes.client.exceptions.ApiException as exc:
+        if exc.status == 404:
+            existing = None
+        else:
+            raise
+    existing_annotations = (
+        getattr(existing.metadata, "annotations", None)
+        if existing is not None
+        else None
+    )
+    collision_msg = _check_owner_collision(
+        existing_annotations, policy_name=name, target_cm=target_cm
+    )
+    if collision_msg is not None:
+        logger.warning(
+            "Policy %s/%s rejected: %s", namespace, name, collision_msg
+        )
+        return {
+            "phase": "Rejected",
+            "message": collision_msg,
+            "observedGeneration": meta.get("generation"),
+        }
+
     try:
         core.replace_namespaced_config_map(target_cm, namespace, cm_body)
     except kubernetes.client.exceptions.ApiException as exc:
