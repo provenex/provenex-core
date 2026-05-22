@@ -77,6 +77,11 @@ End: the seven questions reprinted with the specific receipt field
 that proves each answer, plus an aggregate audit walking the saved
 receipts: three denies + three UNVERIFIED + one forged signature, all
 captured on signed audit anchors the regulator can re-verify offline.
+
+Scene 5 writes a ``regulator_bundle/`` directory with every receipt
+plus a bundle README, and prints the literal one-liner an auditor on
+a different machine would run against it. No DB connection, no API
+callback to the producing organisation. The directory is the artifact.
 """
 
 from __future__ import annotations
@@ -84,10 +89,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
 from typing import Any, List
+
+
+# Marker file written into the demo's work directory on every run.
+# ``cleanup`` refuses to remove a directory that doesn't carry this
+# marker, so a customer whose cwd happens to contain
+# ``_attack_thwarted_demo`` for unrelated reasons does not lose data.
+_DEMO_MARKER_NAME = ".provenex-attack-thwarted-demo"
 
 # Real LangChain. langchain-core ships InMemoryVectorStore + @tool +
 # Document. No cloud creds; we plug in a stdlib-only deterministic
@@ -272,21 +285,29 @@ def pause(seconds: float, skip: bool = False) -> None:
 
 
 def cleanup(*paths: Path) -> None:
+    """Remove the demo's previous work directory, safely.
+
+    Refuses to remove a directory that doesn't contain
+    ``_DEMO_MARKER_NAME``. This protects a customer whose cwd happens
+    to have a folder named ``_attack_thwarted_demo`` for unrelated
+    reasons: we never nuke a directory the demo did not create itself.
+    """
     for p in paths:
-        try:
-            if p.is_dir():
-                for child in p.iterdir():
-                    if child.is_dir():
-                        for cc in child.iterdir():
-                            cc.unlink(missing_ok=True)
-                        child.rmdir()
-                    else:
-                        child.unlink(missing_ok=True)
-                p.rmdir()
-            else:
-                p.unlink(missing_ok=True)
-        except FileNotFoundError:
-            pass
+        if not p.exists():
+            continue
+        if p.is_dir():
+            if not (p / _DEMO_MARKER_NAME).exists():
+                print(
+                    f"{RED}error:{RESET} refusing to remove {p}: directory "
+                    f"exists but is not a previous run of this demo (no "
+                    f"{_DEMO_MARKER_NAME} marker). Move the directory out "
+                    f"of the way and re-run.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
+            shutil.rmtree(p)
+        else:
+            p.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +319,11 @@ def setup(args: argparse.Namespace):
     work_dir = Path.cwd() / "_attack_thwarted_demo"
     cleanup(work_dir)
     work_dir.mkdir(exist_ok=True)
+    # Drop the marker file so the next cleanup() knows this directory
+    # is ours to remove.
+    (work_dir / _DEMO_MARKER_NAME).write_text(
+        "Created by examples/attack_thwarted_demo.py; safe to remove.\n"
+    )
     receipts_dir = work_dir / "receipts"
     receipts_dir.mkdir(exist_ok=True)
 
@@ -856,6 +882,111 @@ def act4_insider_misuse(receipts_dir, signer, policy, trajectory, args):
 
 
 # ---------------------------------------------------------------------------
+# Scene 5: hand off to a regulator
+# ---------------------------------------------------------------------------
+
+BUNDLE_README = """\
+# Same-org audit bundle (HMAC)
+
+This directory contains the signed receipts produced by the four-act
+attack demo. **The signatures are HMAC-SHA256**, which means
+verification requires the shared secret the producer signed with.
+That is the right tool for **same-organisation** audit (internal
+compliance, internal red team), but **not** for cross-organisation
+handoff to an external regulator who does not hold the secret.
+
+## Verify this bundle (same-org)
+
+    pip install provenex-core
+    export PROVENEX_RECEIPT_SECRET=<the secret the producer used>
+    provenex audit --trajectory ./
+
+`provenex audit`:
+- reads each receipt JSON,
+- re-derives the canonical signing payload (sorted keys, no whitespace),
+- recomputes the HMAC in constant time,
+- walks the trajectory DAG and confirms parent links match.
+
+No DB connection, no live signer state. Verification is local to the
+auditor's machine.
+
+## For cross-org handoff: use the Ed25519 bundle generator
+
+For a regulator outside the producing org, swap the demo's
+``HmacSha256Signer()`` for ``Ed25519Signer`` and ship the public key
+alongside the receipts. The canonical Ed25519 reference is
+``scripts/generate_audit_bundle.py`` in the repo: it writes
+``dist/audit_bundle.zip`` containing two clean receipts, one
+deliberately tampered receipt, the policy, and the matching
+``provenex_public_key.pem``. The auditor runs:
+
+    pip install "provenex-core[ed25519]"
+    provenex audit receipt-1-retrieval-verified.json --public-key provenex_public_key.pem
+    provenex audit receipt-3-retrieval-tampered.json --public-key provenex_public_key.pem
+
+The auditor needs only the public key; the producing org never shares
+the private key, and the producing org's infrastructure is never
+touched.
+
+## What this bundle proves
+
+- Q1-Q3: every receipt records ``policy_id`` and ``policy_version_hash``.
+- Q4-Q5: any UNVERIFIED outcome with ``entry_kind=window`` is a splice;
+  any UNVERIFIED without an ``entry_kind`` is a never-indexed chunk.
+- Q6: any ``decision=deny`` in ``policy.tool_call_control.decisions``
+  is a denied agent action with the firing rule named in ``rules_fired``.
+- Q7: the receipts verify independently of the producing organisation.
+  The forged receipt's signature fails to verify.
+
+See ``docs/regulator_verification.md`` for the full algorithm and the
+~25-line pure-stdlib reference verifier in any language.
+"""
+
+
+def scene5_regulator_bundle(work_dir: Path, receipts_dir: Path, args) -> None:
+    banner(
+        "Scene 5 - hand off to a regulator "
+        "(the cold-verification property, made concrete)"
+    )
+
+    bundle_dir = work_dir / "regulator_bundle"
+    bundle_dir.mkdir(exist_ok=True)
+
+    # Copy receipts into the bundle. Pure stdlib; no shutil required.
+    copied = 0
+    for path in sorted(receipts_dir.glob("*.json")):
+        (bundle_dir / path.name).write_text(path.read_text())
+        copied += 1
+
+    (bundle_dir / "README.md").write_text(BUNDLE_README)
+
+    kv("bundle directory", str(bundle_dir), color=GREEN)
+    kv("receipts in bundle", str(copied))
+    kv("bundle README", str(bundle_dir / "README.md"))
+    print()
+    print(
+        f"  {DIM}This bundle is HMAC-signed; verification requires the "
+        f"shared secret the producer used. That is the right scope for "
+        f"INTERNAL audit. Same-org auditor on another machine runs:{RESET}"
+    )
+    print()
+    print(f"    {BOLD}pip install provenex-core{RESET}")
+    print(
+        f"    {BOLD}export PROVENEX_RECEIPT_SECRET={RESET}"
+        f"{DIM}<the secret this demo signed with>{RESET}"
+    )
+    print(f"    {BOLD}provenex audit --trajectory {bundle_dir}/{RESET}")
+    print()
+    print(
+        f"  {DIM}For a cross-org / regulator-facing bundle (no shared secret), "
+        f"see scripts/generate_audit_bundle.py: it ships two Ed25519-signed "
+        f"clean receipts, one tampered, and the matching public key. The "
+        f"auditor verifies with the public key alone.{RESET}"
+    )
+    pause(0.4, args.fast)
+
+
+# ---------------------------------------------------------------------------
 # Aggregate audit
 # ---------------------------------------------------------------------------
 
@@ -1064,6 +1195,7 @@ def main() -> int:
     act4_insider_misuse(receipts_dir, signer, policy, trajectory, args)
 
     aggregate_audit(receipts_dir, signer)
+    scene5_regulator_bundle(work_dir, receipts_dir, args)
 
     index.close()
     return 0
