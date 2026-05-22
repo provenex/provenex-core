@@ -166,3 +166,67 @@ def test_iter_reports_missing_required_field(tmp_path):
     msg = str(exc_info.value)
     assert "missing_field.jsonl" in msg
     assert "line 1" in msg
+
+
+def test_concurrent_threaded_appends_produce_monotonic_chain(tmp_path):
+    """Many threads racing append() must produce a chain with
+    monotonic checkpoint_index values, no duplicates, and a valid
+    previous_checkpoint_hash linking every record to its predecessor.
+
+    Without the file lock, two threads could both read latest() as N
+    and both write N+1 with the same previous_checkpoint_hash, breaking
+    the chain.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    log_path = str(tmp_path / "concurrent.jsonl")
+    signer = HmacSha256Signer(secret=SECRET)
+    log = WitnessLog(log_path, signer=signer)
+
+    n_appends = 30
+
+    def _append(i: int):
+        # Each thread builds its own WitnessLog instance pointing at the
+        # same file (mirrors the multi-process case more closely than
+        # sharing one instance would).
+        thread_log = WitnessLog(log_path, signer=HmacSha256Signer(secret=SECRET))
+        return thread_log.append(
+            tree_size=i, tree_root="sha256:" + f"{i:064x}"
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = [ex.submit(_append, i) for i in range(n_appends)]
+        for f in as_completed(futures):
+            f.result()  # surface any exception
+
+    # Re-read the log fresh and verify:
+    # (a) every record verifies (signature + chain link),
+    # (b) checkpoint_index runs 0, 1, ..., n_appends-1 exactly,
+    # (c) no duplicates.
+    fresh = WitnessLog(log_path, signer=HmacSha256Signer(secret=SECRET))
+    records = fresh.records()
+    indices = [r.checkpoint_index for r in records]
+    assert indices == list(range(n_appends)), (
+        f"checkpoint_index sequence was {indices!r}; expected 0..{n_appends-1} "
+        f"with no gaps or duplicates. A failure here means the file lock "
+        f"did not serialise concurrent appends."
+    )
+    assert fresh.verify(), "chain integrity check failed after concurrent appends"
+
+
+def test_lock_file_is_created_alongside_the_log(tmp_path):
+    """The lock sidecar file is at <path>.lock; ensure it lands next
+    to the log on first append. Operators monitoring for stray files
+    should know the lock file is expected.
+    """
+    log_path = str(tmp_path / "with_lock.jsonl")
+    signer = HmacSha256Signer(secret=SECRET)
+    WitnessLog(log_path, signer=signer).append(
+        tree_size=1, tree_root="sha256:" + "a" * 64
+    )
+    import os
+
+    assert os.path.exists(log_path)
+    assert os.path.exists(log_path + ".lock"), (
+        "expected lock sidecar file to exist after first append"
+    )

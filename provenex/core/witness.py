@@ -40,6 +40,7 @@ Properties of the local log on its own (no external publication):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -48,6 +49,66 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional
 
 from .receipt import ReceiptSigner, verify_receipt_signature
+
+
+@contextlib.contextmanager
+def _exclusive_file_lock(path: str) -> Iterator[None]:
+    """Acquire an exclusive advisory file lock for the duration of the block.
+
+    Uses a sidecar ``<path>.lock`` file so locking is independent of the
+    main file's open mode. Platform-aware:
+
+        * POSIX: ``fcntl.flock(LOCK_EX)`` (blocks until acquired).
+        * Windows: ``msvcrt.locking(LK_LOCK, ...)`` (raises after a few
+          seconds of waiting; the caller's retry policy decides).
+
+    Advisory locking: cooperating processes that use the SAME lock-file
+    path are serialised. A non-cooperating writer that opens the log
+    directly is not blocked. The witness-log contract is that all writers
+    go through this class.
+
+    Caveat: ``fcntl.flock`` on NFS is unreliable without a working
+    ``rpc.lockd`` daemon and can silently no-op. Operators running the
+    log on NFS should either move the file to local disk, ensure NFSv4
+    file delegation, or rely on a single-writer deployment (one cron
+    job at a time).
+    """
+    lock_path = path + ".lock"
+    # Create or open the lock file. O_CREAT plus 0o600 so a freshly-
+    # created lock file is owner-only.
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            import fcntl  # type: ignore[import-not-found]
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except ImportError:
+            # Windows fallback.
+            import msvcrt  # type: ignore[import-not-found]
+
+            # LK_LOCK blocks (well, retries internally) until the byte
+            # range becomes available. Locking 1 byte at offset 0 is
+            # sufficient as an advisory sentinel.
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        yield
+    finally:
+        try:
+            try:
+                import fcntl  # type: ignore[import-not-found]
+
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except ImportError:
+                import msvcrt  # type: ignore[import-not-found]
+
+                # Seek back to 0 before unlock; msvcrt.locking tracks
+                # file position.
+                try:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                except OSError:
+                    pass
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -157,6 +218,14 @@ class WitnessLog:
     def append(self, tree_size: int, tree_root: str) -> WitnessRecord:
         """Issue a new signed checkpoint and append it to the log.
 
+        Thread-safe and multi-process-safe via an advisory file lock
+        on a sidecar ``<path>.lock`` file. Concurrent ``append`` calls
+        from different threads OR different processes are serialised
+        so the chain's ``previous_checkpoint_hash`` link stays intact
+        and ``checkpoint_index`` stays monotonic. See
+        :func:`_exclusive_file_lock` for the platform-specific details
+        and the NFS caveat.
+
         Args:
             tree_size: Current Merkle tree size from the index.
             tree_root: Current tree-root string from the index
@@ -166,40 +235,45 @@ class WitnessLog:
             The :class:`WitnessRecord` that was written. Its
             ``checkpoint_index`` is the position in the chain.
         """
-        prev = self.latest()
-        record = WitnessRecord(
-            checkpoint_index=0 if prev is None else prev.checkpoint_index + 1,
-            tree_size=tree_size,
-            tree_root=tree_root,
-            issued_at=_now_utc_iso(),
-            previous_checkpoint_hash=(
-                prev.record_hash() if prev is not None else None
-            ),
-            signature=None,
-        )
-        sig_value = self._signer.sign(record.canonical_payload())
-        signed = WitnessRecord(
-            checkpoint_index=record.checkpoint_index,
-            tree_size=record.tree_size,
-            tree_root=record.tree_root,
-            issued_at=record.issued_at,
-            previous_checkpoint_hash=record.previous_checkpoint_hash,
-            signature={
-                "algorithm": self._signer.algorithm,
-                "value": sig_value,
-            },
-        )
-        line = json.dumps(
-            signed.to_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        # O_APPEND open is the minimum guarantee against accidental
-        # rewrites; operators chasing the strong property pair this
-        # with WORM external publication.
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with _exclusive_file_lock(self._path):
+            # latest() must be called INSIDE the lock so two concurrent
+            # appends don't both observe the same predecessor and
+            # produce duplicate checkpoint_index values.
+            prev = self.latest()
+            record = WitnessRecord(
+                checkpoint_index=0 if prev is None else prev.checkpoint_index + 1,
+                tree_size=tree_size,
+                tree_root=tree_root,
+                issued_at=_now_utc_iso(),
+                previous_checkpoint_hash=(
+                    prev.record_hash() if prev is not None else None
+                ),
+                signature=None,
+            )
+            sig_value = self._signer.sign(record.canonical_payload())
+            signed = WitnessRecord(
+                checkpoint_index=record.checkpoint_index,
+                tree_size=record.tree_size,
+                tree_root=record.tree_root,
+                issued_at=record.issued_at,
+                previous_checkpoint_hash=record.previous_checkpoint_hash,
+                signature={
+                    "algorithm": self._signer.algorithm,
+                    "value": sig_value,
+                },
+            )
+            line = json.dumps(
+                signed.to_dict(),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            # O_APPEND open is the minimum guarantee against accidental
+            # rewrites; operators chasing the strong property pair this
+            # with WORM external publication. The flock above
+            # additionally serialises concurrent writers.
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
         return signed
 
     # ----------------------------------------------------------- read
