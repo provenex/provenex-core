@@ -112,6 +112,19 @@ class S3AppendSink:
 
         s3://<bucket>/<prefix>/YYYY/MM/DD/HH/<receipt_id>.json
 
+    .. note::
+        "Append" in the name refers to **append-to-the-partition**, not
+        append-to-an-object. S3 has no append operation: each
+        :meth:`publish` is an independent ``PutObject`` writing a new
+        key. The objects are immutable once written, which is the
+        property that makes them safe to set Object-Lock + Glacier
+        retention on (see :mod:`docs.receipt_retention`). The sink does
+        not deduplicate on retry; an upstream network failure that
+        causes Provenex to retry a publish may produce two objects
+        with the same ``receipt_id`` in the same hour partition. Pair
+        with S3 versioning if at-most-once write semantics matter to
+        you.
+
     One object per receipt — no in-process batching. S3 PUTs are
     cheap; per-receipt objects let an auditor fetch a single receipt
     without scanning a batch. High-volume deployments wanting batched

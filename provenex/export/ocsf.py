@@ -85,11 +85,89 @@ _EVENT_CODE_ADMISSION_DENY = "provenex.admission.deny"
 # --------------------------------------------------------------------------- #
 
 
+_OCSF_VALID_CLASS_UIDS = frozenset({
+    OCSF_CLASS_APPLICATION_ACTIVITY,
+    OCSF_CLASS_API_ACTIVITY,
+    OCSF_CLASS_DETECTION_FINDING,
+})
+
+_OCSF_VALID_CATEGORY_UIDS = frozenset({
+    OCSF_CATEGORY_APPLICATION_ACTIVITY,
+    OCSF_CATEGORY_FINDINGS,
+})
+
+# OCSF v1.3 spec: severity_id is in 0..6, but only 1..5 are well-defined
+# severities (Informational..Critical). We emit only 1..5; allowing 0
+# (Unknown) or 6 (Fatal) would surprise downstream SIEMs that gate on
+# the documented range.
+_OCSF_VALID_SEVERITY_IDS = frozenset(range(1, 6))
+
+# Activity IDs we emit. Other activity_ids are valid OCSF in general,
+# but Provenex only uses these two; if a future change introduces a
+# new one, update this set or the validator will catch the omission.
+_OCSF_VALID_ACTIVITY_IDS = frozenset({
+    _OCSF_ACTIVITY_ACCESS,
+    _OCSF_ACTIVITY_CREATE,
+    _OCSF_ACTIVITY_OTHER,
+})
+
+
+def validate_ocsf_event(event: Dict[str, Any]) -> None:
+    """Validate one emitted OCSF v1.3 event against the enum ranges
+    Provenex uses.
+
+    Lightweight in-process check; no external schema dependency. The
+    intent is to catch typos and accidental regressions (e.g. a future
+    edit setting ``severity_id=6`` or omitting ``type_uid``) before a
+    strict SIEM ingester rejects the event silently.
+
+    Raises:
+        ValueError: with a path-and-value message on the first
+        problem. Returns ``None`` on success.
+    """
+    required = ("class_uid", "category_uid", "activity_id", "severity_id", "type_uid")
+    for field in required:
+        if field not in event:
+            raise ValueError(f"OCSF event missing required field: {field!r}")
+
+    class_uid = event["class_uid"]
+    if class_uid not in _OCSF_VALID_CLASS_UIDS:
+        raise ValueError(
+            f"OCSF event class_uid={class_uid!r} not in "
+            f"{sorted(_OCSF_VALID_CLASS_UIDS)}"
+        )
+    category_uid = event["category_uid"]
+    if category_uid not in _OCSF_VALID_CATEGORY_UIDS:
+        raise ValueError(
+            f"OCSF event category_uid={category_uid!r} not in "
+            f"{sorted(_OCSF_VALID_CATEGORY_UIDS)}"
+        )
+    activity_id = event["activity_id"]
+    if activity_id not in _OCSF_VALID_ACTIVITY_IDS:
+        raise ValueError(
+            f"OCSF event activity_id={activity_id!r} not in "
+            f"{sorted(_OCSF_VALID_ACTIVITY_IDS)}"
+        )
+    severity_id = event["severity_id"]
+    if severity_id not in _OCSF_VALID_SEVERITY_IDS:
+        raise ValueError(
+            f"OCSF event severity_id={severity_id!r} not in "
+            f"{sorted(_OCSF_VALID_SEVERITY_IDS)}"
+        )
+    expected_type_uid = class_uid * 100 + activity_id
+    if event["type_uid"] != expected_type_uid:
+        raise ValueError(
+            f"OCSF event type_uid={event['type_uid']!r} does not match "
+            f"class_uid * 100 + activity_id = {expected_type_uid!r}"
+        )
+
+
 def receipt_to_ocsf(
     receipt: Dict[str, Any],
     *,
     include_trajectory_correlator: bool = True,
     extra_metadata: Optional[Dict[str, Any]] = None,
+    validate: bool = False,
 ) -> List[Dict[str, Any]]:
     """Map one Provenex receipt to one or more OCSF v1.3 events.
 
@@ -119,6 +197,13 @@ def receipt_to_ocsf(
         extra_metadata: Optional dict merged into every emitted
             event's ``metadata`` block. Use for deployment-level tags
             (``organization_uid``, ``environment``, ``tenant``).
+        validate: When True, each emitted event is checked against
+            the OCSF v1.3 enum ranges Provenex uses (``class_uid``,
+            ``category_uid``, ``activity_id``, ``severity_id``, plus
+            the ``type_uid = class_uid * 100 + activity_id``
+            invariant). Raises :class:`ValueError` on the first
+            problem. Off by default; enable in tests or before a
+            strict-SIEM rollout.
 
     Returns:
         A list of OCSF event dicts ready to JSON-serialise and ship.
@@ -188,6 +273,10 @@ def receipt_to_ocsf(
                     extra_metadata=extra_metadata,
                 )
             )
+
+    if validate:
+        for event in events:
+            validate_ocsf_event(event)
 
     return events
 
@@ -748,4 +837,5 @@ __all__ = [
     "receipt_to_detection_finding_for_blocked_source",
     "receipt_to_api_activity",
     "receipt_to_detection_finding_for_denied_action",
+    "validate_ocsf_event",
 ]
