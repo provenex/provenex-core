@@ -265,10 +265,10 @@ def verify_chunks(
         chunk_metadata_binding=chunk_metadata_binding,
     )
 
-    # Phase 1.1: one ``verify_batch`` round-trip on the index instead of
-    # N pairs of ``verify`` + ``lookup`` (which were two lookups per chunk
-    # internally). On a 10-chunk retrieval this drops 20 backend hits to
-    # 1 on Postgres; on SQLite it folds the in-process I/O similarly.
+    # One ``verify_batch`` round-trip on the index instead of N pairs
+    # of ``verify`` + ``lookup`` (which were two lookups per chunk
+    # internally). On a 10-chunk retrieval this drops 20 backend hits
+    # to 1 on Postgres; on SQLite it folds the in-process I/O similarly.
     # The wrapper enforces the operator's availability policy: timeout
     # bound, circuit-breaker check, and either block-on-error
     # (IndexUnavailable) or degrade-on-error (UNVERIFIED + index_status).

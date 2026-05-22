@@ -15,7 +15,7 @@ the snapshot it loaded at construction). For the open-source build the
 **recommended deployment is one ingester pod and many verify pods**, with
 verify pods talking only to :class:`PostgresProvenanceIndex` (not the
 Merkle variant). Multi-writer Merkle with cross-process tree
-synchronization is on the commercial roadmap.
+synchronization is out of scope for the open-source core.
 
 If you only need ``verify()`` and not ``tree_root()`` / inclusion proofs
 on a given pod, use :class:`PostgresProvenanceIndex` directly — the

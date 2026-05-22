@@ -24,8 +24,8 @@ Out of scope
 ------------
 
 - Multi-namespace fan-out
-- Per-tenant routing (Phase 3.2 handles that on the server side)
-- Drift webhook (Phase 3.3 is the index-side detector)
+- Per-tenant routing (the server-side signer registry handles that)
+- Drift webhook (lives on the index side, not in the operator)
 """
 
 from __future__ import annotations

@@ -417,8 +417,7 @@ class PostgresProvenanceIndex(ProvenanceIndex):
 
         Mirrors the SQLite override exactly: same row-selection rule,
         same per-fingerprint HMAC reduction. The single-query collapse
-        is the Phase 1.1 deliverable for the Postgres backend - on a
-        top-10 retrieval, this drops the number of Postgres round-trips
+        on a top-10 retrieval drops the number of Postgres round-trips
         from 20 (lookup+verify per chunk) to 1.
         """
         if not fingerprints:

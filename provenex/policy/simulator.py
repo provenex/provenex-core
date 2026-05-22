@@ -1,10 +1,10 @@
 """Policy simulator: replay historic decisions under a proposed new policy.
 
-The Phase 4.1 SR-11-7 / Model Risk workflow primitive. Reads a
-directory of previously-issued receipts (each carries the verbatim
-``inputs`` block per decision, when not redacted), re-evaluates each
-decision against a proposed new policy file, and reports which
-decisions flip allow → deny or deny → allow.
+The SR-11-7 / Model Risk workflow primitive. Reads a directory of
+previously-issued receipts (each carries the verbatim ``inputs``
+block per decision, when not redacted), re-evaluates each decision
+against a proposed new policy file, and reports which decisions flip
+allow -> deny or deny -> allow.
 
 Pure local computation. No HTTP, no signer, no index. The receipts'
 embedded ``inputs`` is all that's needed; the canonical-payload
