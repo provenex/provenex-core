@@ -83,8 +83,14 @@ def from_jwt(
         audience: Expected ``aud`` claim.
         issuer: Expected ``iss`` claim.
         algorithms: Allowed signing algorithms. Defaults cover the
-            common asymmetric set. Reject ``HS256`` unless you really
-            mean to use a shared-secret IdP.
+            common asymmetric set. **Do not add HS256** to this list
+            even if your IdP nominally supports it: HS256 uses a
+            shared symmetric secret, and the IdP's JWKS endpoint
+            advertises a public key that PyJWT would happily use as
+            the HMAC secret, producing a textbook key-confusion
+            attack. The default list is asymmetric-only on purpose;
+            override only when you fully control the symmetric key
+            material out of band.
         claim_map: Optional override of the default claim->RequestContext
             mapping. Format is ``{jwt_claim_name: "caller.field" | "jurisdiction" | "purpose"}``.
             ``caller.*`` values are nested under ``RequestContext.caller``.
