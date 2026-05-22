@@ -66,6 +66,7 @@ class SimulationReport:
     decisions_examined: int = 0
     decisions_skipped_redacted: int = 0
     flips: List[DecisionFlip] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
 
     @property
     def allow_to_deny(self) -> List[DecisionFlip]:
@@ -84,6 +85,7 @@ class SimulationReport:
             "flips_allow_to_deny": len(self.allow_to_deny),
             "flips_deny_to_allow": len(self.deny_to_allow),
             "flips": [f.to_dict() for f in self.flips],
+            "notes": list(self.notes),
         }
 
     def to_human_diff(self) -> str:
@@ -95,8 +97,13 @@ class SimulationReport:
             f"- total flips: {len(self.flips)}",
             f"  - allow -> deny: {len(self.allow_to_deny)}",
             f"  - deny -> allow: {len(self.deny_to_allow)}",
-            "",
         ]
+        if self.notes:
+            lines.append("")
+            lines.append("**Notes:**")
+            for note in self.notes:
+                lines.append(f"- {note}")
+        lines.append("")
         for f in self.flips:
             lines.append(
                 f"  {f.kind:>14s}  {f.chunk_fingerprint[:20]}... "
@@ -210,4 +217,20 @@ def simulate(
                         new_rules_fired=list(new.rules_fired),
                     )
                 )
+
+    # Empty-corpus sanity check. The simulator is most often pointed
+    # at a directory of historical receipts; if NONE of them carry an
+    # access_control block (verification-only receipts, schema 1.4.0
+    # pre-unification, fully-redacted inputs), the simulator silently
+    # reports zero decisions. That looks like a clean diff but is
+    # actually a "wrong-shape corpus" misconfiguration. Surface it.
+    if report.receipts_examined > 0 and report.decisions_examined == 0:
+        report.notes.append(
+            "no decisions examined despite "
+            f"{report.receipts_examined} receipts seen. "
+            "This usually means the corpus is verification-only "
+            "(no policy.access_control), schema-1.4.0 or earlier, "
+            "or every decision had its inputs redacted. The diff is "
+            "empty for that reason, not because the policies agree."
+        )
     return report
