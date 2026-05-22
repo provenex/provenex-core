@@ -89,7 +89,13 @@ class AsyncPostgresProvenanceIndex:
         dsn: PostgreSQL connection string. Mutually exclusive with
             ``pool``.
         pool: An existing :class:`psycopg_pool.AsyncConnectionPool`.
-            Mutually exclusive with ``dsn``.
+            Mutually exclusive with ``dsn``. **The caller is
+            responsible for opening this pool** (via ``await pool.open()``
+            or its async-context-manager form) BEFORE any verify_async
+            / add_async call. When a ``pool`` is supplied here, the
+            index assumes it is already open and will not call
+            ``open()`` on it; a first verify against an unopened pool
+            will fail with the underlying psycopg error.
         signing_secret: HMAC key (bytes). Falls back to
             ``PROVENEX_SIGNING_SECRET`` env var. The index refuses to
             operate without a signing secret.
