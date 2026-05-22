@@ -250,6 +250,16 @@ def provenex_mcp_admission(
 
     def decorator(handler: Callable[[Any], Any]) -> Callable[[Any], Any]:
         def wrapped(request: Any) -> Any:
+            # Passthrough non-tools/call methods (e.g. resources/list,
+            # prompts/get, initialize). The decoder would otherwise
+            # decode them as a tools/call with an empty ``name``, run
+            # admission against meaningless metadata, and either fire
+            # the wrong rule or always allow. The cleanest behavior is
+            # to let any other method reach the handler unchanged.
+            method = _get(request, "method")
+            if method is not None and method != "tools/call":
+                return handler(request)
+
             result = wrap_mcp_request(
                 request,
                 policy=policy,
