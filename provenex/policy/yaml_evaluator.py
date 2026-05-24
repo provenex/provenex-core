@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import warnings
 from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from .evaluator import (
@@ -234,9 +235,21 @@ def _validate_path_root(
     failure mode, exactly what the strict-load discipline exists to
     prevent.
     """
-    if not isinstance(path, str) or "." not in path:
+    if not isinstance(path, str):
         # Will fail elsewhere on shape; nothing to validate here.
         return
+    if "." not in path:
+        # A bare root (e.g. "chunk", "tool", "request") with no sub-segment
+        # resolves to the context object at evaluation time and then never
+        # equals any scalar RHS, silently turning the rule into a no-op.
+        # Reject at parse time so typos like "chunk" (meant "chunk.metadata.x")
+        # surface immediately.
+        raise PolicyParseError(
+            f"{where}: path {path!r} has no '.' segment. Paths must address "
+            f"a field under a context root, e.g. 'chunk.metadata.region', "
+            f"'tool.name', or 'request.caller.sub'. A bare root resolves to "
+            f"the whole context object and would silently never match."
+        )
     root = path.split(".", 1)[0]
     if root not in allowed_roots:
         raise PolicyParseError(
@@ -350,6 +363,19 @@ def _validate_rule(
                     f"{source}: rule '{name}' require['{path}'] uses unknown "
                     f"operator(s) {sorted(unknown_ops)}. "
                     f"Known operators: {sorted(_KNOWN_REQUIRE_OPERATORS)}"
+                )
+            known_ops = set(constraint) & _KNOWN_REQUIRE_OPERATORS
+            if len(known_ops) > 1:
+                # Evaluator short-circuits on the first operator key it sees,
+                # so co-located operators would silently drop the rest. Force
+                # the author to split into separate rules where AND-semantics
+                # is what they want.
+                raise PolicyParseError(
+                    f"{source}: rule '{name}' require['{path}'] combines "
+                    f"multiple operators {sorted(known_ops)}. Each constraint "
+                    f"must use exactly one operator; split into separate "
+                    f"rules if you want AND-semantics across multiple "
+                    f"checks on the same path."
                 )
             if "in" in constraint and not isinstance(constraint["in"], list):
                 raise PolicyParseError(
@@ -724,6 +750,22 @@ class NativeYamlEvaluator(PolicyEvaluator):
         if not isinstance(rules, list):
             raise PolicyParseError(
                 f"{source}: 'rules' must be a list (got {type(rules).__name__})"
+            )
+        if not rules:
+            # Legitimate when paired with explicit defaults (declares "I
+            # enabled this domain but have no specific rules yet"), but a
+            # frequent accident when an operator deletes rules during
+            # refactoring. Warn so the accident is visible without breaking
+            # the intentional pass-through pattern.
+            warnings.warn(
+                f"{source}: 'rules' is empty. Without any rules the "
+                f"evaluator allows every input; this is correct when "
+                f"intentional (paired with explicit defaults), but is a "
+                f"common refactoring accident. Omit the access_control / "
+                f"tool_call_control block entirely if you mean to disable "
+                f"that domain.",
+                UserWarning,
+                stacklevel=3,
             )
         return [_validate_rule(r, idx=i, source=source) for i, r in enumerate(rules)]
 

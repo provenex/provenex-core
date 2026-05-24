@@ -520,6 +520,7 @@ class ProvenanceReceipt:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
 
 
@@ -692,8 +693,9 @@ def compute_caller_hash(
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
-    except TypeError as exc:
+    except (TypeError, ValueError) as exc:
         # Identity systems often pass datetime, set, custom objects, or
         # other non-JSON-serializable values via the caller dict. Surface
         # the offending value instead of letting a bare TypeError bubble
@@ -807,6 +809,7 @@ def compute_request_binding(
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
         context_hash = "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -859,6 +862,7 @@ def compute_value_hash(value: Any) -> str:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -1201,5 +1205,6 @@ def verify_receipt_signature(
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
     return signer.verify(payload, expected_value or "")

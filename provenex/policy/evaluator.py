@@ -341,6 +341,7 @@ def _canonical_bytes(obj: Any) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -388,9 +389,14 @@ def _build_inputs(
     """
     chunk_meta: Dict[str, Any] = dict(chunk.metadata)
     if chunk.ingested_at is not None:
-        chunk_meta.setdefault("ingested_at", chunk.ingested_at)
+        # Direct assignment: the index-derived value is trusted and must not
+        # be shadowable by caller-supplied metadata that happens to share the
+        # key. setdefault would let an upstream tag stamped with the wrong
+        # ingested_at evade freshness rules and collide inputs_hash across
+        # truly distinct chunks.
+        chunk_meta["ingested_at"] = chunk.ingested_at
     if chunk.content_source is not None:
-        chunk_meta.setdefault("content_source", chunk.content_source)
+        chunk_meta["content_source"] = chunk.content_source
     request_ctx: Dict[str, Any] = {
         "caller": dict(request.caller),
         "jurisdiction": request.jurisdiction,

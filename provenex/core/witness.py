@@ -161,6 +161,7 @@ class WitnessRecord:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
 
     def record_hash(self) -> str:
@@ -176,6 +177,7 @@ class WitnessRecord:
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
+            allow_nan=False,
         ).encode("utf-8")
         return "sha256:" + hashlib.sha256(payload).hexdigest()
 
@@ -267,6 +269,7 @@ class WitnessLog:
                 sort_keys=True,
                 separators=(",", ":"),
                 ensure_ascii=False,
+                allow_nan=False,
             )
             # O_APPEND open is the minimum guarantee against accidental
             # rewrites; operators chasing the strong property pair this

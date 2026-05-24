@@ -260,6 +260,11 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Enforce the FOREIGN KEY declared on fingerprints.document_id so a
+        # fingerprint row cannot reference a missing document, and DELETE on
+        # documents fails loudly while child fingerprints exist. SQLite has
+        # FK enforcement off by default and the pragma is per-connection.
+        self._conn.execute("PRAGMA foreign_keys = ON")
         with self._lock:
             self._refuse_legacy_schema()
             self._conn.executescript(_SCHEMA)
@@ -434,24 +439,33 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
 
     def set_authorization(self, document_id: str, authorized: bool) -> None:
         with self._lock:
-            self._conn.execute(
+            cur = self._conn.execute(
                 "UPDATE documents SET authorized = ? WHERE document_id = ?",
                 (1 if authorized else 0, document_id),
             )
+            if cur.rowcount == 0:
+                # Silent no-op would let a typo'd revocation appear to succeed
+                # while the real document remains authorized. Raise so the
+                # caller has to acknowledge the missing-doc case explicitly.
+                self._conn.rollback()
+                raise KeyError(document_id)
             self._conn.commit()
 
     # ---------------------------------------------------------- supersede
 
     def supersede(self, document_id: str, new_version: str) -> int:
         with self._lock:
+            doc_cur = self._conn.execute(
+                "UPDATE documents SET current_version = ? WHERE document_id = ?",
+                (new_version, document_id),
+            )
+            if doc_cur.rowcount == 0:
+                self._conn.rollback()
+                raise KeyError(document_id)
             cur = self._conn.execute(
                 "UPDATE fingerprints SET superseded = 1 "
                 "WHERE document_id = ? AND document_version != ?",
                 (document_id, new_version),
-            )
-            self._conn.execute(
-                "UPDATE documents SET current_version = ? WHERE document_id = ?",
-                (new_version, document_id),
             )
             self._conn.commit()
             return cur.rowcount

@@ -191,8 +191,25 @@ def compute_parameters_hash(parameters: Dict[str, Any]) -> str:
     receipt. Same canonicalisation as
     :func:`provenex.policy.evaluator.compute_policy_version_hash` so the
     hash is reproducible across language implementations.
+
+    Raises:
+        ValueError: If ``parameters`` contains values that cannot be
+            canonicalised to JSON (``bytes``, ``datetime``, ``set``,
+            custom objects, ``float('nan')``/``float('inf')``). LangChain
+            and MCP tools routinely pass such values; the caller must
+            coerce them to JSON primitives before admission.
     """
-    return "sha256:" + hashlib.sha256(_canonical_bytes(parameters)).hexdigest()
+    try:
+        payload = _canonical_bytes(parameters)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"tool-call parameters are not JSON-serialisable: {exc}. "
+            f"Coerce bytes -> base64 / hex string, datetime -> ISO-8601, "
+            f"set -> list, custom objects -> dict-of-primitives before "
+            f"passing to admission so the parameters_hash on the receipt "
+            f"is reproducible by an auditor."
+        ) from exc
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 # --------------------------------------------------------------------------- #

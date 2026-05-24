@@ -375,6 +375,11 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                     "WHERE document_id = %s",
                     (authorized, document_id),
                 )
+                if cur.rowcount == 0:
+                    # Silent no-op would let a typo'd revocation appear to
+                    # succeed while the real document remains authorized.
+                    conn.rollback()
+                    raise KeyError(document_id)
             conn.commit()
 
     # ---------------------------------------------------------- supersede
@@ -389,16 +394,19 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                     (document_id,),
                 )
                 cur.execute(
+                    "UPDATE provenex_documents SET current_version = %s "
+                    "WHERE document_id = %s",
+                    (new_version, document_id),
+                )
+                if cur.rowcount == 0:
+                    conn.rollback()
+                    raise KeyError(document_id)
+                cur.execute(
                     "UPDATE provenex_fingerprints SET superseded = TRUE "
                     "WHERE document_id = %s AND document_version != %s",
                     (document_id, new_version),
                 )
                 rowcount = cur.rowcount
-                cur.execute(
-                    "UPDATE provenex_documents SET current_version = %s "
-                    "WHERE document_id = %s",
-                    (new_version, document_id),
-                )
             conn.commit()
             return rowcount
 

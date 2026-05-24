@@ -351,6 +351,11 @@ class AsyncPostgresProvenanceIndex:
                     "WHERE document_id = %s",
                     (authorized, document_id),
                 )
+                if cur.rowcount == 0:
+                    # Silent no-op would let a typo'd revocation appear to
+                    # succeed while the real document remains authorized.
+                    await conn.rollback()
+                    raise KeyError(document_id)
             await conn.commit()
 
     # ------------------------------------------------------------ supersede
@@ -364,16 +369,19 @@ class AsyncPostgresProvenanceIndex:
                     (document_id,),
                 )
                 await cur.execute(
+                    "UPDATE provenex_documents SET current_version = %s "
+                    "WHERE document_id = %s",
+                    (new_version, document_id),
+                )
+                if cur.rowcount == 0:
+                    await conn.rollback()
+                    raise KeyError(document_id)
+                await cur.execute(
                     "UPDATE provenex_fingerprints SET superseded = TRUE "
                     "WHERE document_id = %s AND document_version != %s",
                     (document_id, new_version),
                 )
                 rowcount = cur.rowcount
-                await cur.execute(
-                    "UPDATE provenex_documents SET current_version = %s "
-                    "WHERE document_id = %s",
-                    (new_version, document_id),
-                )
             await conn.commit()
             return rowcount
 
