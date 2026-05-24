@@ -297,6 +297,61 @@ def test_build_inputs_uses_index_ingested_at_not_caller_metadata():
 # --------------------------------------------------------------------------- #
 
 
+def test_explicit_null_metadata_collapses_to_missing_for_constraints():
+    """An explicit ``classification: null`` in chunk metadata used to
+    pass a ``not_in: [secret]`` require because ``None not in [...]`` is
+    True. Collapsing null to missing routes it through
+    ``defaults.unknown_metadata`` (default-deny), matching the trust
+    direction: caller-supplied None is no more authoritative than the
+    key being absent.
+    """
+    import textwrap
+    import tempfile
+    from datetime import datetime, timezone
+
+    from provenex.policy.evaluator import ChunkContext, RequestContext
+    from provenex.policy.unified import Policy
+
+    yaml_text = textwrap.dedent(
+        """
+        policy_id: null_test
+        version: 1
+        access_control:
+          defaults:
+            unknown_metadata: deny
+          rules:
+            - name: block_secrets
+              require:
+                chunk.metadata.classification:
+                  not_in: [secret, top_secret]
+        """
+    ).strip()
+    fp = tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False)
+    fp.write(yaml_text)
+    fp.close()
+    pol = Policy.from_yaml(fp.name)
+
+    chunk = ChunkContext(
+        fingerprint="sha256:" + "a" * 64,
+        document_id="d1",
+        document_version="sha256:" + "b" * 64,
+        ingested_at=None,
+        metadata={"classification": None},
+        content_source=None,
+    )
+    req = RequestContext(
+        caller={"sub": "a"},
+        jurisdiction=None,
+        purpose=None,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+    decision = pol.access_control.evaluate(chunk, req)
+    assert decision.decision == "deny", (
+        f"explicit None should collapse to missing -> default-deny, "
+        f"got {decision.decision} (rules_fired={decision.rules_fired})"
+    )
+
+
 def test_compute_parameters_hash_surfaces_non_json_value():
     """A LangChain / MCP tool call carrying ``bytes`` / ``datetime`` /
     ``set`` parameters used to crash admission with a bare TypeError.

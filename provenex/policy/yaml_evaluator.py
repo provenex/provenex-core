@@ -582,7 +582,11 @@ def _when_matches(
     """
     for path, expected in when.items():
         actual = _resolve_path(path, chunk=chunk, request=request, tool=tool)
-        if actual is _MISSING:
+        # Explicit ``None`` collapses to missing so a caller writing
+        # ``metadata: {classification: null}`` cannot bypass a rule whose
+        # ``when`` scoped on that classification. Same direction as the
+        # require-side treatment below.
+        if actual is _MISSING or actual is None:
             return False
         if isinstance(expected, dict):
             # The only supported operator in a `when` clause is `in:`.
@@ -614,8 +618,13 @@ def _check_constraint(
     used in error messages (rules_fired carries names, not whys; this is
     for future verbose-mode CLI output).
     """
-    if actual is _MISSING:
-        # Missing metadata path. Apply the operator-default policy.
+    if actual is _MISSING or actual is None:
+        # Missing metadata path. Explicit ``None`` is collapsed to missing
+        # so a caller-supplied ``metadata: {classification: null}`` cannot
+        # bypass a ``not_in: [secret]`` rule by virtue of ``None not in
+        # [...]`` being True. Apply the operator-default policy in both
+        # cases (the trusted direction is index-derived value > caller
+        # stub > nothing-there).
         if unknown_metadata_default == "allow":
             return True, f"{path}: missing metadata; default allow"
         return False, f"{path}: missing metadata; default deny"
