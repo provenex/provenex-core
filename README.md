@@ -536,7 +536,7 @@ provenex audit receipt-3-retrieval-tampered.json --public-key provenex_public_ke
 
 No database, no API call back to the producing org, no shared secret. The auditor holds the Ed25519 public key (in the bundle, published once openly), the receipt JSON, and a copy of `provenex audit`. The signature math is SHA-256 + Ed25519; any standards-compliant crypto library reproduces it in ~25 lines, see [`docs/regulator_verification.md`](https://github.com/provenex/provenex-core/blob/main/docs/regulator_verification.md).
 
-For auditors who do not want the full `provenex-core` install, there is also [`provenex-verifier`](https://github.com/aoptimystic/provenex-verifier-python), a standalone MIT-licensed verification library with a single dependency (`cryptography`), no network, and no `provenex-core` dependency:
+For auditors who do not want the full `provenex-core` install, there is also [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python), a standalone MIT-licensed verification library with a single dependency (`cryptography`), no network, and no `provenex-core` dependency:
 
 ```bash
 pip install provenex-verifier

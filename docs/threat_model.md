@@ -189,7 +189,7 @@ The signed receipt is non-repudiable evidence that, under policy `policy_id` wit
 
 Yes. Hand them the receipt JSON and your public key (for Ed25519) or shared HMAC secret (for HMAC). They run `pip install provenex-core[ed25519]` and `provenex audit receipt.json --public-key your-audit.pub`. No database access, no API access, no network calls. The verification is purely arithmetic over the receipt and the key material.
 
-A leaner alternative for third-party auditors who do not want the full `provenex-core` install is the standalone [`provenex-verifier`](https://github.com/aoptimystic/provenex-verifier-python) library: `pip install provenex-verifier && provenex-verify receipt.json --public-key your-audit.pub`. Single dependency (`cryptography`), MIT-licensed, no network, no `provenex-core` import. Same canonicalisation and signature rules; the two implementations agree byte-for-byte.
+A leaner alternative for third-party auditors who do not want the full `provenex-core` install is the standalone [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python) library: `pip install provenex-verifier && provenex-verify receipt.json --public-key your-audit.pub`. Single dependency (`cryptography`), MIT-licensed, no network, no `provenex-core` import. Same canonicalisation and signature rules; the two implementations agree byte-for-byte.
 
 ### What if our signing key is compromised tomorrow?
 

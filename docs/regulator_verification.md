@@ -9,7 +9,7 @@ Audience: a regulator, an external compliance auditor, or an internal red team h
 You can verify a Provenex receipt with either of the following:
 
 * **`provenex-core`** (this package). Carries the full producer + auditor stack. Use this if you already have provenex-core installed, or if you want the bundled `provenex audit` CLI that runs all four checks below in one shot.
-* **[`provenex-verifier`](https://github.com/aoptimystic/provenex-verifier-python)**, the standalone verifier library. Single dependency (`cryptography`), MIT-licensed, no network, no telemetry, no dependency on `provenex-core`. Use this if you are a third party who only needs to verify, not to issue; it is the smaller and more auditable installation footprint for regulator-side use.
+* **[`provenex-verifier`](https://github.com/provenex/provenex-verifier-python)**, the standalone verifier library. Single dependency (`cryptography`), MIT-licensed, no network, no telemetry, no dependency on `provenex-core`. Use this if you are a third party who only needs to verify, not to issue; it is the smaller and more auditable installation footprint for regulator-side use.
 
 Both implementations follow the same canonicalisation and signature rules and agree byte-for-byte. The walkthrough below uses `provenex-core`; a `provenex-verifier` example appears at the end of the CLI walkthrough.
 
@@ -77,7 +77,7 @@ For a complete demo of an audit bundle (three receipts including a deliberately 
 
 ## Same audit with the standalone verifier
 
-If you do not want to install `provenex-core`, install [`provenex-verifier`](https://github.com/aoptimystic/provenex-verifier-python) instead:
+If you do not want to install `provenex-core`, install [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python) instead:
 
 ```bash
 pip install provenex-verifier

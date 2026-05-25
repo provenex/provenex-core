@@ -648,7 +648,7 @@ The receipt structure does not change; only the signer changes. The CLI exposes 
 
 ### Verifying without provenex-core
 
-For third parties who only need to verify (not issue) receipts, the [`provenex-verifier`](https://github.com/aoptimystic/provenex-verifier-python) library reimplements canonicalisation and Ed25519 signature verification with a single dependency (`cryptography`) and no link back to `provenex-core`. The two implementations follow the same canonicalisation rules and agree byte-for-byte. Receipts signed with HMAC-SHA256 are explicitly rejected by `provenex-verifier` because HMAC is symmetric and out of scope for third-party verification.
+For third parties who only need to verify (not issue) receipts, the [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python) library reimplements canonicalisation and Ed25519 signature verification with a single dependency (`cryptography`) and no link back to `provenex-core`. The two implementations follow the same canonicalisation rules and agree byte-for-byte. Receipts signed with HMAC-SHA256 are explicitly rejected by `provenex-verifier` because HMAC is symmetric and out of scope for third-party verification.
 
 ```python
 from provenex_verifier import verify_receipt
