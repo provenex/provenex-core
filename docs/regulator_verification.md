@@ -4,6 +4,15 @@ This document walks an external auditor through verifying a Provenex receipt wit
 
 Audience: a regulator, an external compliance auditor, or an internal red team holding receipts produced by an organisation they do not control. The Provenex deployment that produced the receipts does not need to be reachable for this walkthrough to work.
 
+## Two ways to verify
+
+You can verify a Provenex receipt with either of the following:
+
+* **`provenex-core`** (this package). Carries the full producer + auditor stack. Use this if you already have provenex-core installed, or if you want the bundled `provenex audit` CLI that runs all four checks below in one shot.
+* **[`provenex-verifier`](https://github.com/provenex/provenex-verifier-python)**, the standalone verifier library. Single dependency (`cryptography`), MIT-licensed, no network, no telemetry, no dependency on `provenex-core`. Use this if you are a third party who only needs to verify, not to issue; it is the smaller and more auditable installation footprint for regulator-side use.
+
+Both implementations follow the same canonicalisation and signature rules and agree byte-for-byte. The walkthrough below uses `provenex-core`; a `provenex-verifier` example appears at the end of the CLI walkthrough.
+
 ## Inputs an auditor needs
 
 | Input | When required |
@@ -65,6 +74,17 @@ Useful flags:
 | `--json` | Emit machine-readable JSON instead of human-readable output. |
 
 For a complete demo of an audit bundle (three receipts including a deliberately tampered one, the matching Ed25519 public key, and the policy file), see [scripts/generate_audit_bundle.py](../scripts/generate_audit_bundle.py). Running the script produces `dist/audit_bundle.zip`, which an auditor unpacks and runs through `provenex audit` to see PASS on two clean receipts and FAIL on the tampered one.
+
+## Same audit with the standalone verifier
+
+If you do not want to install `provenex-core`, install [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python) instead:
+
+```bash
+pip install provenex-verifier
+provenex-verify receipt.json --public-key audit.pub
+```
+
+The standalone tool exits `0` on a valid signature, `1` on a tampered or wrongly-keyed receipt, and `2` on usage errors. It performs check 1 (signature integrity) only; checks 2 through 4 are layered on top by the caller using the same library's `canonicalize` and `verify_inclusion_proof` helpers. The library has no network surface area and is safe to run in an air-gapped environment.
 
 ## Re-deriving the signature payload by hand
 

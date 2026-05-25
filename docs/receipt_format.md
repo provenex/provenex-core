@@ -646,6 +646,19 @@ ok = verify_receipt_signature(receipt, verifier)
 
 The receipt structure does not change; only the signer changes. The CLI exposes this directly: `provenex audit receipt.json --public-key audit.pub`.
 
+### Verifying without provenex-core
+
+For third parties who only need to verify (not issue) receipts, the [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python) library reimplements canonicalisation and Ed25519 signature verification with a single dependency (`cryptography`) and no link back to `provenex-core`. The two implementations follow the same canonicalisation rules and agree byte-for-byte. Receipts signed with HMAC-SHA256 are explicitly rejected by `provenex-verifier` because HMAC is symmetric and out of scope for third-party verification.
+
+```python
+from provenex_verifier import verify_receipt
+
+with open("audit.pub", "rb") as f:
+    public_key = f.read()
+result = verify_receipt(receipt, public_key)
+assert result.valid, result.errors
+```
+
 ## Versioning
 
 Breaking changes to this schema increment the major version of `schema_version`. Verifiers should reject receipts whose major `schema_version` they don't understand. Non-breaking additive changes (new optional fields) increment the minor version; verifiers may safely ignore unknown fields they don't recognize.
