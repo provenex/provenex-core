@@ -9,6 +9,69 @@ on-the-wire receipt format follows its own schema-semver, tracked in
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-25
+
+The first stable release. Two breaking defaults change in this release: the operating posture (was always-block, now record-only) and the default signer (was HMAC, now Ed25519). Receipt schema bumps from 2.5.0 to 2.6.0 additively. Existing 0.x receipts continue to verify under 1.0.0 unchanged.
+
+### Why 1.0.0, not 0.11.0
+
+Two reasons. First, the default behaviour of the engine changes: in 0.x the engine always dropped chunks that failed verification or access control; in 1.0.0 the default is `receipts_only`, which records the decision on the signed receipt but passes every chunk through to the LLM. Operators upgrading without reading this CHANGELOG will see their existing receipts unchanged but their pipelines stop blocking chunks. Second, `cryptography` moves from the `[ed25519]` extra into the base dependencies; the "pure-stdlib core" framing of 0.x is no longer accurate. Both changes are honest semver-major events.
+
+### Added
+- **Three operating modes** controlling whether the engine acts on policy decisions or only records them on the receipt.
+  - `receipts_only` (new default): receipt records what the policy would have done; every chunk passes through; tool calls always admit. Lowest-friction onboarding posture.
+  - `advisory`: same data-path semantics as `receipts_only`, plus invokes `Policy.advisory_callback` with a structured event each time a chunk or tool call would have been blocked. Default callback logs at `WARNING` to the `provenex.advisory` logger; pass your own callback for richer routing.
+  - `enforce`: the 0.x behaviour. Drop blocked chunks, deny denied tool calls.
+- **`Policy.mode` field** with the three string constants `MODE_RECEIPTS_ONLY`, `MODE_ADVISORY`, `MODE_ENFORCE` exported from `provenex`. The mode is also a valid top-level key in the unified YAML.
+- **`policy.mode` in the canonical signed payload** (schema 2.6.0). The operating posture at decision time is itself tamper-evident: a verifier can read the mode off the receipt and refuse to trust receipts produced in `receipts_only` for compliance contexts that require enforcement.
+- **`resolve_default_signer()`** factory function. Reads `PROVENEX_RECEIPT_PRIVATE_KEY_PATH` (Ed25519 PEM file) first, falls back to `PROVENEX_RECEIPT_SECRET` (HMAC), refuses to silently invent a transient keypair. Examples and the CLI use this helper.
+- **`Ed25519Signer.from_env()`** class method. Reads `PROVENEX_RECEIPT_PRIVATE_KEY_PATH`. Convenience for the common case.
+- **`provenex keys generate --output-dir keys/`** CLI subcommand. Writes a fresh Ed25519 keypair: `private.pem` mode `0600`, `public.pem` mode `0644`. Refuses to overwrite without `--force`. Prints the `export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=...` line to copy.
+
+### Changed
+- **Default signer is now Ed25519** rather than HMAC-SHA256. HMAC is still selectable explicitly via `HmacSha256Signer()` or by setting `PROVENEX_RECEIPT_SECRET` instead of `PROVENEX_RECEIPT_PRIVATE_KEY_PATH`. Receipts that cross an organisational boundary should always be Ed25519-signed (the verifier holds only the public key and cannot forge); HMAC remains useful for in-house pipelines where the same team produces and verifies.
+- **`cryptography>=42.0` moves into the base dependencies.** The 0.x `[ed25519]` extra still exists as a no-op alias for backwards compatibility with `pip install "provenex-core[ed25519]"`. The "pure-stdlib core" framing is retired; in exchange Ed25519 works out of the box and the regulator-handoff story is the documented default.
+- **Receipt schema 2.5.0 → 2.6.0** (additive). New optional `policy.mode` field. Pre-1.0.0 receipts without `policy.mode` remain valid 2.5.0 subsets and verify byte-identically.
+- **Default `VerificationPolicy` is unchanged** at the field level, but in combination with `mode=receipts_only` the engine no longer drops chunks unless you opt in to `mode="enforce"`.
+- **CHANGELOG entry style**: this release uses a single block at the top rather than splitting Added / Changed / Fixed under several version tags. The 0.x entries below are unchanged.
+
+### Upgrading from 0.x
+
+The most common surprise will be that retrieval receipts now look the same but chunks that previously got blocked now reach the LLM. To restore 0.x semantics, set the mode explicitly:
+
+```python
+from provenex import Policy, MODE_ENFORCE
+policy = Policy(mode=MODE_ENFORCE, ...)
+```
+
+Or in the unified YAML:
+
+```yaml
+mode: enforce
+verification: { ... }
+access_control: { ... }
+```
+
+If you want to keep your existing HMAC signer (no migration needed):
+
+```python
+from provenex import HmacSha256Signer
+signer = HmacSha256Signer()   # still reads PROVENEX_RECEIPT_SECRET
+```
+
+If you want to switch to Ed25519 (recommended for any deployment that may share receipts with auditors):
+
+```
+provenex keys generate --output-dir keys/
+export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=keys/private.pem
+```
+
+The standalone [`provenex-verifier`](https://github.com/provenex/provenex-verifier-python) library only accepts Ed25519 receipts; that is the right cue if you ever plan to hand receipts to a third party.
+
+### Verifier compatibility
+
+`provenex-verifier` 1.0.0 already accepts 2.6.0 receipts: it canonicalises the entire `policy` block (including the new `mode` field) as part of the signed payload, so the signature still verifies. No verifier update needed.
+
 ## [0.10.1] - 2026-05-21
 
 This is a release-machinery patch on top of 0.10.0. No schema change,

@@ -1848,7 +1848,113 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_chain_verify.set_defaults(func=_cmd_chain_verify)
 
+    # v1.0.0: `provenex keys generate` — fresh Ed25519 keypair on disk.
+    p_keys = sub.add_parser(
+        "keys",
+        help="Manage Ed25519 keypairs for receipt signing (v1.0.0+).",
+    )
+    p_keys_sub = p_keys.add_subparsers(dest="keys_command", required=True)
+    p_keys_generate = p_keys_sub.add_parser(
+        "generate",
+        help="Generate a fresh Ed25519 keypair for signing receipts.",
+        description=(
+            "Writes private.pem (mode 0600) and public.pem (mode 0644) to "
+            "the output directory. Distribute the public key to auditors; "
+            "keep the private key in a secrets manager and point "
+            "PROVENEX_RECEIPT_PRIVATE_KEY_PATH at it."
+        ),
+    )
+    p_keys_generate.add_argument(
+        "--output-dir",
+        required=True,
+        help="Directory to write private.pem and public.pem into.",
+    )
+    p_keys_generate.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing private.pem / public.pem if present.",
+    )
+    p_keys_generate.set_defaults(func=_cmd_keys_generate)
+
     return parser
+
+
+def _cmd_keys_generate(args: argparse.Namespace) -> int:
+    """``provenex keys generate``: write a fresh Ed25519 keypair to disk.
+
+    The private key is PKCS8 PEM with no password (use a secrets manager
+    or filesystem ACLs to gate it); the public key is SubjectPublicKeyInfo
+    PEM. File permissions are tightened to 0600 / 0644 on POSIX. Existing
+    files are not overwritten unless ``--force`` is set.
+    """
+    import os
+    import stat
+    from pathlib import Path
+
+    from ..core.ed25519 import Ed25519Signer
+
+    output_dir = Path(args.output_dir)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"error: could not create {output_dir}: {exc}", file=sys.stderr)
+        return 2
+
+    private_path = output_dir / "private.pem"
+    public_path = output_dir / "public.pem"
+
+    if not args.force:
+        for path in (private_path, public_path):
+            if path.exists():
+                print(
+                    f"error: {path} already exists. Pass --force to overwrite "
+                    "(this destroys the existing key irreversibly).",
+                    file=sys.stderr,
+                )
+                return 2
+
+    signer = Ed25519Signer.generate()
+    private_pem = signer.private_key_pem()
+    public_pem = signer.public_key_pem()
+
+    # Write private key under restrictive perms BEFORE the bytes hit
+    # disk: open with O_CREAT|O_WRONLY|O_TRUNC + 0600 so the file never
+    # exists with looser perms even momentarily. O_NOFOLLOW refuses to
+    # follow a pre-existing symlink at the target path (closes a
+    # symlink-attack where an attacker creates ``private.pem`` as a
+    # symlink to a sensitive file and waits for the operator to run
+    # ``keys generate --force``).
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow
+        fd = os.open(str(private_path), flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(private_pem)
+        except Exception:
+            os.close(fd)
+            raise
+        # On platforms where umask might have masked the mode bits, force.
+        try:
+            os.chmod(private_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+        public_path.write_bytes(public_pem)
+        try:
+            os.chmod(public_path, 0o644)
+        except OSError:
+            pass
+    except OSError as exc:
+        print(f"error: could not write key files: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Wrote private key: {private_path} (mode 0600)")
+    print(f"Wrote public key:  {public_path} (mode 0644)")
+    print("")
+    print("Next steps:")
+    print(f"  export PROVENEX_RECEIPT_PRIVATE_KEY_PATH={private_path}")
+    print(f"  # distribute {public_path.name} to auditors out-of-band.")
+    return 0
 
 
 def main(argv: List[str] | None = None) -> int:

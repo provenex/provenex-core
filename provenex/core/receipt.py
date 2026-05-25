@@ -106,8 +106,15 @@ from .trajectory import TrajectoryContext
 # Minor-version bumps are additive: receipts at a lower revision remain
 # valid subsets of higher revisions. Major bumps may break the top-level
 # shape — 2.0.0 did.
-SCHEMA_VERSION = "2.5.0"
-ISSUER = "provenex-core/0.10.1"
+#
+# Schema 2.6.0 (v1.0.0) adds:
+#   ``policy.mode`` — operating mode (``"receipts_only"`` / ``"advisory"``
+#       / ``"enforce"``) recorded inside the signed policy block so the
+#       operating posture at decision time is itself tamper-evident.
+#       Additive: pre-1.0.0 receipts without ``policy.mode`` remain
+#       valid 2.5.0 subsets and verify identically.
+SCHEMA_VERSION = "2.6.0"
+ISSUER = "provenex-core/1.0.0"
 
 
 # --------------------------------------------------------------------------- #
@@ -427,6 +434,12 @@ class ProvenanceReceipt:
     # couldn't reach the index" from "every chunk happened to be a
     # genuine miss". Covered by the receipt signature.
     index_status: Optional[Dict[str, Any]] = None
+    # Schema 2.6.0 (v1.0.0): operating mode recorded inside the signed
+    # ``policy`` block at ``policy.mode``. ``None`` here means the
+    # builder was constructed without a mode and the field is omitted
+    # from the serialized receipt — preserves byte-identity with 2.5.0
+    # receipts when callers haven't migrated yet.
+    mode: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -442,6 +455,11 @@ class ProvenanceReceipt:
                 "flag_tampered": self.policy.flag_tampered,
             }
         }
+        # Schema 2.6.0: operating mode at ``policy.mode`` when supplied.
+        # Absent when ``mode`` is None — preserves byte-identity with
+        # pre-1.0.0 receipts for callers that haven't migrated yet.
+        if self.mode is not None:
+            policy_block["mode"] = self.mode
         if self.access_control is not None:
             policy_block["access_control"] = dict(self.access_control)
         if self.tool_call_control is not None:
@@ -552,6 +570,51 @@ def _hash_output(output_text: str) -> str:
 # operators get one signal without log spam.
 _warned_about_unsalted_caller_hash = False
 _warned_about_shared_receipt_secret = False
+
+
+def resolve_default_signer() -> "ReceiptSigner":
+    """Resolve the default :class:`ReceiptSigner` from the environment.
+
+    v1.0.0+ default. Resolution order:
+
+    1. ``PROVENEX_RECEIPT_PRIVATE_KEY_PATH`` -- path to an Ed25519 private
+       key PEM. Returns :class:`provenex.core.ed25519.Ed25519Signer`.
+       The recommended path for any deployment that may share receipts
+       with an external auditor.
+    2. ``PROVENEX_RECEIPT_SECRET`` or legacy ``PROVENEX_SIGNING_SECRET``
+       -- HMAC shared secret. Returns :class:`HmacSha256Signer`. Use
+       only inside organizational trust boundaries; HMAC is symmetric
+       so anyone able to verify can also forge.
+    3. Neither set -- raises :class:`RuntimeError` with a fix-it
+       message pointing at ``provenex keys generate``.
+
+    The function never silently invents a key: a transient in-memory
+    keypair would mean receipts produced today cannot be verified
+    tomorrow.
+    """
+    pem_path = os.environ.get("PROVENEX_RECEIPT_PRIVATE_KEY_PATH")
+    if pem_path:
+        from .ed25519 import Ed25519Signer
+
+        try:
+            with open(pem_path, "rb") as fh:
+                pem_bytes = fh.read()
+        except OSError as exc:
+            raise RuntimeError(
+                f"PROVENEX_RECEIPT_PRIVATE_KEY_PATH={pem_path!r}: {exc}"
+            ) from exc
+        return Ed25519Signer.from_private_key_pem(pem_bytes)
+    if "PROVENEX_RECEIPT_SECRET" in os.environ or "PROVENEX_SIGNING_SECRET" in os.environ:
+        return HmacSha256Signer()
+    raise RuntimeError(
+        "Provenex has no signing key configured. Either:\n"
+        "  1. Recommended (Ed25519, third-party verifiable):\n"
+        "       provenex keys generate --output-dir keys/\n"
+        "       export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=keys/private.pem\n"
+        "  2. HMAC shared secret (in-house only):\n"
+        '       export PROVENEX_RECEIPT_SECRET="$(python -c \'import secrets; print(secrets.token_hex(32))\')"\n'
+        "Or pass a ReceiptSigner explicitly to bypass env-var resolution."
+    )
 
 
 def _resolve_receipt_secret() -> bytes:
@@ -882,8 +945,19 @@ class ReceiptBuilder:
         >>> receipt = builder.finalize(output_text="The answer is 42.", signer=signer)
     """
 
-    def __init__(self, policy: VerificationPolicy | None = None) -> None:
+    def __init__(
+        self,
+        policy: VerificationPolicy | None = None,
+        mode: Optional[str] = None,
+    ) -> None:
         self._policy = policy or VerificationPolicy()
+        # v1.0.0: operating mode (``receipts_only`` / ``advisory`` /
+        # ``enforce``). Recorded inside the signed receipt at
+        # ``policy.mode`` so a regulator can see the operating posture
+        # at decision time. ``None`` means "do not emit a mode field"
+        # (preserves byte-identity with pre-1.0.0 receipts when callers
+        # haven't migrated yet).
+        self._mode = mode
         self._sources: List[SourceRecord] = []
         # Schema 2.2.0: tool-call action records, parallel to sources[].
         # Populated via :meth:`add_action`.
@@ -893,6 +967,11 @@ class ReceiptBuilder:
     def policy(self) -> VerificationPolicy:
         """The policy in effect for this receipt."""
         return self._policy
+
+    @property
+    def mode(self) -> Optional[str]:
+        """The operating mode recorded on this receipt, or ``None`` if unset."""
+        return self._mode
 
     def add_source(
         self,
@@ -1145,6 +1224,7 @@ class ReceiptBuilder:
             output_hash=_hash_output(output_text),
             sources=list(self._sources),
             policy=self._policy,
+            mode=self._mode,
             summary=self._summary(tool_call_control=tool_call_control),
             transparency_log=dict(transparency_log) if transparency_log else None,
             trajectory=trajectory.to_dict() if trajectory is not None else None,

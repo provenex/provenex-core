@@ -1,16 +1,20 @@
-"""End-to-end Provenex demo. Pure stdlib, no LangChain.
+"""End-to-end Provenex demo. v1.0.0+ Ed25519 path.
 
 Run with::
 
-    PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
-        PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" \
-        python examples/standalone_demo.py
+    provenex keys generate --output-dir demo-keys/
+    export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=demo-keys/private.pem
+    export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    python examples/standalone_demo.py
 
-The two secrets are set separately on purpose. The legacy
-``PROVENEX_SIGNING_SECRET`` env var is a shared secret used for
-both halves; setting only that variable emits a deprecation warning
-because reusing one key for index-row signing AND receipt signing
-means anyone who can write a row can also forge a receipt.
+The Ed25519 path (default since v1.0.0) lets an external auditor verify
+the receipts with just the public key. ``PROVENEX_INDEX_SECRET`` is still
+an HMAC secret because the index row HMAC is a separate symmetric scheme
+used inside the producing org's trust boundary.
+
+If you would rather use the 0.x-style HMAC receipt signer, set
+``PROVENEX_RECEIPT_SECRET`` instead of ``PROVENEX_RECEIPT_PRIVATE_KEY_PATH``
+and skip the ``provenex keys generate`` step.
 
 What it shows, in order:
 
@@ -46,7 +50,7 @@ from pathlib import Path
 
 from provenex.core.fingerprinter import Fingerprinter
 from provenex.core.merkle import verify_inclusion_proof
-from provenex.core.receipt import HmacSha256Signer, ReceiptBuilder
+from provenex.core.receipt import ReceiptBuilder, resolve_default_signer
 from provenex.index.base import ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW
 from provenex.index.merkle_sqlite_index import MerkleSQLiteProvenanceIndex
 from provenex.policy.policy import VerificationPolicy
@@ -85,23 +89,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Require both role-specific env vars. The legacy
-    # PROVENEX_SIGNING_SECRET single-variable form is still accepted by
-    # the library as a fallback but we deliberately do not invite it in
-    # demo material; setting both separately matches the secure-defaults
-    # recommendation in docs/secure_defaults.md.
-    if not (
-        os.environ.get("PROVENEX_INDEX_SECRET")
-        and os.environ.get("PROVENEX_RECEIPT_SECRET")
-    ) and not os.environ.get("PROVENEX_SIGNING_SECRET"):
+    # v1.0.0: the receipt signer is resolved from the environment
+    # (Ed25519 PEM path preferred, HMAC fallback). The index secret is
+    # still HMAC-only.
+    if not os.environ.get("PROVENEX_INDEX_SECRET"):
         print(
-            f"{RED}error:{RESET} set the receipt + index secrets first, e.g.:\n"
+            f"{RED}error:{RESET} set the index secret first:\n"
             f"  export PROVENEX_INDEX_SECRET="
-            f'"$(python3 -c \'import secrets; print(secrets.token_hex(32))\')"\n'
-            f"  export PROVENEX_RECEIPT_SECRET="
             f'"$(python3 -c \'import secrets; print(secrets.token_hex(32))\')"',
             file=sys.stderr,
         )
+        return 2
+    try:
+        receipt_signer = resolve_default_signer()
+    except RuntimeError as exc:
+        print(f"{RED}error:{RESET} {exc}", file=sys.stderr)
         return 2
 
     # Use a fresh temp DB so re-runs are clean and don't pollute cwd.
@@ -232,7 +234,7 @@ def main() -> int:
     )
     receipt = builder.finalize(
         output_text="model answer: AES-256, rotated quarterly.",
-        signer=HmacSha256Signer(),
+        signer=receipt_signer,
         transparency_log={
             "tree_size": index.tree_size(),
             "tree_root": index.tree_root(),

@@ -169,6 +169,11 @@ def admission_check(
         cursor.
     """
     eff_policy: Policy = coerce_policy(policy)
+    # v1.0.0: capture the evaluator decision first; the engine then
+    # either acts on it (enforce) or only records it (receipts_only /
+    # advisory). Either way the receipt is identical modulo the
+    # ``policy.mode`` field.
+    enforce_decision = eff_policy.acts_on_decisions()
 
     decision: PolicyDecision
     if eff_policy.tool_call_control is None:
@@ -211,7 +216,7 @@ def admission_check(
     # whether the receipt itself stores the verbatim values.
     params_hash = compute_parameters_hash(tool.parameters)
 
-    builder = ReceiptBuilder(policy=eff_policy.verification)
+    builder = ReceiptBuilder(policy=eff_policy.verification, mode=eff_policy.mode)
     action_index = builder.add_action(
         name=tool.name,
         operation=tool.operation,
@@ -307,6 +312,33 @@ def admission_check(
     # Failures swallowed (warnings.warn); agent hot path never broken.
     _safe_publish(sink, receipt)
 
+    # v1.0.0: the receipt records the evaluator's decision verbatim
+    # (``decision.decision``). The effective decision the engine returns
+    # depends on mode: ``enforce`` honours deny; ``receipts_only`` and
+    # ``advisory`` always return allow (the receipt still proves what
+    # the evaluator concluded). The mode itself is in the signed
+    # receipt at ``policy.mode``.
+    would_have_denied = decision.decision != DECISION_ALLOW
+    if would_have_denied and not enforce_decision:
+        effective_decision = DECISION_ALLOW
+    else:
+        effective_decision = decision.decision
+    if would_have_denied:
+        eff_policy.emit_advisory(
+            {
+                "gate": "tool_call",
+                "receipt_id": receipt.receipt_id,
+                "would_have_blocked": [
+                    {
+                        "action_index": action_index,
+                        "tool_name": tool.name,
+                        "operation": tool.operation,
+                        "rules_fired": list(decision.rules_fired),
+                    }
+                ],
+            }
+        )
+
     next_trajectory: Optional[TrajectoryContext] = None
     if trajectory is not None:
         next_trajectory = trajectory.next_step(
@@ -320,7 +352,7 @@ def admission_check(
         )
 
     return AdmissionResult(
-        decision=decision.decision,
+        decision=effective_decision,
         rules_fired=list(decision.rules_fired),
         receipt=receipt,
         next_trajectory=next_trajectory,

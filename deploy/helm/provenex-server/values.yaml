@@ -9,7 +9,7 @@ image:
   #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
   # Public registry, no authentication needed for pulls.
   repository: ghcr.io/provenex/provenex-server
-  tag: "0.10.1"
+  tag: "1.0.0"
   pullPolicy: IfNotPresent
 
 # Verify deployment: stateless, horizontally scaled.

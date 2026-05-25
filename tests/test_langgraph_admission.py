@@ -35,6 +35,7 @@ SECRET = b"langgraph-admission-test-secret"
 
 POLICY_YAML = """
 version: 1
+mode: enforce
 policy_id: langgraph-admission-test-v1
 tool_call_control:
   rules:

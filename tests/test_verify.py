@@ -19,6 +19,7 @@ from provenex.core.verify import VerifiedChunks, verify_chunks
 from provenex.index.sqlite_index import SQLiteProvenanceIndex
 from provenex.integrations.langchain import ProvenexIngestor
 from provenex.policy.policy import VerificationPolicy
+from provenex.policy.unified import Policy
 
 
 SECRET = b"verify-public-api-secret"
@@ -149,7 +150,10 @@ def test_verify_chunks_threads_policy_to_blocked():
     result = verify_chunks(
         "confidential memo about pricing.",
         index=index,
-        policy=VerificationPolicy(block_unauthorized=True),
+        policy=Policy(
+            mode="enforce",
+            verification=VerificationPolicy(block_unauthorized=True),
+        ),
     )
     assert result.kept == []
     assert result.blocked == ["confidential memo about pricing."]

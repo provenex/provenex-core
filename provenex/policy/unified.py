@@ -32,8 +32,9 @@ only.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 from .availability import IndexAvailabilityPolicy
 from .evaluator import PolicyEvaluator
@@ -41,6 +42,49 @@ from .policy import VerificationPolicy
 
 if TYPE_CHECKING:  # pragma: no cover — type hints only
     from ..tool_call.evaluator import ToolCallPolicyEvaluator
+
+# Operating modes (v1.0.0). The mode controls whether the engine *acts on*
+# policy decisions or only *records* them. The receipt always records the
+# decision the policy evaluator would have made; the mode determines whether
+# the engine then drops chunks / denies tool calls accordingly.
+#
+#   * MODE_ENFORCE        — drop chunks that fail verification or access
+#                           control; deny tool calls that fail admission.
+#                           This is the 0.x behaviour.
+#   * MODE_RECEIPTS_ONLY  — pass every chunk through; allow every tool
+#                           call. The receipt still records what would
+#                           have been blocked. Default for fresh installs
+#                           so operators can land Provenex without
+#                           changing downstream behaviour on day one.
+#   * MODE_ADVISORY       — same data-path semantics as receipts_only,
+#                           plus invoke ``Policy.advisory_callback``
+#                           with a structured event whenever a decision
+#                           would have blocked something.
+MODE_ENFORCE = "enforce"
+MODE_RECEIPTS_ONLY = "receipts_only"
+MODE_ADVISORY = "advisory"
+VALID_MODES = frozenset({MODE_ENFORCE, MODE_RECEIPTS_ONLY, MODE_ADVISORY})
+
+# Default logger for the built-in advisory callback. Operators can replace
+# the callback entirely; this logger exists so the no-callback path still
+# emits something visible.
+_ADVISORY_LOGGER = logging.getLogger("provenex.advisory")
+
+
+def _default_advisory_callback(event: Dict[str, Any]) -> None:
+    """Default advisory-mode handler: log at WARNING.
+
+    Operators who want richer behaviour (push to Slack, write to a SIEM,
+    fan out to a queue) pass their own callback as
+    ``Policy.advisory_callback``.
+    """
+    _ADVISORY_LOGGER.warning(
+        "provenex.advisory: %s would have blocked %d item(s) on receipt %s",
+        event.get("gate", "unknown"),
+        len(event.get("would_have_blocked", [])),
+        event.get("receipt_id", "<unknown>"),
+    )
+
 
 # Reserved top-level YAML keys for the unified config file. Anything else
 # at the top level raises a parse error — the convention is "load loud,
@@ -50,6 +94,8 @@ _UNIFIED_YAML_TOP_KEYS = frozenset(
         "version",
         "policy_id",
         "description",
+        # v1.0.0: operating mode (receipts_only / advisory / enforce).
+        "mode",
         "verification",
         "access_control",
         # Schema 2.2.0 addition: rules for tool-call admission.
@@ -88,6 +134,51 @@ class Policy:
     availability: IndexAvailabilityPolicy = field(
         default_factory=IndexAvailabilityPolicy
     )
+    # v1.0.0: operating mode. Default is ``receipts_only`` for lower-friction
+    # onboarding — Provenex records decisions but does not change the data
+    # path. Operators who want 0.x-equivalent blocking semantics set
+    # ``mode="enforce"``. The mode is recorded inside the signed receipt at
+    # ``policy.mode`` so the operating posture at decision time is itself
+    # tamper-evident.
+    mode: str = MODE_RECEIPTS_ONLY
+    # v1.0.0: callback invoked in advisory mode whenever the policy would
+    # have blocked a chunk or denied a tool call. Receives a structured
+    # dict; see :func:`_default_advisory_callback` for the default
+    # behaviour and the event shape. Ignored in enforce / receipts_only
+    # modes.
+    advisory_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in VALID_MODES:
+            raise ValueError(
+                f"Policy.mode must be one of {sorted(VALID_MODES)!r}, "
+                f"got {self.mode!r}"
+            )
+
+    def emit_advisory(self, event: Dict[str, Any]) -> None:
+        """Fire the advisory callback iff this policy is in advisory mode.
+
+        Safe to call unconditionally from the engine; this method is the
+        single place that gates on mode + callback presence.
+        """
+        if self.mode != MODE_ADVISORY:
+            return
+        callback = self.advisory_callback or _default_advisory_callback
+        try:
+            callback(event)
+        except Exception:  # noqa: BLE001 — never let the callback break enforcement
+            _ADVISORY_LOGGER.exception(
+                "provenex.advisory: callback raised; suppressing"
+            )
+
+    def acts_on_decisions(self) -> bool:
+        """True iff this mode actually drops chunks / denies tool calls.
+
+        ``enforce`` is the only mode that takes action; the other two
+        record the decision on the receipt without changing the data
+        path.
+        """
+        return self.mode == MODE_ENFORCE
 
     @classmethod
     def from_yaml(cls, path: str) -> "Policy":
@@ -164,6 +255,19 @@ class Policy:
                 f"{source}: 'version' must be 1 (got {version!r})"
             )
 
+        # v1.0.0: operating mode. Strings only; falls back to the dataclass
+        # default when unset so 0.x YAML files keep parsing.
+        mode = bundle.get("mode", MODE_RECEIPTS_ONLY)
+        if not isinstance(mode, str):
+            raise PolicyParseError(
+                f"{source}: 'mode' must be a string, got {type(mode).__name__}"
+            )
+        if mode not in VALID_MODES:
+            raise PolicyParseError(
+                f"{source}: 'mode' must be one of {sorted(VALID_MODES)!r}, "
+                f"got {mode!r}"
+            )
+
         verification_block = bundle.get("verification")
         verification = _parse_verification(verification_block, source=source)
 
@@ -189,6 +293,7 @@ class Policy:
             access_control=access_control,
             tool_call_control=tool_call_control,
             availability=availability,
+            mode=mode,
         )
 
 

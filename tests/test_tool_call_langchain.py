@@ -27,6 +27,7 @@ SECRET = b"langchain-wrapper-secret"
 
 POLICY_YAML = """
 version: 1
+mode: enforce
 policy_id: lc-wrapper-test-v1
 tool_call_control:
   rules:

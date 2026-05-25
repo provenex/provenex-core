@@ -114,8 +114,8 @@ One signed receipt per retrieval or per tool call. Retrieval receipts carry `sou
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "2.5.0",
-  "issuer": "provenex-core/0.10.1",
+  "schema_version": "2.6.0",
+  "issuer": "provenex-core/1.0.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "request_binding": {
     "algorithm": "sha256",
@@ -482,14 +482,13 @@ The interfaces (`ProvenanceIndex`, `PolicyEvaluator`, `ReceiptSigner`, `BloomFil
 ## Install
 
 ```bash
-pip install provenex-core                  # core only (pure stdlib, SQLite backend)
+pip install provenex-core                  # core (SQLite backend, Ed25519 signer)
 pip install "provenex-core[postgres]"      # + Postgres backend for production
 pip install "provenex-core[policy]"        # + native YAML policy DSL (PyYAML)
 pip install "provenex-core[langchain]"     # + LangChain integration
 pip install "provenex-core[langgraph]"     # + LangGraph integration
 pip install "provenex-core[llamaindex]"    # + LlamaIndex integration
 pip install "provenex-core[crewai]"        # + CrewAI integration
-pip install "provenex-core[ed25519]"       # + Ed25519 asymmetric signing
 pip install "provenex-core[export-kafka]"  # + KafkaSink (kafka-python)
 pip install "provenex-core[export-aws]"    # + SQSSink / S3AppendSink (boto3)
 pip install "provenex-core[export-gcp]"    # + PubSubSink (google-cloud-pubsub)
@@ -502,16 +501,60 @@ pip install "provenex-core[pkcs11]"        # + PKCS#11 HSM signer adapter
 pip install "provenex-core[identity]"      # + JWT -> RequestContext recipe (PyJWT)
 ```
 
-Python 3.10+. The core has zero third-party dependencies; it's pure stdlib. The Postgres backend, framework integrations, the native YAML DSL, and the Ed25519 signer are optional extras.
+Python 3.10+. As of v1.0.0 the core has one runtime dependency (`cryptography`, used for Ed25519). The `[ed25519]` extra from the 0.x line is now a no-op alias kept for backwards compatibility. The Postgres backend, framework integrations, the native YAML DSL, and the KMS adapters remain optional extras.
 
 ### Try it in 30 seconds
 
 ```bash
 pip install "provenex-core[policy]"
 git clone https://github.com/provenex/provenex-core.git
-export PROVENEX_SIGNING_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+provenex keys generate --output-dir keys/
+export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=keys/private.pem
+export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 python provenex-core/examples/standalone_demo.py
 ```
+
+#### Three operating modes (v1.0.0+)
+
+The same policy file runs in three operating postures. Switch between them with a single line in the YAML (or one keyword in code).
+
+```yaml
+# receipts_only (default): every chunk reaches the LLM; the receipt records
+# what the policy would have done. Use this to land Provenex without
+# changing downstream behaviour on day one.
+mode: receipts_only
+
+verification:
+  block_unauthorized: true
+  block_tampered: true
+access_control:
+  rules:
+    - name: jurisdiction_eu_only
+      when: { request.jurisdiction: EU }
+      require: { chunk.metadata.residency: { in: [EU, EEA] } }
+      on_violation: deny
+```
+
+```yaml
+# advisory: same data-path semantics as receipts_only, plus invoke a
+# callback whenever the policy would have blocked something. Use this in
+# the rollout window when you want operators to see violations land in
+# Slack / SIEM before flipping enforcement on.
+mode: advisory
+verification: { ... }
+access_control: { ... }
+```
+
+```yaml
+# enforce: 0.x behaviour. Block chunks that fail verification or access
+# control; deny tool calls that fail admission. Use this once the
+# advisory signal is clean.
+mode: enforce
+verification: { ... }
+access_control: { ... }
+```
+
+The mode lives inside the signed receipt at `policy.mode`, so an auditor reading a receipt can see the operating posture that produced it; a `receipts_only` receipt cannot be retroactively presented as evidence of enforcement.
 
 For the integration-pattern story (a poisoned chunk added directly to the vector store, bypassing Provenex ingest, gets caught and blocked at the retrieval boundary), run [`examples/rag_with_provenance.py`](https://github.com/provenex/provenex-core/blob/main/examples/rag_with_provenance.py). For the tool-call admission tour, run [`examples/agentic_admission_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/agentic_admission_demo.py). For the four-attack regulator demo, see [Worked example: the regulator's seven questions](#worked-example-the-regulators-seven-questions).
 
@@ -521,15 +564,16 @@ The point of the receipt is that someone outside your deployment can verify it. 
 
 ```bash
 # In the producing org.
-pip install "provenex-core[ed25519]"
+pip install provenex-core
 git clone https://github.com/provenex/provenex-core.git
+provenex keys generate --output-dir keys/                  # fresh Ed25519 keypair
+export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=keys/private.pem
 export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-export PROVENEX_RECEIPT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 python provenex-core/scripts/generate_audit_bundle.py     # writes dist/audit_bundle.zip
 
 # Hand the zip to an auditor. On their machine. No connection to your infra.
 unzip audit_bundle.zip && cd audit_bundle
-pip install "provenex-core[ed25519]"
+pip install provenex-core
 provenex audit receipt-1-retrieval-verified.json --public-key provenex_public_key.pem    # PASS
 provenex audit receipt-3-retrieval-tampered.json --public-key provenex_public_key.pem    # FAIL
 ```
@@ -580,7 +624,7 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 - [`docs/architecture.md`](https://github.com/provenex/provenex-core/blob/main/docs/architecture.md): the technical documentation entry point and source map
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): unified policy reference (verification + access control + tool-call admission), DSL, worked examples
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): full algorithm, threat model, and architectural comparison to embedding-based systems
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.5.0 specification (current); full version history table inside
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.6.0 specification (current); full version history table inside
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started, including a policy-driven retrieval path
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended/undefended threats, trust model for policy decisions
 - [`docs/compliance/`](https://github.com/provenex/provenex-core/blob/main/docs/compliance/): clause-by-clause mappings for EU AI Act Art. 12, DORA Art. 17-19, ISO 42001, SR 11-7

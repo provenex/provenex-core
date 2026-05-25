@@ -135,6 +135,31 @@ class Ed25519Signer(ReceiptSigner):
             )
         return cls(public_key=key)
 
+    @classmethod
+    def from_env(cls) -> "Ed25519Signer":
+        """Load a signer from the env var ``PROVENEX_RECEIPT_PRIVATE_KEY_PATH``.
+
+        Convenience wrapper around :meth:`from_private_key_pem`. Used by
+        :func:`provenex.core.receipt.resolve_default_signer` and by the
+        CLI. Raises :class:`RuntimeError` if the env var is unset or the
+        file is unreadable.
+        """
+        import os
+
+        path = os.environ.get("PROVENEX_RECEIPT_PRIVATE_KEY_PATH")
+        if not path:
+            raise RuntimeError(
+                "PROVENEX_RECEIPT_PRIVATE_KEY_PATH is not set; "
+                "generate a key with `provenex keys generate` first."
+            )
+        try:
+            with open(path, "rb") as fh:
+                return cls.from_private_key_pem(fh.read())
+        except OSError as exc:
+            raise RuntimeError(
+                f"could not read Ed25519 key at {path!r}: {exc}"
+            ) from exc
+
     # -------------------------------------------------------------- exports
 
     def private_key_pem(self, password: Optional[bytes] = None) -> bytes:

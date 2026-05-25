@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenex-core"
-version = "0.10.1"
+version = "1.0.0"
 description = "Policy enforcement for AI data access, with cryptographic proof"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Provenex" }]
 keywords = ["rag", "provenance", "ai", "policy", "security", "compliance", "fingerprinting", "langchain"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -22,8 +22,13 @@ classifiers = [
     "Topic :: Security :: Cryptography",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-# Core has zero third-party dependencies. Pure stdlib by design.
-dependencies = []
+# v1.0.0: the only runtime dependency is `cryptography`, used for
+# Ed25519 (the default signer) and for KMS/HSM adapters. The "zero-
+# dependency stdlib core" framing of 0.x is gone now that Ed25519 is
+# the default -- third-party-verifiable receipts are worth one well-
+# audited dependency. HMAC remains stdlib-only and is still selectable
+# explicitly for tightly-coupled deployments.
+dependencies = ["cryptography>=42.0"]
 
 [project.optional-dependencies]
 langchain = ["langchain-core>=0.3,<0.4"]
@@ -36,9 +41,11 @@ langgraph = ["langgraph>=0.2,<0.3"]
 # trajectory-linked receipts on every tool call. As with langgraph, the
 # integration imports nothing from crewai — this extra is for discovery.
 crewai = ["crewai>=0.55"]
-# Adds Ed25519 asymmetric signing so auditors can verify receipts without
-# holding the signing key. The core remains pure-stdlib without this extra.
-ed25519 = ["cryptography>=42.0"]
+# v1.0.0: no-op alias for backwards compatibility with the 0.x
+# ``pip install "provenex-core[ed25519]"`` pattern. The cryptography
+# library is now in the base ``dependencies`` because Ed25519 is the
+# default signer.
+ed25519 = []
 # Native YAML data-access policy DSL (schema 1.5.0). The evaluator imports
 # PyYAML lazily and raises a clear error if this extra is missing, so the
 # core remains pure-stdlib for users who don't author policies in YAML.

@@ -25,14 +25,13 @@ from .core.receipt import (
     compute_caller_hash,
     compute_request_binding,
     compute_value_hash,
+    resolve_default_signer,
     verify_receipt_signature,
 )
 from .core.witness import WitnessLog, WitnessRecord
-# Ed25519Signer is exported at the top level for symmetry with
-# HmacSha256Signer. The class itself only fails (with a clear
-# "install provenex-core[ed25519]" error) when instantiated; bare
-# import works in any environment so the top-level provenex import
-# stays pure-stdlib.
+# Ed25519Signer is the v1.0.0 default and is imported alongside the
+# other signers. `cryptography` is now in the base dependencies, so
+# this import always works.
 from .core.ed25519 import Ed25519Signer
 from .core.trajectory import (
     TrajectoryAuditResult,
@@ -94,7 +93,12 @@ from .policy.evaluator import (
 )
 from .policy.availability import IndexAvailabilityPolicy, IndexUnavailable
 from .policy.policy import VerificationPolicy, overall_status
-from .policy.unified import Policy
+from .policy.unified import (
+    MODE_ADVISORY,
+    MODE_ENFORCE,
+    MODE_RECEIPTS_ONLY,
+    Policy,
+)
 from .policy.yaml_evaluator import NativeYamlEvaluator, validate_policy_file
 from .index.circuit import CircuitBreaker
 from .tool_call import (
@@ -110,7 +114,7 @@ from .tool_call import (
     enforce_admission,
 )
 
-__version__ = "0.10.1"
+__version__ = "1.0.0"
 
 __all__ = [
     # Core
@@ -138,6 +142,10 @@ __all__ = [
     "BloomAcceleratedIndex",
     # Unified policy (schema 2.0.0)
     "Policy",
+    # Operating modes (v1.0.0)
+    "MODE_ENFORCE",
+    "MODE_RECEIPTS_ONLY",
+    "MODE_ADVISORY",
     # Verification policy (the five-outcome half, since v0.1)
     "VerificationPolicy",
     "overall_status",
@@ -171,6 +179,7 @@ __all__ = [
     "ReceiptSigner",
     "HmacSha256Signer",
     "Ed25519Signer",
+    "resolve_default_signer",
     "verify_receipt_signature",
     "compute_caller_hash",
     "compute_value_hash",

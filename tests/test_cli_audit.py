@@ -138,7 +138,7 @@ def test_audit_json_output_has_required_keys(monkeypatch):
     assert report["overall"] == "PASS"
     assert report["signature"]["ok"] is True
     assert report["receipt_id"].startswith("prx_")
-    assert report["schema_version"] == "2.5.0"
+    assert report["schema_version"] == "2.6.0"
     assert len(report["inclusion_proofs"]) == 1
     assert report["inclusion_proofs"][0]["ok"] is True
 
@@ -455,7 +455,7 @@ def test_audit_does_not_crash_on_malformed_index_status(monkeypatch):
         p = workdir / "bad.json"
         p.write_text(json.dumps({
             "receipt_id": "a",
-            "schema_version": "2.5.0",
+            "schema_version": "2.6.0",
             "index_status": bad_value,
         }))
         # Should return non-zero but never raise.

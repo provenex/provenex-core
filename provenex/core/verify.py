@@ -547,10 +547,15 @@ def _verify_chunks_finalize(
     sink: Any,
     index_status: Optional[Dict[str, Any]] = None,
 ) -> VerifiedChunks:
-    builder = ReceiptBuilder(policy=eff_policy.verification)
+    builder = ReceiptBuilder(policy=eff_policy.verification, mode=eff_policy.mode)
     kept: List[str] = []
     blocked: List[str] = []
     policy_decisions: List[Dict[str, Any]] = []
+    # Tracks per-chunk would-have-blocked detail for advisory mode. Each
+    # entry is {chunk_index, fingerprint, outcome, reason}; surfaced via
+    # ``Policy.emit_advisory`` after the receipt is finalized.
+    would_have_blocked: List[Dict[str, Any]] = []
+    enforce_drops = eff_policy.acts_on_decisions()
 
     for i, text in enumerate(texts):
         fingerprint = fingerprints[i]
@@ -590,7 +595,25 @@ def _verify_chunks_finalize(
             )
             block_by_policy = decision.decision != DECISION_ALLOW
 
-        if block_by_verification or block_by_policy:
+        would_block = block_by_verification or block_by_policy
+        if would_block:
+            would_have_blocked.append(
+                {
+                    "chunk_index": i,
+                    "fingerprint": fingerprint,
+                    "outcome": outcome.name,
+                    "reason": (
+                        "access_control"
+                        if block_by_policy
+                        else "verification"
+                    ),
+                }
+            )
+        # Engine action depends on mode: enforce drops blocked chunks;
+        # receipts_only and advisory pass everything through. The receipt
+        # already records the decision either way via ``sources[]`` and
+        # ``policy.access_control.decisions[]``.
+        if would_block and enforce_drops:
             blocked.append(text)
         else:
             kept.append(text)
@@ -669,6 +692,18 @@ def _verify_chunks_finalize(
     # Failures are swallowed (warnings.warn); the agent's hot path
     # is never broken by export degradation.
     _safe_publish(sink, receipt)
+
+    # v1.0.0: advisory mode fires the configured callback iff at least
+    # one chunk would have been blocked. The callback is a side channel;
+    # the data path already passed everything through above.
+    if would_have_blocked:
+        eff_policy.emit_advisory(
+            {
+                "gate": "retrieval",
+                "receipt_id": receipt.receipt_id,
+                "would_have_blocked": would_have_blocked,
+            }
+        )
 
     next_trajectory: Optional[TrajectoryContext] = None
     if trajectory is not None:

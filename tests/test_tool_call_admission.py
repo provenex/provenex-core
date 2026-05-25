@@ -45,6 +45,7 @@ SECRET = b"test-admission-secret"
 
 POLICY_YAML = """
 version: 1
+mode: enforce
 policy_id: admission-test-v1
 tool_call_control:
   rules:
@@ -164,6 +165,7 @@ def test_no_tool_call_policy_defaults_allow_and_omits_block():
     policy = Policy.from_text(
         """
 version: 1
+mode: enforce
 policy_id: chunks-only-v1
 
 verification:

@@ -16,6 +16,7 @@ from provenex.index.sqlite_index import SQLiteProvenanceIndex
 from provenex.integrations.crewai import ProvenexCrewSession, VerifiedChunks
 from provenex.integrations.langchain import ProvenexIngestor
 from provenex.policy.policy import VerificationPolicy
+from provenex.policy.unified import Policy
 
 
 SECRET = b"crewai-test-secret"
@@ -233,7 +234,7 @@ def test_wrap_tool_drops_blocked_by_default():
     session = ProvenexCrewSession(
         index=index,
         signer=HmacSha256Signer(secret=SECRET),
-        policy=VerificationPolicy(block_unauthorized=True),
+        policy=Policy(mode="enforce", verification=VerificationPolicy(block_unauthorized=True)),
     )
 
     def tool(q: str) -> str:
@@ -263,7 +264,7 @@ def test_wrap_tool_return_blocked_keeps_redacted_visibility():
     session = ProvenexCrewSession(
         index=index,
         signer=HmacSha256Signer(secret=SECRET),
-        policy=VerificationPolicy(block_unauthorized=True),
+        policy=Policy(mode="enforce", verification=VerificationPolicy(block_unauthorized=True)),
     )
 
     def tool(q: str) -> str:

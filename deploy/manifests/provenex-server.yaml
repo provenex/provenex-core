@@ -59,7 +59,7 @@ spec:
         - name: provenex-server
           # Published to GHCR by release.yml. Signed with cosign keyless.
           # See deploy/helm/provenex-server/values.yaml for the cosign verify recipe.
-          image: ghcr.io/provenex/provenex-server:0.10.1
+          image: ghcr.io/provenex/provenex-server:1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
