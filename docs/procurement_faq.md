@@ -52,8 +52,8 @@ Type-checking and linting target 3.10 per `[tool.black]` / `[tool.ruff]` in `pyp
 | Linux x86_64 | Supported. CI runs here. |
 | Linux arm64 | Supported. Used in production (AWS Graviton, Apple-silicon Linux containers). |
 | macOS (Intel and Apple Silicon) | Supported. Common developer platform; CI runs locally. |
-| Windows | Best-effort. The core is pure stdlib and should work; the `[postgres]` extra requires `psycopg[binary]`, which has Windows wheels but has had path-handling sharp edges historically. We do not run Windows CI. Customers running Provenex on Windows should hold their own coverage in their environment. |
-| Containerised (Docker / OCI) | Supported. The core is a Python wheel; no native shared-object dependencies in the OSS core itself. The `[postgres]` and `[ed25519]` extras pull `psycopg[binary]` and `cryptography` respectively, both of which ship pre-built wheels for the standard manylinux platforms. |
+| Windows | Best-effort. The base install pulls one third-party wheel (`cryptography`, for Ed25519) which ships Windows wheels and should work; the `[postgres]` extra requires `psycopg[binary]`, which has Windows wheels but has had path-handling sharp edges historically. We do not run Windows CI. Customers running Provenex on Windows should hold their own coverage in their environment. |
+| Containerised (Docker / OCI) | Supported. The core is a Python wheel; the only runtime dependency is `cryptography` (used for Ed25519, the default signer as of v1.0.0). The `[postgres]` extra additionally pulls `psycopg[binary]`. Both ship pre-built wheels for the standard manylinux platforms. |
 
 ## Vulnerability reporting
 

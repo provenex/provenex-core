@@ -21,7 +21,7 @@ Drop-in usage with an existing pipeline:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ...core.fingerprinter import Fingerprinter, FingerprinterConfig
 from ...core.receipt import ProvenanceReceipt, ReceiptBuilder, ReceiptSigner
@@ -80,14 +80,20 @@ class ProvenexRetriever:
         self,
         base_retriever: Any,
         index: ProvenanceIndex,
-        policy: Optional[VerificationPolicy] = None,
+        policy: Any = None,  # Policy | VerificationPolicy | None
         signer: Optional[ReceiptSigner] = None,
         fingerprinter: Optional[Fingerprinter] = None,
         sink: Any = None,
     ) -> None:
+        from ...policy.unified import coerce_policy
+
         self._base_retriever = base_retriever
         self._index = index
-        self._policy = policy or VerificationPolicy()
+        # v1.0.0: coerce to unified Policy so the mode + advisory callback
+        # are honored. Bare VerificationPolicy is wrapped with default mode
+        # (``receipts_only`` — the same default as the rest of the package).
+        self._effective_policy = coerce_policy(policy)
+        self._policy = self._effective_policy.verification
         self._signer = signer
         self._fingerprinter = fingerprinter or Fingerprinter(FingerprinterConfig())
         self._sink = sink
@@ -169,12 +175,16 @@ class ProvenexRetriever:
             documents, and the signed receipt covering both sets.
         """
         retrieved = self._retrieve(query)
-        builder = ReceiptBuilder(policy=self._policy)
+        builder = ReceiptBuilder(
+            policy=self._policy, mode=self._effective_policy.mode
+        )
 
         kept: List[Any] = []
         blocked: List[Any] = []
+        would_have_blocked: List[Dict[str, Any]] = []
+        enforce_drops = self._effective_policy.acts_on_decisions()
 
-        for doc in retrieved:
+        for i, doc in enumerate(retrieved):
             text = self._document_text(doc)
             fingerprint = self._fingerprinter.fingerprint_chunk(text)
             outcome = self._index.verify(fingerprint)
@@ -189,7 +199,20 @@ class ProvenexRetriever:
                 ),
             )
 
-            if self._policy.should_block(outcome):
+            would_block = self._policy.should_block(outcome)
+            if would_block:
+                would_have_blocked.append(
+                    {
+                        "chunk_index": i,
+                        "fingerprint": fingerprint,
+                        "outcome": outcome.name,
+                        "reason": "verification",
+                    }
+                )
+            # Mode gates the drop: enforce removes; receipts_only and
+            # advisory let every chunk through (the receipt still records
+            # the outcome).
+            if would_block and enforce_drops:
                 blocked.append(doc)
             else:
                 kept.append(doc)
@@ -217,6 +240,18 @@ class ProvenexRetriever:
         from ...export.streaming import _safe_publish
 
         _safe_publish(self._sink, receipt)
+
+        # v1.0.0: advisory callback fires once per call when any chunk
+        # would have been blocked.
+        if would_have_blocked:
+            self._effective_policy.emit_advisory(
+                {
+                    "gate": "retrieval",
+                    "receipt_id": receipt.receipt_id,
+                    "would_have_blocked": would_have_blocked,
+                }
+            )
+
         return RetrievalResult(documents=kept, blocked=blocked, receipt=receipt)
 
     # Convenience alias matching the classic LangChain retriever API. Returns

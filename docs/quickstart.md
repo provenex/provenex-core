@@ -8,7 +8,7 @@ Get a working provenance receipt in five minutes. Several paths below - drop in 
 pip install "provenex-core[langchain]"   # or [langgraph] / [crewai] / [llamaindex] / [ed25519]
 ```
 
-For the core SDK with no framework integration, drop the extras. Pure stdlib core; everything else is opt-in. Python 3.10+.
+For the core SDK with no framework integration, drop the extras. As of v1.0.0 the only runtime dependency is `cryptography` (used for Ed25519, the default signer); the framework integrations, the Postgres backend, and the KMS adapters remain opt-in. Python 3.10+.
 
 ## Set signing secrets
 

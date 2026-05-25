@@ -20,6 +20,7 @@ from provenex.index.base import VerificationOutcome
 from provenex.index.sqlite_index import SQLiteProvenanceIndex
 from provenex.integrations.llamaindex import ProvenexIngestor, ProvenexRetriever
 from provenex.policy.policy import VerificationPolicy
+from provenex.policy.unified import Policy
 
 
 SECRET = b"llamaindex-test-secret"
@@ -170,7 +171,7 @@ def test_retriever_blocks_unverified_chunks_by_policy():
     retriever = ProvenexRetriever(
         base_retriever=base,
         index=index,
-        policy=VerificationPolicy(block_unverified=True),
+        policy=Policy(mode="enforce", verification=VerificationPolicy(block_unverified=True)),
         signer=HmacSha256Signer(secret=SECRET),
     )
     result = retriever.retrieve_with_receipt(query="anything")
@@ -195,7 +196,7 @@ def test_retriever_alias_returns_only_kept_nodes():
     retriever = ProvenexRetriever(
         base_retriever=base,
         index=index,
-        policy=VerificationPolicy(block_unverified=True),
+        policy=Policy(mode="enforce", verification=VerificationPolicy(block_unverified=True)),
         signer=HmacSha256Signer(secret=SECRET),
     )
     nodes = retriever.retrieve("anything")

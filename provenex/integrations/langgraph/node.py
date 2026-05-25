@@ -199,7 +199,7 @@ def record_step_receipt(
 def provenex_retrieval_node(
     base_retriever: Any,
     index: ProvenanceIndex,
-    policy: Optional[VerificationPolicy] = None,
+    policy: Any = None,  # Policy | VerificationPolicy | None
     signer: Optional[ReceiptSigner] = None,
     fingerprinter: Optional[Fingerprinter] = None,
     step_kind: str = "retrieval",
@@ -239,8 +239,16 @@ def provenex_retrieval_node(
         >>> retrieve = provenex_retrieval_node(my_retriever, index=idx)
         >>> graph.add_node("retrieve", retrieve)  # doctest: +SKIP
     """
+    from ...policy.unified import coerce_policy
+
     keys = _resolve_keys(state_keys)
-    pol = policy or VerificationPolicy()
+    # v1.0.0: coerce to a unified Policy so the mode + advisory_callback
+    # are honored. Pre-1.0 callers may have passed a bare VerificationPolicy;
+    # coerce_policy wraps it. The retrieval node uses only the verification
+    # half + mode; access_control / tool_call_control are not modelled here
+    # (use ``verify_chunks`` directly if you need those gates).
+    eff_policy = coerce_policy(policy)
+    pol = eff_policy.verification
     fp = fingerprinter or Fingerprinter(FingerprinterConfig())
 
     def _invoke(query: str) -> List[Any]:
@@ -272,11 +280,13 @@ def provenex_retrieval_node(
             )
 
         retrieved = _invoke(query)
-        builder = ReceiptBuilder(policy=pol)
+        builder = ReceiptBuilder(policy=pol, mode=eff_policy.mode)
         kept: List[Any] = []
         blocked: List[Any] = []
+        would_have_blocked: List[Dict[str, Any]] = []
+        enforce_drops = eff_policy.acts_on_decisions()
 
-        for doc in retrieved:
+        for i, doc in enumerate(retrieved):
             text = _document_text(doc)
             fingerprint = fp.fingerprint_chunk(text)
             outcome = index.verify(fingerprint)
@@ -289,7 +299,19 @@ def provenex_retrieval_node(
                     fp.fingerprint(text).normalization_applied
                 ),
             )
-            if pol.should_block(outcome):
+            would_block = pol.should_block(outcome)
+            if would_block:
+                would_have_blocked.append(
+                    {
+                        "chunk_index": i,
+                        "fingerprint": fingerprint,
+                        "outcome": outcome.name,
+                        "reason": "verification",
+                    }
+                )
+            # Mode gates the actual drop: enforce removes; receipts_only
+            # and advisory leave every chunk in the kept list.
+            if would_block and enforce_drops:
                 blocked.append(doc)
             else:
                 kept.append(doc)
@@ -320,6 +342,16 @@ def provenex_retrieval_node(
         from ...export.streaming import _safe_publish
 
         _safe_publish(sink, receipt)
+
+        # v1.0.0: advisory mode fires the policy's configured callback.
+        if would_have_blocked:
+            eff_policy.emit_advisory(
+                {
+                    "gate": "retrieval",
+                    "receipt_id": receipt.receipt_id,
+                    "would_have_blocked": would_have_blocked,
+                }
+            )
 
         # Advance trajectory cursor for the next step in the graph.
         next_ctx = trajectory_ctx.next_step(

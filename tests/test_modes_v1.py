@@ -403,6 +403,101 @@ def test_mode_lives_inside_signed_payload():
     assert verify_receipt_signature(tampered, signer) is False
 
 
+# --------------------------------------------------------------------------- #
+# Integration wrappers honor mode                                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_langchain_retriever_receipts_only_passes_unauthorized_through():
+    """v1.0.0 regression: the langchain retriever previously bypassed mode."""
+    from provenex.integrations.langchain import ProvenexIngestor, ProvenexRetriever
+
+    index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
+    ProvenexIngestor(index=index).ingest(
+        [_Doc(page_content="confidential.")],
+        doc_id="memo_v1",
+        authorized=False,
+    )
+
+    class _StubRetriever:
+        def __init__(self, docs):
+            self._docs = docs
+
+        def invoke(self, query):
+            return list(self._docs)
+
+    retriever = ProvenexRetriever(
+        base_retriever=_StubRetriever([_Doc(page_content="confidential.")]),
+        index=index,
+        policy=Policy(
+            mode=MODE_RECEIPTS_ONLY,
+            verification=VerificationPolicy(block_unauthorized=True),
+        ),
+        signer=HmacSha256Signer(secret=SECRET),
+    )
+    result = retriever.get_relevant_documents_with_receipt("q")
+    assert len(result.documents) == 1  # passed through under receipts_only
+    assert result.blocked == []
+
+
+def test_langchain_retriever_advisory_fires_callback():
+    from provenex.integrations.langchain import ProvenexIngestor, ProvenexRetriever
+
+    index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
+    ProvenexIngestor(index=index).ingest(
+        [_Doc(page_content="confidential.")],
+        doc_id="memo_v1",
+        authorized=False,
+    )
+
+    class _StubRetriever:
+        def invoke(self, query):
+            return [_Doc(page_content="confidential.")]
+
+    events: List[Dict[str, Any]] = []
+    retriever = ProvenexRetriever(
+        base_retriever=_StubRetriever(),
+        index=index,
+        policy=Policy(
+            mode=MODE_ADVISORY,
+            verification=VerificationPolicy(block_unauthorized=True),
+            advisory_callback=events.append,
+        ),
+        signer=HmacSha256Signer(secret=SECRET),
+    )
+    retriever.get_relevant_documents_with_receipt("q")
+    assert len(events) == 1
+    assert events[0]["gate"] == "retrieval"
+
+
+def test_langchain_retriever_accepts_bare_verification_policy_backcompat():
+    """0.x callers passing a bare VerificationPolicy still work; the wrapper
+    silently wraps it with the default mode."""
+    from provenex.integrations.langchain import ProvenexIngestor, ProvenexRetriever
+
+    index = SQLiteProvenanceIndex(":memory:", signing_secret=SECRET)
+    ProvenexIngestor(index=index).ingest(
+        [_Doc(page_content="ok.")],
+        doc_id="memo_v1",
+        authorized=True,
+    )
+
+    class _StubRetriever:
+        def invoke(self, query):
+            return [_Doc(page_content="ok.")]
+
+    retriever = ProvenexRetriever(
+        base_retriever=_StubRetriever(),
+        index=index,
+        policy=VerificationPolicy(block_unauthorized=True),
+        signer=HmacSha256Signer(secret=SECRET),
+    )
+    result = retriever.get_relevant_documents_with_receipt("q")
+    # Default mode is receipts_only; the chunk passes through regardless
+    # of would-have-blocked status. For an "ok" chunk neither path drops it.
+    assert len(result.documents) == 1
+
+
 def test_pre_1_0_0_receipt_without_mode_remains_valid():
     """Builders constructed without a mode emit no ``policy.mode`` field,
     preserving byte-identity with 2.5.0 receipts for downstream code

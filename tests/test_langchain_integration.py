@@ -16,6 +16,7 @@ from provenex.index.base import VerificationOutcome
 from provenex.index.sqlite_index import SQLiteProvenanceIndex
 from provenex.integrations.langchain import ProvenexIngestor, ProvenexRetriever
 from provenex.policy.policy import VerificationPolicy
+from provenex.policy.unified import Policy
 
 
 SECRET = b"langchain-test-secret"
@@ -84,7 +85,7 @@ def test_policy_blocks_unauthorized():
     retriever = ProvenexRetriever(
         base_retriever=base,
         index=index,
-        policy=VerificationPolicy(block_unauthorized=True),
+        policy=Policy(mode="enforce", verification=VerificationPolicy(block_unauthorized=True)),
     )
     res = retriever.get_relevant_documents_with_receipt("q", output_text="")
     assert len(res.documents) == 0

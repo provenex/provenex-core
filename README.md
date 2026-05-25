@@ -1,9 +1,9 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=0.10.1)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=1.0.0)](https://pypi.org/project/provenex-core/)
 [![Downloads](https://img.shields.io/pypi/dm/provenex-core.svg?cacheSeconds=3600)](https://pypistats.org/packages/provenex-core)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=0.10.1)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=1.0.0)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 [![SBOM](https://img.shields.io/badge/SBOM-CycloneDX-blue.svg)](https://github.com/provenex/provenex-core/blob/main/docs/supply_chain.md)
 [![Sigstore](https://img.shields.io/badge/PyPI-Sigstore--signed-blueviolet.svg)](https://docs.pypi.org/attestations/)

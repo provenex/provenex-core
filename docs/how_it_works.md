@@ -146,7 +146,7 @@ See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator prot
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `2.5.0`) and `issuer` (`provenex-core/0.10.1`)
+- `schema_version` (currently `2.6.0`) and `issuer` (`provenex-core/1.0.0`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
 - The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied, `entry_kind`)
@@ -157,7 +157,7 @@ After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 The signature is computed over the canonical JSON serialization of the receipt: keys sorted, no whitespace, the signature block itself omitted from the payload. Anyone with the receipt and the signing key can recompute the payload, recompute the signature, and confirm a match.
 
-The default signer for in-house deployments is HMAC-SHA256 (`HmacSha256Signer`). For receipts that cross an organisational boundary (regulator handoff, cross-org provenance, external auditor), use `Ed25519Signer` from the optional `[ed25519]` extra so the verifier holds only the public key and cannot forge. Both implement the same `ReceiptSigner` interface; the receipt structure is identical. Source: [`provenex/core/receipt.py`](../provenex/core/receipt.py) and [`provenex/core/ed25519.py`](../provenex/core/ed25519.py).
+The default signer (v1.0.0+) is `Ed25519Signer`. `resolve_default_signer()` reads `PROVENEX_RECEIPT_PRIVATE_KEY_PATH` (a PEM private key path) and returns an Ed25519 signer; an auditor verifies with only the public key and cannot forge. For in-house deployments that prefer HMAC-SHA256, `HmacSha256Signer()` still works and reads `PROVENEX_RECEIPT_SECRET` from the environment. Both implement the same `ReceiptSigner` interface; the receipt structure is identical. Source: [`provenex/core/receipt.py`](../provenex/core/receipt.py) and [`provenex/core/ed25519.py`](../provenex/core/ed25519.py).
 
 ### Request-to-receipt binding (schema 2.4.0+)
 

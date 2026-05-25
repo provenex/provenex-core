@@ -82,7 +82,7 @@ There are also non-adversarial threats: accidental corruption (a buggy script ov
 
 **Mechanism:** Ed25519 signing (asymmetric). The receipt producer holds a private key. Anyone with the public key can verify but cannot forge. The auditor never sees, and does not need, the producer's secret.
 
-**Result:** receipts can be handed to external regulators or cross-organisation auditors with no key-material risk. The `provenex-core[ed25519]` extra adds this; HMAC remains the default for in-house deployments.
+**Result:** receipts can be handed to external regulators or cross-organisation auditors with no key-material risk. Ed25519 is the default signer as of v1.0.0 (`cryptography` moved from the `[ed25519]` extra into the base install); HMAC remains available as an explicit opt-in for in-house pipelines where the same team produces and verifies.
 
 ## Threats we explicitly do not protect against
 

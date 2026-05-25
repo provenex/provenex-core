@@ -21,6 +21,7 @@ from provenex.integrations.langgraph import (
     start_trajectory_state,
 )
 from provenex.policy.policy import VerificationPolicy
+from provenex.policy.unified import Policy
 
 
 SECRET = b"langgraph-test-secret"
@@ -226,7 +227,7 @@ def test_node_blocks_unauthorized_per_policy():
         base_retriever=StubRetriever(chunks),
         index=index,
         signer=HmacSha256Signer(secret=SECRET),
-        policy=VerificationPolicy(block_unauthorized=True),
+        policy=Policy(mode="enforce", verification=VerificationPolicy(block_unauthorized=True)),
     )
     delta = node({"query": "pricing?"})
     assert delta["documents"] == []
