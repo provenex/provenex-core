@@ -25,8 +25,13 @@ htmlcov/
 # Release notes live outside the repo (private notes folder).
 meta/release_v*.md
 
-# Benchmarking artifacts - local-only; numbers are summarized in docs/scaling.md
-bench_reports/
+# Benchmarking artifacts - local-only; numbers are summarized in
+# docs/benchmarks.md and docs/scaling.md. Reference JSONs for tagged
+# releases are whitelisted (the directory cannot itself be ignored if
+# any contained path is whitelisted).
+bench_reports/*
+!bench_reports/v1.0.0_100k.json
+!bench_reports/v1.0.0_1m.json
 bench/wiki_cache/
 
 # Demo working directories (auto-generated on each run; not source).

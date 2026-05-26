@@ -429,7 +429,8 @@ For dive-deep reading:
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended and undefended threats, the witness log for split-view resistance.
 - [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): the receipt schema 2.5.0 wire spec and the full schema-history table.
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): the YAML DSL, supported operators, worked examples, and the per-decision purity rationale (why the DSL refuses trajectory-level rules, cross-decision aggregation, and external-data lookups).
-- [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): Postgres topology, 1M-chunk benchmark numbers, policy-evaluation latency profile.
+- [`docs/benchmarks.md`](https://github.com/provenex/provenex-core/blob/main/docs/benchmarks.md): v1.0.0 headline numbers — verify-side latency, receipt-generation latency end-to-end, standalone-verifier verification latency, memory footprint. Reproducible via `provenex bench`.
+- [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): Merkle-backed (transparency-log) index numbers, Postgres topology, policy-evaluation latency profile.
 - [`docs/anomaly_detection.md`](https://github.com/provenex/provenex-core/blob/main/docs/anomaly_detection.md): how receipts compose with downstream UEBA / SIEM. Provenex is the firewall, your detector is the SIEM. Five worked detection patterns.
 
 ### Conformance
@@ -442,22 +443,22 @@ provenex selftest
 
 ### Reproducible performance
 
-Three deployment patterns, each with separate latency numbers. The bench code that produced these is in [`bench/`](https://github.com/provenex/provenex-core/tree/main/bench); the full methodology, 1M-chunk scale numbers, and policy-evaluation latency profile are in [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md). Numbers below are from a 2018 mobile laptop (Darwin x86_64, Python 3.12); on enterprise hardware (`c6i.2xlarge` or comparable), `docs/scaling.md` § *What changes on enterprise hardware* documents expected ratios.
+Three deployment patterns, each with separate latency numbers. The bench code that produced these is in [`bench/`](https://github.com/provenex/provenex-core/tree/main/bench); the v1.0.0 headline numbers (verify, receipt-generation, standalone-verifier verification, memory) are in [`docs/benchmarks.md`](https://github.com/provenex/provenex-core/blob/main/docs/benchmarks.md), and the deeper Merkle-backed and topology-level numbers are in [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md). Numbers below are from a 2018 mobile laptop (Darwin x86_64, Python 3.12); on enterprise hardware (`c6i.2xlarge` or comparable), `docs/scaling.md` § *What changes on enterprise hardware* documents expected ratios.
 
 | Pattern | Where the index lives | Verify p50 / p99 / p999 | Throughput | Best for |
 | --- | --- | --- | --- | --- |
-| **A. In-process SQLite** | Same process as the agent | **37.6 µs / 54.4 µs / 106.7 µs** (100K-chunk warm cache) | 24.4k ops/s single-threaded | Dev, demos, single-node deployments, anywhere a Postgres dependency is unwelcome |
+| **A. In-process SQLite** | Same process as the agent | **45.8 µs / 70.9 µs / 116.7 µs** (100K-chunk warm cache, v1.0.0) | 21.7k ops/s single-threaded | Dev, demos, single-node deployments, anywhere a Postgres dependency is unwelcome |
 | **B. Sidecar HTTP** | Adjacent container on the same host | Between A and C; localhost network adds ~100–300 µs per call | Equal to A modulo loopback overhead | Multi-language agents, polyglot fleets, or where the agent runtime can't import Python |
 | **C. Centralized async Postgres** | Shared Postgres cluster, async pool | **p50 1.57 ms / p99 2.48 ms** at 4 concurrent readers, 1M chunks; **p50 7.30 ms / p99 16.10 ms** at 16 concurrent readers | 2.1k–2.5k ops/s per replica; horizontal scaling on read replicas | Multi-pod, multi-region deployments; everything where ingest and verify run in different processes |
 
 Reproduce Pattern A on your hardware:
 
 ```bash
-provenex bench --scale 100k   # ~60s; matches the headline numbers above
-provenex bench --scale 1m     # ~10 min; matches docs/scaling.md
+provenex bench --scale 100k   # ~2-3 min on the reference hardware
+provenex bench --scale 1m     # ~25 min; numbers in docs/benchmarks.md
 ```
 
-Pattern C reproduction (needs a Postgres instance) is documented in [`bench/postgres/`](https://github.com/provenex/provenex-core/tree/main/bench/postgres); the `provenex bench` CLI ships only the in-process reproducer to keep the install footprint zero-dependency.
+Pattern C reproduction (needs a Postgres instance) is documented in [`bench/postgres/`](https://github.com/provenex/provenex-core/tree/main/bench/postgres); the `provenex bench` CLI ships only the in-process reproducer.
 
 ### Why open source?
 

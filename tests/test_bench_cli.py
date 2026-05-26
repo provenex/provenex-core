@@ -25,7 +25,15 @@ def test_presets_cover_all_scales():
 
 
 def test_run_smallest_scale_produces_expected_shape(capsys):
-    result = run(scale="1k", seed=42, verify_samples=200)
+    # Skip the receipt-gen + verifier passes so the test stays fast;
+    # those are covered explicitly by test_run_emits_receipt_and_verifier_blocks.
+    result = run(
+        scale="1k",
+        seed=42,
+        verify_samples=200,
+        receipt_samples=0,
+        verifier_samples=0,
+    )
     d = result.to_dict()
 
     # Top-level keys downstream tooling reads.
@@ -49,14 +57,35 @@ def test_run_smallest_scale_produces_expected_shape(capsys):
 def test_run_determinism_in_corpus(capsys):
     """Same seed must produce the same chunk fingerprints and the same
     count of UNVERIFIED vs VERIFIED outcomes."""
-    r1 = run(scale="1k", seed=42, verify_samples=500, unknown_rate=0.2)
-    r2 = run(scale="1k", seed=42, verify_samples=500, unknown_rate=0.2)
+    r1 = run(
+        scale="1k",
+        seed=42,
+        verify_samples=500,
+        unknown_rate=0.2,
+        receipt_samples=0,
+        verifier_samples=0,
+    )
+    r2 = run(
+        scale="1k",
+        seed=42,
+        verify_samples=500,
+        unknown_rate=0.2,
+        receipt_samples=0,
+        verifier_samples=0,
+    )
     # Outcome counts are seeded — they must match across runs.
     assert r1.verify["outcome_counts"] == r2.verify["outcome_counts"]
 
 
 def test_run_unknown_rate_zero_means_all_verified(capsys):
-    r = run(scale="1k", seed=7, verify_samples=300, unknown_rate=0.0)
+    r = run(
+        scale="1k",
+        seed=7,
+        verify_samples=300,
+        unknown_rate=0.0,
+        receipt_samples=0,
+        verifier_samples=0,
+    )
     counts = r.verify["outcome_counts"]
     # With unknown_rate=0, every sample is a known fingerprint -> VERIFIED.
     assert counts.get("UNVERIFIED", 0) == 0
@@ -65,7 +94,55 @@ def test_run_unknown_rate_zero_means_all_verified(capsys):
 
 def test_run_rejects_unknown_scale():
     with pytest.raises(ValueError):
-        run(scale="42m", seed=42, verify_samples=100)
+        run(scale="42m", seed=42, verify_samples=100, receipt_samples=0)
+
+
+def test_run_emits_receipt_and_verifier_blocks(capsys):
+    """v1.0.0: receipt-generation + standalone-verifier measurements are
+    captured when sample counts are positive."""
+    result = run(
+        scale="1k",
+        seed=42,
+        verify_samples=100,
+        receipt_samples=50,
+        verifier_samples=50,
+    )
+    d = result.to_dict()
+
+    assert "receipt_generation" in d, d
+    rg = d["receipt_generation"]
+    assert rg["samples"] == 50
+    assert rg["signer_algorithm"] == "ed25519"
+    assert rg["ops_per_second"] > 0
+    rg_pcts = rg["percentiles_seconds"]
+    assert rg_pcts["p50"] <= rg_pcts["p95"] <= rg_pcts["p99"]
+
+    assert "verifier_verification" in d, d
+    vv = d["verifier_verification"]
+    assert vv["samples"] == 50
+    assert vv["ops_per_second"] > 0
+    vv_pcts = vv["percentiles_seconds"]
+    assert vv_pcts["p50"] <= vv_pcts["p95"] <= vv_pcts["p99"]
+
+    assert "memory" in d
+    assert d["memory"]["peak_rss_bytes"] > 0
+
+
+def test_run_zero_receipt_samples_omits_blocks(capsys):
+    """When the operator opts out, the new blocks are absent so the
+    JSON report does not grow gratuitously."""
+    result = run(
+        scale="1k",
+        seed=42,
+        verify_samples=100,
+        receipt_samples=0,
+        verifier_samples=0,
+    )
+    d = result.to_dict()
+    assert "receipt_generation" not in d
+    assert "verifier_verification" not in d
+    # Memory is always emitted (no-op cost).
+    assert "memory" in d
 
 
 def test_cli_main_module_entry_point(tmp_path: Path):

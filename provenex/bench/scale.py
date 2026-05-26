@@ -15,24 +15,41 @@ import argparse
 import json
 import platform
 import random
+import resource
 import secrets
 import statistics
 import string
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # These are public from the package surface; the bench module deliberately
 # uses the same imports a caller would.
 from .. import (
+    Ed25519Signer,
     Fingerprinter,
     FingerprinterConfig,
+    HmacSha256Signer,
+    Policy,
     SQLiteProvenanceIndex,
     __version__,
+    verify_chunks,
 )
+
+
+def _max_rss_bytes() -> int:
+    """Peak resident set size of this process, in bytes.
+
+    ``ru_maxrss`` is in kilobytes on Linux and bytes on macOS; normalize
+    to bytes so the JSON report is platform-portable.
+    """
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if platform.system() == "Linux":
+        return rss * 1024
+    return int(rss)
 
 
 # Headline scales reproducing the README's published p50/p95/p99/p999
@@ -100,9 +117,20 @@ class BenchResult:
     verify: Dict[str, Any]
     db_size_bytes: int
     elapsed_total_seconds: float
+    # v1.0.0 additions:
+    # - ``receipt_generation`` measures the full end-to-end producer path
+    #   (fingerprint + index lookup + canonicalisation + signature). Only
+    #   present when ``--receipt-samples`` > 0.
+    # - ``verifier_verification`` measures the offline auditor path using
+    #   the standalone ``provenex-verifier`` library (signature only, no
+    #   index). Only present when ``provenex_verifier`` is installed.
+    # - ``memory.peak_rss_bytes`` is the process peak RSS after ingest.
+    receipt_generation: Optional[Dict[str, Any]] = None
+    verifier_verification: Optional[Dict[str, Any]] = None
+    memory: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "provenex_version": self.provenex_version,
             "scale": self.scale,
             "target_chunks": self.target_chunks,
@@ -114,6 +142,13 @@ class BenchResult:
             "db_size_bytes": self.db_size_bytes,
             "elapsed_total_seconds": self.elapsed_total_seconds,
         }
+        if self.receipt_generation is not None:
+            d["receipt_generation"] = self.receipt_generation
+        if self.verifier_verification is not None:
+            d["verifier_verification"] = self.verifier_verification
+        if self.memory is not None:
+            d["memory"] = self.memory
+        return d
 
 
 def run(
@@ -123,6 +158,8 @@ def run(
     verify_samples: int = 10_000,
     chunk_chars: int = 800,
     unknown_rate: float = 0.1,
+    receipt_samples: int = 1_000,
+    verifier_samples: int = 1_000,
     log: Optional[Any] = None,
 ) -> BenchResult:
     """Run one in-process SQLite bench and return the result.
@@ -137,6 +174,14 @@ def run(
         chunk_chars: Approximate per-chunk character length.
         unknown_rate: Fraction of verify queries that target
             unindexed fingerprints (exercises the UNVERIFIED path).
+        receipt_samples: Number of full end-to-end ``verify_chunks``
+            calls (fingerprint + index lookup + canonicalisation +
+            Ed25519 signature). Pass 0 to skip. Each sample produces a
+            single-chunk signed receipt.
+        verifier_samples: Number of receipts to verify with the
+            standalone ``provenex-verifier`` library (the offline auditor
+            path). Capped at ``receipt_samples``. Skipped silently when
+            ``provenex_verifier`` is not installed.
         log: Optional file-like object for human-readable progress
             messages. Defaults to ``sys.stderr`` when ``None``.
     """
@@ -233,7 +278,113 @@ def run(
         file=log,
     )
 
+    # v1.0.0: full end-to-end receipt-generation latency. Uses
+    # Ed25519 (the v1.0.0 default) so the numbers reflect what
+    # production deployments actually emit.
+    receipt_block: Optional[Dict[str, Any]] = None
+    saved_receipts: List[Dict[str, Any]] = []
+    if receipt_samples > 0:
+        signer = Ed25519Signer.generate()
+        policy = Policy(mode="enforce")  # enforce mirrors the 0.x semantics
+        gen_rng = random.Random(seed + 2)
+        # Re-use a slice of the ingested chunks so verify_chunks finds
+        # them in the index and produces VERIFIED outcomes.
+        gen_chunks: List[str] = []
+        rng_for_gen = random.Random(seed + 3)
+        for _ in range(receipt_samples):
+            # Re-derive the same chunk text bytes deterministically by
+            # picking a known fingerprint and re-generating its content.
+            # The bench's _generate_chunk path is deterministic given the
+            # same seed; we re-seed per pick so callers can reproduce.
+            text = _generate_chunk(rng_for_gen, chunk_chars)
+            gen_chunks.append(text)
+        # The gen_chunks are independent random bytes; they will be
+        # UNVERIFIED in the index, but the receipt path measures the
+        # same number of operations regardless of outcome. Honest
+        # comparison: production deployments hit a mix.
+        print(
+            f"[provenex bench] generating {receipt_samples:,} signed receipts (Ed25519)...",
+            file=log,
+        )
+        receipt_latencies: List[float] = []
+        gen_t0 = time.perf_counter()
+        for text in gen_chunks:
+            op_t0 = time.perf_counter()
+            result = verify_chunks(
+                text,
+                index=index,
+                policy=policy,
+                signer=signer,
+            )
+            receipt_latencies.append(time.perf_counter() - op_t0)
+            if len(saved_receipts) < verifier_samples:
+                saved_receipts.append(result.receipt.to_dict())
+        gen_elapsed = time.perf_counter() - gen_t0
+        print(
+            f"[provenex bench]   produced {receipt_samples:,} receipts in "
+            f"{gen_elapsed:.2f} s "
+            f"({receipt_samples / gen_elapsed:,.0f} receipts/s)",
+            file=log,
+        )
+        receipt_block = {
+            "samples": receipt_samples,
+            "elapsed_seconds": gen_elapsed,
+            "ops_per_second": receipt_samples / gen_elapsed,
+            "signer_algorithm": signer.algorithm,
+            "percentiles_seconds": _percentiles(receipt_latencies),
+        }
+
+    # v1.0.0: standalone-verifier verification latency. Only the
+    # cryptographic envelope; no index lookups. This is the number an
+    # external auditor sees when running ``provenex-verifier`` against
+    # a hand-off receipt.
+    verifier_block: Optional[Dict[str, Any]] = None
+    if saved_receipts:
+        try:
+            from provenex_verifier import verify_receipt as _verify_receipt
+        except ImportError:
+            print(
+                "[provenex bench] provenex-verifier not installed; skipping "
+                "verifier-verification bench. `pip install provenex-verifier` "
+                "to include it.",
+                file=log,
+            )
+        else:
+            pub_pem = signer.public_key_pem()
+            print(
+                f"[provenex bench] verifying {len(saved_receipts):,} receipts "
+                f"via provenex-verifier...",
+                file=log,
+            )
+            verifier_latencies: List[float] = []
+            verifier_t0 = time.perf_counter()
+            for r_dict in saved_receipts:
+                op_t0 = time.perf_counter()
+                _verify_receipt(r_dict, pub_pem)
+                verifier_latencies.append(time.perf_counter() - op_t0)
+            verifier_elapsed = time.perf_counter() - verifier_t0
+            print(
+                f"[provenex bench]   verified {len(saved_receipts):,} in "
+                f"{verifier_elapsed:.2f} s "
+                f"({len(saved_receipts) / verifier_elapsed:,.0f} ops/s)",
+                file=log,
+            )
+            verifier_block = {
+                "samples": len(saved_receipts),
+                "elapsed_seconds": verifier_elapsed,
+                "ops_per_second": len(saved_receipts) / verifier_elapsed,
+                "percentiles_seconds": _percentiles(verifier_latencies),
+            }
+
     index.close()
+
+    # Memory snapshot after every measured pass — captures peak RSS for
+    # the whole benchmark run. ``ru_maxrss`` is monotonic-peak so the
+    # value reflects whichever phase was the heaviest (ingest or verify
+    # for large corpora; receipt-gen for small ones).
+    memory_block = {
+        "peak_rss_bytes": _max_rss_bytes(),
+    }
 
     overall_elapsed = time.perf_counter() - overall_t0
 
@@ -264,6 +415,9 @@ def run(
         },
         db_size_bytes=db_size_bytes,
         elapsed_total_seconds=overall_elapsed,
+        receipt_generation=receipt_block,
+        verifier_verification=verifier_block,
+        memory=memory_block,
     )
 
 
@@ -291,6 +445,43 @@ def _format_summary(result: BenchResult) -> str:
         f"  Throughput: {result.verify['ops_per_second']:,.0f} ops/s",
         "",
     ]
+    if result.receipt_generation:
+        rg = result.receipt_generation["percentiles_seconds"]
+        lines.extend(
+            [
+                f"  Receipt generation end-to-end (over "
+                f"{result.receipt_generation['samples']:,} samples, "
+                f"{result.receipt_generation['signer_algorithm']}):",
+                f"    p50:  {_format_seconds(rg['p50'])}",
+                f"    p95:  {_format_seconds(rg['p95'])}",
+                f"    p99:  {_format_seconds(rg['p99'])}",
+                f"  Throughput: "
+                f"{result.receipt_generation['ops_per_second']:,.0f} receipts/s",
+                "",
+            ]
+        )
+    if result.verifier_verification:
+        vv = result.verifier_verification["percentiles_seconds"]
+        lines.extend(
+            [
+                f"  Receipt verification via provenex-verifier (over "
+                f"{result.verifier_verification['samples']:,} receipts):",
+                f"    p50:  {_format_seconds(vv['p50'])}",
+                f"    p95:  {_format_seconds(vv['p95'])}",
+                f"    p99:  {_format_seconds(vv['p99'])}",
+                f"  Throughput: "
+                f"{result.verifier_verification['ops_per_second']:,.0f} ops/s",
+                "",
+            ]
+        )
+    if result.memory:
+        lines.extend(
+            [
+                f"  Peak RSS: "
+                f"{result.memory['peak_rss_bytes'] / 1024 / 1024:,.1f} MB",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -333,6 +524,25 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--receipt-samples",
+        type=int,
+        default=1_000,
+        help=(
+            "Number of end-to-end receipt-generation samples (Ed25519). "
+            "0 disables the receipt + verifier passes. Default: 1_000."
+        ),
+    )
+    p.add_argument(
+        "--verifier-samples",
+        type=int,
+        default=1_000,
+        help=(
+            "Number of receipts to verify with the standalone "
+            "provenex-verifier library. Capped at --receipt-samples. "
+            "Default: 1_000."
+        ),
+    )
+    p.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -355,6 +565,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         verify_samples=args.verify_samples,
         chunk_chars=args.chunk_chars,
         unknown_rate=args.unknown_rate,
+        receipt_samples=args.receipt_samples,
+        verifier_samples=args.verifier_samples,
     )
     if args.json_only:
         json.dump(result.to_dict(), sys.stdout, indent=2)

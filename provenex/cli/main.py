@@ -1078,6 +1078,8 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         "--verify-samples", str(args.verify_samples),
         "--chunk-chars", str(args.chunk_chars),
         "--unknown-rate", str(args.unknown_rate),
+        "--receipt-samples", str(args.receipt_samples),
+        "--verifier-samples", str(args.verifier_samples),
     ]
     if args.out is not None:
         argv.extend(["--out", args.out])
@@ -1744,6 +1746,25 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Fraction of verify queries that target unindexed fingerprints "
             "(default: 0.1)."
+        ),
+    )
+    p_bench.add_argument(
+        "--receipt-samples",
+        type=int,
+        default=1_000,
+        help=(
+            "End-to-end receipt-generation samples (Ed25519). 0 disables "
+            "the receipt + verifier passes. Default: 1_000."
+        ),
+    )
+    p_bench.add_argument(
+        "--verifier-samples",
+        type=int,
+        default=1_000,
+        help=(
+            "Number of receipts to verify via the standalone "
+            "provenex-verifier library. Capped at --receipt-samples. "
+            "Default: 1_000."
         ),
     )
     p_bench.add_argument(

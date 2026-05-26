@@ -1,12 +1,13 @@
 # Provenex at scale
 
-Measured numbers from a single 1,000,000-chunk run, with an honest
-discussion of how each workload should move on server-class hardware.
+Measured numbers from a single 1,000,000-chunk run against the
+**Merkle-backed** transparency-log index (`MerkleSQLiteProvenanceIndex`),
+with an honest discussion of how each workload should move on
+server-class hardware.
 
-> **Headline.** One million chunks ingested in **12.2 minutes** on a 6-core
-> 2018 mobile laptop. Verification settles at **p50 371 µs / p99 599 µs**.
-> Inclusion proofs are **20 hashes** (≈ log₂(1M)), generated in **403 µs**
-> at p50 and verified offline against the tree head in **47 µs**.
+> **New in v1.0.0.** For the plain `SQLiteProvenanceIndex` numbers (the default index when transparency logging is not in scope) plus standalone-verifier verification latency, peak-RSS memory, and end-to-end Ed25519 receipt-generation latency, see [`docs/benchmarks.md`](benchmarks.md). That doc is the canonical headline reference. This page goes deeper on the Merkle-backed path and the topology-level reasoning behind each number.
+
+> **Headline (Merkle-backed index).** One million chunks ingested in **12.2 minutes** on a 6-core 2018 mobile laptop. Verification settles at **p50 371 µs / p99 599 µs**. Inclusion proofs are **20 hashes** (≈ log₂(1M)), generated in **403 µs** at p50 and verified offline against the tree head in **47 µs**.
 
 The bench is single-threaded by design. The numbers below describe what
 one Python process can do end-to-end, not the ceiling of the
