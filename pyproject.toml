@@ -107,6 +107,10 @@ dev = [
     # ASGI deps for the Phase 1.2 100-concurrent-verify acceptance test.
     "starlette>=0.37",
     "httpx>=0.27",
+    # Bench harness optionally measures standalone-verifier latency. When
+    # the verifier is installed the bench captures the verifier_verification
+    # block; CI installs it so the block is exercised, not skipped.
+    "provenex-verifier>=1.0.0",
 ]
 
 [project.scripts]

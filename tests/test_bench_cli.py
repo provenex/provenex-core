@@ -99,7 +99,13 @@ def test_run_rejects_unknown_scale():
 
 def test_run_emits_receipt_and_verifier_blocks(capsys):
     """v1.0.0: receipt-generation + standalone-verifier measurements are
-    captured when sample counts are positive."""
+    captured when sample counts are positive.
+
+    The verifier block requires ``provenex_verifier`` to be importable.
+    When it isn't (e.g. minimal-deps installs), only the receipt-
+    generation block is exercised; the verifier block is checked in a
+    separate test that skips if the dep is absent.
+    """
     result = run(
         scale="1k",
         seed=42,
@@ -117,15 +123,30 @@ def test_run_emits_receipt_and_verifier_blocks(capsys):
     rg_pcts = rg["percentiles_seconds"]
     assert rg_pcts["p50"] <= rg_pcts["p95"] <= rg_pcts["p99"]
 
+    assert "memory" in d
+    assert d["memory"]["peak_rss_bytes"] > 0
+
+
+def test_run_emits_verifier_block_when_verifier_installed(capsys):
+    """The standalone-verifier bench pass runs only when the
+    ``provenex_verifier`` package is importable. Skip cleanly when it
+    is not (it's an external dep with its own release cadence)."""
+    pytest.importorskip("provenex_verifier")
+
+    result = run(
+        scale="1k",
+        seed=42,
+        verify_samples=100,
+        receipt_samples=50,
+        verifier_samples=50,
+    )
+    d = result.to_dict()
     assert "verifier_verification" in d, d
     vv = d["verifier_verification"]
     assert vv["samples"] == 50
     assert vv["ops_per_second"] > 0
     vv_pcts = vv["percentiles_seconds"]
     assert vv_pcts["p50"] <= vv_pcts["p95"] <= vv_pcts["p99"]
-
-    assert "memory" in d
-    assert d["memory"]["peak_rss_bytes"] > 0
 
 
 def test_run_zero_receipt_samples_omits_blocks(capsys):
