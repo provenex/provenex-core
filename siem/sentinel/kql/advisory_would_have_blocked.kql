@@ -1,0 +1,20 @@
+// Advisory-mode receipts that would have blocked something under
+// enforce. This is the rollout signal (v1.0.0+).
+//
+// The right rollout sequence is:
+//   receipts_only -> advisory (watch this query) -> enforce
+//
+// When this query stops returning rows for a given policy_id +
+// caller, that corpus is ready to flip to enforce.
+
+Provenex_Receipt_CL
+| where TimeGenerated > ago(24h)
+| extend mode = tostring(parse_json(policy_s).mode)
+| where mode == "advisory"
+| extend summary = parse_json(summary_s)
+| where tostring(summary.overall_status) == "FAIL"
+   or toint(coalesce(summary.actions_denied, 0)) > 0
+| extend ac = parse_json(policy_s).access_control
+| extend policy_id = tostring(ac.policy_id)
+| summarize would_have_blocked = count() by policy_id, caller_hash_s
+| sort by would_have_blocked desc

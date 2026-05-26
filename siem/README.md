@@ -8,7 +8,7 @@ Connectors that bring Provenex receipts into the SOC's tool of choice. All three
 | --- | --- | --- | --- |
 | **[Splunk](splunk/)** | TA-quality | `app.conf`, `props.conf`, `transforms.conf`, `tags.conf`, `eventtypes.conf`, 7 saved searches, 6-panel dashboard, packaging script for `.spl` | [`splunk/README.md`](splunk/README.md) |
 | **[Datadog](datadog/)** | importable JSONs | Log pipeline, 8-widget dashboard, 3 monitors covering critical alarms | [`datadog/README.md`](datadog/README.md) |
-| **[Microsoft Sentinel](sentinel/)** | KQL + analytics rules | 3 KQL queries, 2 analytics rule templates | [`sentinel/README.md`](sentinel/README.md) |
+| **[Microsoft Sentinel](sentinel/)** | KQL + analytics rules + Workbook | 5 KQL queries, 3 analytics rule templates (incl. TAMPERED), 7-panel Workbook | [`sentinel/README.md`](sentinel/README.md) |
 
 The shared spine is [`provenex.export.OCSFAdapter`](../provenex/export/ocsf.py) -- it maps any receipt onto OCSF v1.3, which all three SIEMs accept natively. The per-SIEM artifacts above are the transport + visualization wrappers; the OCSF mapping is the canonical translation. See [`docs/ocsf_mapping.md`](../docs/ocsf_mapping.md) for the field-by-field spec.
 
@@ -18,7 +18,7 @@ The shared spine is [`provenex.export.OCSFAdapter`](../provenex/export/ocsf.py) 
 | --- | --- |
 | Splunk HEC | [`examples/splunk_hec_ingest.py`](../examples/splunk_hec_ingest.py) |
 | Datadog Logs intake | [`examples/datadog_logs_ingest.py`](../examples/datadog_logs_ingest.py) |
-| Sentinel HTTP Data Collector | (planned) |
+| Sentinel HTTP Data Collector | [`examples/sentinel_ingest.py`](../examples/sentinel_ingest.py) |
 
 Each script produces a small set of signed receipts (one allow, one deny) and POSTs them through the SIEM's ingestion API. Run with the SIEM credentials unset to dump the wire-format payloads to stdout for offline rehearsal.
 

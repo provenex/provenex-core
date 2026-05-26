@@ -1,0 +1,121 @@
+{
+  "version": "Notebook/1.0",
+  "items": [
+    {
+      "type": 1,
+      "content": {
+        "json": "## Provenex Overview\n\nSOC view over Provenex provenance receipts (schema 2.6.0+). Top row: operating posture and the TAMPERED alarm. Middle: policy-decision activity. Bottom: drift detector and the advisory-rollout signal."
+      },
+      "name": "header"
+    },
+    {
+      "type": 9,
+      "content": {
+        "version": "KqlParameterItem/1.0",
+        "parameters": [
+          {
+            "id": "timerange",
+            "version": "KqlParameterItem/1.0",
+            "name": "TimeRange",
+            "type": 4,
+            "value": {
+              "durationMs": 86400000
+            },
+            "typeSettings": {
+              "selectableValues": [
+                {"durationMs": 3600000},
+                {"durationMs": 14400000},
+                {"durationMs": 86400000},
+                {"durationMs": 604800000}
+              ]
+            }
+          }
+        ]
+      },
+      "name": "parameters"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "Provenex_Receipt_CL\n| where TimeGenerated {TimeRange}\n| extend mode = coalesce(tostring(parse_json(policy_s).mode), \"pre-1.0.0\")\n| summarize count() by mode\n| sort by count_ desc",
+        "size": 1,
+        "title": "Operating mode (24h)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "piechart"
+      },
+      "name": "operating_mode"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "Provenex_Receipt_CL\n| where TimeGenerated > ago(1h)\n| extend summary = parse_json(summary_s)\n| where toint(summary.tampered) > 0\n| summarize count_tampered = count() by host_s\n| sort by count_tampered desc",
+        "size": 1,
+        "title": "TAMPERED alarms (1h)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "tampered_alarms"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "Provenex_Receipt_CL\n| where TimeGenerated {TimeRange}\n| extend tcc = parse_json(policy_s).tool_call_control\n| extend decisions = parse_json(tostring(tcc.decisions))\n| mv-expand decision = decisions\n| where decision.decision == \"deny\"\n| summarize denies = count() by caller_hash_s\n| sort by denies desc\n| take 20",
+        "size": 1,
+        "title": "Denied tool calls by caller",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "denied_tool_calls"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "Provenex_Receipt_CL\n| where TimeGenerated {TimeRange}\n| extend ac = parse_json(policy_s).access_control\n| extend decisions = parse_json(tostring(ac.decisions))\n| mv-expand decision = decisions\n| extend jurisdiction = tostring(decision.inputs.request_context.jurisdiction)\n| extend sources = parse_json(sources_s)\n| mv-expand source = sources\n| where source.verification_outcome == \"UNVERIFIED\"\n| summarize unverified = count() by jurisdiction\n| sort by unverified desc",
+        "size": 1,
+        "title": "UNVERIFIED chunks by jurisdiction",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "barchart"
+      },
+      "name": "unverified_by_jurisdiction"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "Provenex_Receipt_CL\n| where TimeGenerated {TimeRange}\n| extend mode = tostring(parse_json(policy_s).mode)\n| where mode == \"advisory\"\n| extend summary = parse_json(summary_s)\n| where tostring(summary.overall_status) == \"FAIL\"\n| extend ac = parse_json(policy_s).access_control\n| extend policy_id = tostring(ac.policy_id)\n| summarize would_have_blocked = count() by policy_id, caller_hash_s\n| sort by would_have_blocked desc",
+        "size": 1,
+        "title": "Advisory-mode would-have-blocked",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "advisory_would_have_blocked"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "Provenex_Drift_CL\n| where TimeGenerated > ago(7d)\n| extend distinct_count = array_length(parse_json(distinct_fingerprints_s))\n| summarize total = sum(distinct_count), events = count() by host_s\n| sort by total desc",
+        "size": 1,
+        "title": "Drift detector alerts (7d)",
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "visualization": "table"
+      },
+      "name": "drift_alerts"
+    }
+  ],
+  "isLocked": false,
+  "fallbackResourceIds": [
+    "Azure Monitor"
+  ],
+  "fromTemplateId": "provenex-overview-v1"
+}

@@ -1,0 +1,18 @@
+// Fleet posture audit by operating mode (v1.0.0+).
+//
+// Each Provenex receipt records the operating mode in policy.mode:
+//   * receipts_only -- data path open, every chunk passes through
+//   * advisory      -- same data path, callback fires on would-block
+//   * enforce       -- the engine drops blocked chunks
+//
+// A SOC seeing lots of receipts_only when production should be on
+// enforce has a real problem.
+//
+// Field paths reflect schema 2.6.0 (provenex-core 1.0.0+). Pre-1.0
+// receipts predate the field and bucket as "pre-1.0.0".
+
+Provenex_Receipt_CL
+| where TimeGenerated > ago(24h)
+| extend mode = coalesce(tostring(parse_json(policy_s).mode), "pre-1.0.0")
+| summarize receipts = count() by mode
+| sort by receipts desc

@@ -1,0 +1,26 @@
+{
+  "displayName": "Provenex: TAMPERED outcomes detected (15m)",
+  "description": "Fires when any TAMPERED verification outcome appears in Provenex receipts. TAMPERED means the per-row HMAC on the provenance index failed: either the index storage was directly modified, or the index secret was rotated without the matching key on the verify side. This is the alarm condition the receipt schema is designed to surface.",
+  "severity": "High",
+  "enabled": true,
+  "query": "Provenex_Receipt_CL\n| where TimeGenerated > ago(15m)\n| extend summary = parse_json(summary_s)\n| where toint(summary.tampered) > 0\n| project TimeGenerated, receipt_id_s, host_s, caller_hash_s, tampered_count = toint(summary.tampered)",
+  "queryFrequency": "PT5M",
+  "queryPeriod": "PT15M",
+  "triggerOperator": "GreaterThan",
+  "triggerThreshold": 0,
+  "tactics": ["Impact", "DefenseEvasion"],
+  "techniques": ["T1565", "T1562"],
+  "incidentConfiguration": {
+    "createIncident": true,
+    "groupingConfiguration": {
+      "enabled": true,
+      "reopenClosedIncident": false,
+      "lookbackDuration": "PT30M",
+      "matchingMethod": "AllEntities"
+    }
+  },
+  "alertDetailsOverride": {
+    "alertDisplayNameFormat": "Provenex TAMPERED: {{tampered_count}} on host {{host_s}}",
+    "alertDescriptionFormat": "Receipt {{receipt_id_s}} carried {{tampered_count}} TAMPERED chunk outcome(s). Caller: {{caller_hash_s}}. First response: quarantine the producing deployment, audit the index storage for unauthorized writes, rotate signing keys per docs/runbooks/key_rotation.md."
+  }
+}
