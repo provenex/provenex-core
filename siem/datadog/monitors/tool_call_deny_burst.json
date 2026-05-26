@@ -1,0 +1,27 @@
+{
+  "name": "[Provenex] Tool-call deny burst per caller",
+  "type": "log alert",
+  "query": "logs(\"source:provenex service:provenex.receipt @policy.tool_call_control.decisions.decision:deny\").index(\"*\").rollup(\"count\").by(\"@usr.id\").last(\"30m\") > 20",
+  "message": "Provenex denied more than 20 tool calls from a single caller in the last 30 minutes.\n\nThis pattern is one of three things:\n  1. A misconfigured agent calling the wrong tool / requesting out-of-jurisdiction data.\n  2. A compromised caller probing the policy.\n  3. A legitimate spike (data import, batch job) the policy is not yet aware of.\n\nFirst response:\n  1. Pull caller_hash {{@usr.id}}; the privacy-preserving identifier is enough for the SOC to correlate with internal directory if you hold the salt.\n  2. Check the receipts' policy.tool_call_control.decisions[].rules_fired to see which rule denied.\n  3. If legitimate, update the policy. If not, investigate the caller.\n\nFires when a single caller_hash exceeds 20 denials in any 30-minute window. Suppression: 1h per caller.",
+  "tags": [
+    "provenex",
+    "severity:high",
+    "team:secops"
+  ],
+  "priority": 2,
+  "options": {
+    "thresholds": {
+      "critical": 20,
+      "warning": 10
+    },
+    "notify_audit": false,
+    "include_tags": true,
+    "new_host_delay": 300,
+    "renotify_interval": 60,
+    "evaluation_delay": 60,
+    "no_data_timeframe": null,
+    "notify_no_data": false,
+    "enable_logs_sample": true,
+    "groupby_simple_monitor": false
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "[Provenex] TAMPERED outcomes detected",
+  "type": "log alert",
+  "query": "logs(\"source:provenex service:provenex.receipt @summary.tampered:>0\").index(\"*\").rollup(\"count\").last(\"15m\") > 0",
+  "message": "TAMPERED outcomes from Provenex verification in the last 15 minutes.\n\nA TAMPERED outcome means the per-row HMAC on the provenance index failed: either the index storage was directly modified, or the index secret was rotated without the matching key on the verify side. This is the alarm condition the receipt schema is designed to surface.\n\nFirst response:\n  1. Quarantine the Provenex deployment. Receipts produced after this point may not be trustworthy until the cause is understood.\n  2. Pull `caller_hash` and `host` from the receipts.\n  3. Check the index storage for unauthorized writes.\n  4. Rotate signing keys per docs/runbooks/key_rotation.md.\n\nFires on >=1 TAMPERED receipt in any 15-minute window. Suppression: 30m to avoid storms during a single incident.\n\n@pagerduty-provenex-secops",
+  "tags": [
+    "provenex",
+    "severity:critical",
+    "team:secops"
+  ],
+  "priority": 1,
+  "options": {
+    "thresholds": {
+      "critical": 0
+    },
+    "notify_audit": false,
+    "include_tags": true,
+    "new_host_delay": 300,
+    "renotify_interval": 30,
+    "evaluation_delay": 60,
+    "escalation_message": "",
+    "no_data_timeframe": null,
+    "notify_no_data": false,
+    "enable_logs_sample": true,
+    "groupby_simple_monitor": false
+  }
+}

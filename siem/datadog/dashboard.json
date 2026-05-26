@@ -1,0 +1,287 @@
+{
+  "title": "Provenex Overview",
+  "description": "SOC view over Provenex provenance receipts (schema 2.6.0+). Top row: operational posture and critical alarms. Middle: policy-decision activity. Bottom: drift detector and the advisory-mode rollout signal.",
+  "widgets": [
+    {
+      "definition": {
+        "type": "note",
+        "content": "## Provenex Overview\n\nReceipts ingested with `source:provenex` and the Provenex log pipeline. Receipts span schema 2.6.0+ (operating mode visible on every event).",
+        "background_color": "transparent",
+        "font_size": "16",
+        "text_align": "left",
+        "vertical_align": "center",
+        "show_tick": false
+      }
+    },
+    {
+      "definition": {
+        "title": "Operating mode (24h)",
+        "type": "toplist",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.receipt"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@policy.mode",
+                    "limit": 5,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar",
+            "style": {
+              "display": {
+                "type": "stacked",
+                "legend": "automatic"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "TAMPERED alarms (1h)",
+        "type": "query_value",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.receipt @summary.tampered:>0"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                }
+              }
+            ],
+            "response_format": "scalar",
+            "conditional_formats": [
+              {
+                "comparator": ">",
+                "value": 0,
+                "palette": "white_on_red"
+              },
+              {
+                "comparator": "<=",
+                "value": 0,
+                "palette": "white_on_green"
+              }
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      }
+    },
+    {
+      "definition": {
+        "title": "Denied tool calls (24h)",
+        "type": "toplist",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.receipt @policy.tool_call_control.decisions.decision:deny"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@usr.id",
+                    "limit": 20,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "UNVERIFIED chunks by jurisdiction (24h)",
+        "type": "timeseries",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.receipt @sources.verification_outcome:UNVERIFIED"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@policy.access_control.decisions.inputs.request_context.jurisdiction",
+                    "limit": 10,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ]
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "dog_classic",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "bars"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Advisory-mode 'would have blocked' (24h)",
+        "type": "toplist",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.receipt @policy.mode:advisory @summary.overall_status:FAIL"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@policy.access_control.policy_id",
+                    "limit": 20,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Drift detector alerts (7d)",
+        "type": "toplist",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.drift @type:provenex.index_drift"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@host",
+                    "limit": 20,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ]
+              }
+            ],
+            "response_format": "scalar"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Receipt volume by outcome (24h)",
+        "type": "timeseries",
+        "requests": [
+          {
+            "queries": [
+              {
+                "name": "query1",
+                "data_source": "logs",
+                "search": {
+                  "query": "source:provenex service:provenex.receipt"
+                },
+                "indexes": ["*"],
+                "compute": {
+                  "aggregation": "count"
+                },
+                "group_by": [
+                  {
+                    "facet": "@summary.overall_status",
+                    "limit": 10,
+                    "sort": {
+                      "aggregation": "count",
+                      "order": "desc"
+                    }
+                  }
+                ]
+              }
+            ],
+            "response_format": "timeseries",
+            "style": {
+              "palette": "dog_classic",
+              "line_type": "solid",
+              "line_width": "normal"
+            },
+            "display_type": "line"
+          }
+        ]
+      }
+    }
+  ],
+  "template_variables": [],
+  "layout_type": "ordered",
+  "is_read_only": false,
+  "notify_list": [],
+  "reflow_type": "auto",
+  "tags": [
+    "provenex",
+    "ai-governance",
+    "rag-security"
+  ]
+}

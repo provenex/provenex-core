@@ -1,0 +1,27 @@
+{
+  "name": "[Provenex] UNVERIFIED chunk spike",
+  "type": "log alert",
+  "query": "logs(\"source:provenex service:provenex.receipt @sources.verification_outcome:UNVERIFIED\").index(\"*\").rollup(\"count\").last(\"1h\") > 50",
+  "message": "More than 50 UNVERIFIED chunks appeared in Provenex receipts over the last hour.\n\nUNVERIFIED means a chunk reached the retrieval boundary whose fingerprint is not in the Provenex index. That usually signals one of:\n  1. An ingest pipeline gap (a corpus was added to the vector store directly, bypassing Provenex ingestion).\n  2. A poisoning attempt (an adversary injected chunks into the vector store).\n  3. A genuine miss (legitimate data the operator has not yet ingested).\n\nFirst response:\n  1. Group the UNVERIFIED counts by `@policy.access_control.decisions.inputs.request_context.jurisdiction` to spot one-jurisdiction spikes.\n  2. Pull a sample of the offending chunk fingerprints from the receipts' sources[].fingerprint -- the SHA-256 prefix is enough to correlate with the upstream ingestion log.\n  3. Decide whether to ingest the missing corpus (case 1 or 3) or quarantine the agent (case 2).\n\nFires on >50 UNVERIFIED outcomes per hour. Tune the threshold for your baseline.",
+  "tags": [
+    "provenex",
+    "severity:warning",
+    "team:secops"
+  ],
+  "priority": 3,
+  "options": {
+    "thresholds": {
+      "critical": 50,
+      "warning": 20
+    },
+    "notify_audit": false,
+    "include_tags": true,
+    "new_host_delay": 300,
+    "renotify_interval": 120,
+    "evaluation_delay": 60,
+    "no_data_timeframe": null,
+    "notify_no_data": false,
+    "enable_logs_sample": true,
+    "groupby_simple_monitor": false
+  }
+}

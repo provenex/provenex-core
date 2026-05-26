@@ -1,0 +1,105 @@
+{
+  "name": "Provenex",
+  "description": "Parse Provenex provenance receipts (schema 2.6.0+). Each receipt is a JSON event; this pipeline maps it onto Datadog's reserved attributes (timestamp, status, host, service, message) and surfaces the policy-decision fields most SOC dashboards pivot on.",
+  "filter": {
+    "query": "source:provenex"
+  },
+  "is_enabled": true,
+  "processors": [
+    {
+      "type": "service-remapper",
+      "name": "Service = receipt sourcetype (provenex.receipt | provenex.drift)",
+      "is_enabled": true,
+      "sources": ["sourcetype"]
+    },
+    {
+      "type": "date-remapper",
+      "name": "Use receipt issued_at as the event timestamp",
+      "is_enabled": true,
+      "sources": ["issued_at"]
+    },
+    {
+      "type": "category-processor",
+      "name": "Derive Datadog status from summary + policy.mode",
+      "is_enabled": true,
+      "target": "status",
+      "categories": [
+        {
+          "name": "critical",
+          "filter": {
+            "query": "@summary.tampered:>0"
+          }
+        },
+        {
+          "name": "error",
+          "filter": {
+            "query": "@summary.unauthorized:>0 AND @policy.mode:enforce"
+          }
+        },
+        {
+          "name": "warning",
+          "filter": {
+            "query": "@summary.unverified:>0 OR @summary.overall_status:FAIL"
+          }
+        },
+        {
+          "name": "notice",
+          "filter": {
+            "query": "@policy.mode:(receipts_only OR advisory)"
+          }
+        },
+        {
+          "name": "info",
+          "filter": {
+            "query": "*"
+          }
+        }
+      ]
+    },
+    {
+      "type": "status-remapper",
+      "name": "Promote the derived category to Datadog's reserved status",
+      "is_enabled": true,
+      "sources": ["status"]
+    },
+    {
+      "type": "attribute-remapper",
+      "name": "caller_hash -> usr.id (the standard Datadog user attribute)",
+      "is_enabled": true,
+      "sources": ["caller_hash"],
+      "source_type": "attribute",
+      "target": "usr.id",
+      "target_type": "attribute",
+      "preserve_source": true,
+      "override_on_conflict": false
+    },
+    {
+      "type": "attribute-remapper",
+      "name": "receipt_id -> dd.trace_id-compatible event UID",
+      "is_enabled": true,
+      "sources": ["receipt_id"],
+      "source_type": "attribute",
+      "target": "event_id",
+      "target_type": "attribute",
+      "preserve_source": true,
+      "override_on_conflict": false
+    },
+    {
+      "type": "attribute-remapper",
+      "name": "trajectory.trajectory_id -> session correlator",
+      "is_enabled": true,
+      "sources": ["trajectory.trajectory_id"],
+      "source_type": "attribute",
+      "target": "session_id",
+      "target_type": "attribute",
+      "preserve_source": true,
+      "override_on_conflict": false
+    },
+    {
+      "type": "message-remapper",
+      "name": "message = human-readable summary line",
+      "is_enabled": true,
+      "sources": ["summary.overall_status"]
+    }
+  ]
+}
