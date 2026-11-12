@@ -57,6 +57,22 @@ class FingerprinterConfig:
     normalization: NormalizationOptions = field(default_factory=NormalizationOptions)
     pepper: Optional[bytes] = None
 
+    @classmethod
+    def short_secrets(cls, **overrides) -> "FingerprinterConfig":
+        """Preset for short values (card numbers, codes, tokens).
+
+        The defaults are prose-tuned: a 128-char window stepped by 64
+        never sees a 16-digit value at all. This preset windows at 8
+        chars with stride 1 so any short value at any offset produces
+        windows, at the cost of roughly one hash per character. For
+        finding one specific registered value inside larger text,
+        :func:`provenex.core.absence.verify_absence` is cheaper: it
+        windows only at the value's registered length.
+        """
+        params = {"window_size": 8, "stride": 1}
+        params.update(overrides)
+        return cls(**params)
+
 
 @dataclass(frozen=True)
 class Fingerprint:
@@ -182,6 +198,10 @@ class Fingerprinter:
             document_version=document_version,
             normalization_applied=list(norm.applied),
         )
+
+    def normalize(self, text: str) -> str:
+        """Apply this engine's normalization (the form fingerprints cover)."""
+        return self._normalizer.normalize(text).text
 
     def fingerprint_chunk(self, text: str) -> str:
         """Compute a single fingerprint over a chunk of text (no windowing).

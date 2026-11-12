@@ -1896,6 +1896,64 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing private.pem / public.pem if present.",
     )
     p_keys_generate.set_defaults(func=_cmd_keys_generate)
+    p_keys_init = p_keys_sub.add_parser(
+        "init",
+        help="Generate the receipt keypair AND the index secret together.",
+        description=(
+            "One key-management story for agent runtimes: writes "
+            "private.pem + public.pem (receipt signing) and index_secret "
+            "(the index HMAC secret, mode 0600) into the output directory. "
+            "Point PROVENEX_RECEIPT_PRIVATE_KEY_PATH at private.pem and "
+            "PROVENEX_INDEX_SECRET_FILE at index_secret, or reference both "
+            "from a hygiene config file (see `provenex register`)."
+        ),
+    )
+    p_keys_init.add_argument("--output-dir", required=True)
+    p_keys_init.add_argument("--force", action="store_true")
+    p_keys_init.set_defaults(func=_cmd_keys_init)
+
+    # ---- Agent-runtime hygiene verbs (deletion attestation) ----
+    p_register = sub.add_parser(
+        "register",
+        help="Register a file and embedded short values for absence attestation.",
+        description=(
+            "Registers the whole file plus each --value under one document "
+            "id in the index from the config file. Stores fingerprints and "
+            "normalized lengths only, never content."
+        ),
+    )
+    p_register.add_argument("--config", required=True, help="Hygiene config JSON.")
+    p_register.add_argument("--file", required=True, help="Artifact to register.")
+    p_register.add_argument("--doc-id", default=None, help="Document id (default: file name).")
+    p_register.add_argument("--value", action="append", default=[],
+                            help="Embedded short value to register (repeatable).")
+    p_register.set_defaults(func=_cmd_register)
+
+    p_verify_absence = sub.add_parser(
+        "verify-absence",
+        help="Scan enrolled stores and write a signed absence receipt.",
+        description=(
+            "Exit codes: 0 ABSENT, 10 PRESENT, 11 INCOMPLETE (some files "
+            "could not be scanned; they are named in the receipt)."
+        ),
+    )
+    p_verify_absence.add_argument("--config", required=True, help="Hygiene config JSON.")
+    p_verify_absence.add_argument("--out", required=True, help="Receipt JSON output path.")
+    p_verify_absence.add_argument("--doc-id", default=None,
+                                  help="Attest about every fingerprint under this document id.")
+    p_verify_absence.add_argument("--fingerprint", action="append", default=[],
+                                  help="Fingerprint to attest about (repeatable).")
+    p_verify_absence.set_defaults(func=_cmd_verify_absence)
+
+    p_purge_mark = sub.add_parser(
+        "purge-mark",
+        help="Record purge tombstones for fingerprints evidenced by an absence receipt.",
+    )
+    p_purge_mark.add_argument("--config", required=True, help="Hygiene config JSON.")
+    p_purge_mark.add_argument("--receipt", required=True, help="Absence receipt JSON.")
+    p_purge_mark.add_argument("--doc-id", default=None)
+    p_purge_mark.add_argument("--fingerprint", action="append", default=[])
+    p_purge_mark.set_defaults(func=_cmd_purge_mark)
 
     return parser
 
@@ -1975,6 +2033,216 @@ def _cmd_keys_generate(args: argparse.Namespace) -> int:
     print("Next steps:")
     print(f"  export PROVENEX_RECEIPT_PRIVATE_KEY_PATH={private_path}")
     print(f"  # distribute {public_path.name} to auditors out-of-band.")
+    return 0
+
+
+def _write_secret_file(path, data: bytes, mode: int) -> None:
+    """Write ``data`` to ``path`` with ``mode``, refusing symlinks."""
+    import os
+    import stat
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | nofollow
+    fd = os.open(str(path), flags, mode)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+    except Exception:
+        os.close(fd)
+        raise
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def _cmd_keys_init(args: argparse.Namespace) -> int:
+    """``provenex keys init``: receipt keypair + index secret, one story."""
+    import secrets as _secrets
+    from pathlib import Path
+
+    from ..core.ed25519 import Ed25519Signer
+
+    output_dir = Path(args.output_dir)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"error: could not create {output_dir}: {exc}", file=sys.stderr)
+        return 2
+
+    private_path = output_dir / "private.pem"
+    public_path = output_dir / "public.pem"
+    secret_path = output_dir / "index_secret"
+    if not args.force:
+        for path in (private_path, public_path, secret_path):
+            if path.exists():
+                print(
+                    f"error: {path} already exists. Pass --force to overwrite "
+                    "(this destroys the existing secret irreversibly).",
+                    file=sys.stderr,
+                )
+                return 2
+
+    signer = Ed25519Signer.generate()
+    try:
+        _write_secret_file(private_path, signer.private_key_pem(), 0o600)
+        _write_secret_file(public_path, signer.public_key_pem(), 0o644)
+        _write_secret_file(secret_path, _secrets.token_hex(32).encode("ascii"), 0o600)
+    except OSError as exc:
+        print(f"error: could not write key files: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"Wrote receipt private key: {private_path} (mode 0600)")
+    print(f"Wrote receipt public key:  {public_path} (mode 0644)")
+    print(f"Wrote index secret:        {secret_path} (mode 0600)")
+    print("")
+    print("Next steps:")
+    print(f"  export PROVENEX_RECEIPT_PRIVATE_KEY_PATH={private_path}")
+    print(f"  export PROVENEX_INDEX_SECRET_FILE={secret_path}")
+    print(f"  # distribute {public_path.name} to auditors out-of-band.")
+    print("  # rotating the receipt key: generate a new pair and distribute")
+    print("  # the new public key; old receipts verify against the old one.")
+    print("  # rotating the index secret invalidates existing row signatures:")
+    print("  # treat it as a re-registration event, not a routine rotation.")
+    return 0
+
+
+def _load_hygiene_config(args):
+    """Load a hygiene config JSON and open its index + receipt signer."""
+    import json as _json
+    from pathlib import Path
+
+    from ..core.ed25519 import Ed25519Signer
+    from ..core.stores import StoreManifest
+    from ..index.sqlite_index import SQLiteProvenanceIndex
+
+    config_path = Path(args.config).resolve()
+    try:
+        cfg = _json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"error: could not read config {config_path}: {exc}", file=sys.stderr)
+        return None
+    base = config_path.parent
+
+    def resolve(value):
+        p = Path(value)
+        return p if p.is_absolute() else base / p
+
+    index_value = cfg.get("index")
+    if not index_value:
+        print("error: config requires an 'index' path", file=sys.stderr)
+        return None
+    index_kwargs = {}
+    secret_value = cfg.get("index_secret")
+    if secret_value:
+        index_kwargs["signing_secret"] = str(secret_value).encode("utf-8")
+    index = SQLiteProvenanceIndex(str(resolve(index_value)), **index_kwargs)
+
+    signer = None
+    private_value = cfg.get("receipt_private_key")
+    if private_value:
+        signer = Ed25519Signer.from_private_key_pem(resolve(private_value).read_bytes())
+    manifest = StoreManifest.from_dict({"stores": cfg.get("stores", [])})
+    return index, signer, manifest, cfg
+
+
+def _hygiene_fingerprints(args, index) -> List[str]:
+    fps = list(args.fingerprint or [])
+    if args.doc_id:
+        fps.extend(e.fingerprint for e in index.entries_for_document(args.doc_id))
+    return list(dict.fromkeys(fps))
+
+
+def _cmd_register(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from ..core.absence import register_file, register_values
+
+    loaded = _load_hygiene_config(args)
+    if loaded is None:
+        return 2
+    index, _signer, _manifest, _cfg = loaded
+    artifact = Path(args.file)
+    if not artifact.is_file():
+        print(f"error: no such file: {artifact}", file=sys.stderr)
+        return 2
+    doc_id = args.doc_id or artifact.name
+    # One registration, one version: the file and its embedded values
+    # share a document_version so none of them supersedes the others.
+    from ..core.fingerprinter import Fingerprinter
+
+    text = artifact.read_text(encoding="utf-8")
+    version = Fingerprinter().fingerprint(
+        text + "\x00" + "\x00".join(args.value)
+    ).document_version
+    fingerprints = [register_file(index, artifact, doc_id, document_version=version)]
+    fingerprints.extend(
+        register_values(index, args.value, doc_id, document_version=version)
+    )
+    print(json.dumps({"document_id": doc_id, "fingerprints": fingerprints}, indent=2))
+    return 0
+
+
+def _cmd_verify_absence(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from ..core.absence import verify_absence
+
+    loaded = _load_hygiene_config(args)
+    if loaded is None:
+        return 2
+    index, signer, manifest, _cfg = loaded
+    if signer is None:
+        print("error: config requires 'receipt_private_key' to sign receipts",
+              file=sys.stderr)
+        return 2
+    fingerprints = _hygiene_fingerprints(args, index)
+    if not fingerprints:
+        print("error: pass --doc-id or at least one --fingerprint", file=sys.stderr)
+        return 2
+    try:
+        receipt = verify_absence(index, fingerprints, manifest, signer)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(receipt.to_json() + "\n", encoding="utf-8")
+    print(f"verdict: {receipt.verdict} ({receipt.receipt_id}) -> {out}")
+    return {"ABSENT": 0, "PRESENT": 10, "INCOMPLETE": 11}[receipt.verdict]
+
+
+def _cmd_purge_mark(args: argparse.Namespace) -> int:
+    loaded = _load_hygiene_config(args)
+    if loaded is None:
+        return 2
+    index, _signer, _manifest, _cfg = loaded
+    try:
+        receipt = json.loads(Path(args.receipt).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"error: could not read receipt: {exc}", file=sys.stderr)
+        return 2
+    if receipt.get("verdict") != "ABSENT":
+        print(
+            f"error: receipt verdict is {receipt.get('verdict')!r}, not ABSENT; "
+            "refusing to record purge tombstones from it",
+            file=sys.stderr,
+        )
+        return 2
+    fingerprints = list(dict.fromkeys(
+        list(args.fingerprint or [])
+        + ([r["fingerprint"] for r in receipt.get("results", [])]
+           if not args.doc_id else [])
+        + ([e.fingerprint for e in index.entries_for_document(args.doc_id)]
+           if args.doc_id else [])
+    ))
+    if not fingerprints:
+        print("error: nothing to mark (pass --doc-id, --fingerprint, or a receipt with results)",
+              file=sys.stderr)
+        return 2
+    for fp in fingerprints:
+        index.mark_purged(fp, receipt_ref=receipt.get("receipt_id"))
+    print(json.dumps({"purged": fingerprints, "receipt_ref": receipt.get("receipt_id")}, indent=2))
     return 0
 
 

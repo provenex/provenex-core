@@ -2,7 +2,7 @@
 
 The provenance receipt is the public-facing artifact Provenex emits. It's what compliance teams hold onto, what auditors verify independently, and what downstream systems consume to decide whether to trust an AI output.
 
-This document specifies the schema. The current schema version is **`2.6.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`. Schema 2.4.0 (v0.8.0) adds the `request_binding` block and per-source `entry_kind`. Schema 2.5.0 adds the optional top-level `index_status` block recording that the verify call ran while the provenance index was unreachable. Schema 2.6.0 (v1.0.0) adds the optional `policy.mode` field recording the operating posture (`receipts_only`, `advisory`, `enforce`) at decision time.
+This document specifies the schema. The current schema version is **`2.7.0`**. Receipts at 2.x carry a unified top-level `policy` block with `verification`, optional `access_control`, and (in 2.2.0+) optional `tool_call_control` subsections. Schema 2.2.0 also adds an optional top-level `actions[]` array parallel to `sources[]`. Schema 2.3.0 adds the source-of-record correlation fields `caller_hash` (top-level) and `trajectory.session_id`. Schema 2.4.0 (v0.8.0) adds the `request_binding` block and per-source `entry_kind`. Schema 2.5.0 adds the optional top-level `index_status` block recording that the verify call ran while the provenance index was unreachable. Schema 2.6.0 (v1.0.0) adds the optional `policy.mode` field recording the operating posture (`receipts_only`, `advisory`, `enforce`) at decision time.
 
 Schema history:
 
@@ -21,6 +21,7 @@ Schema history:
 | `2.4.0` | **Window-aligned splice control + request-to-receipt binding (v0.8.0).** Optional top-level `request_binding` block cryptographically ties a receipt to the triggering query and request_context (so a valid receipt cannot be presented as evidence for a different query). Optional per-source `entry_kind` field reports the index row class that was matched (`"whole_chunk"` vs `"window"`); only `whole_chunk` rows produce VERIFIED. Both fields are part of the canonical signing payload. Additive on the wire: a 2.3.0 receipt without either field is a valid 2.4.0 receipt. The underlying index storage change (an `entry_kind` column in the canonical signing payload) is breaking - pre-v0.8.0 indexes must be re-ingested. |
 | `2.5.0` | **Index-availability annotation.** Optional top-level `index_status` block (`{ "available": false, "error_class": "timeout" \| "connection" \| "breaker_open" \| "other" }`) records that the verify call ran while the provenance index was unreachable. Present only in `on_index_error="degrade"` mode when the index actually failed; absent on the normal path. The block is covered by the receipt signature, so a degraded receipt cannot be silently promoted. Additive on the wire: a 2.4.0 receipt without the field is a valid 2.5.0 receipt. |
 | `2.6.0` | **Operating-mode annotation (v1.0.0).** Optional `policy.mode` field recording the operating posture at decision time: `"receipts_only"` (record but do not act), `"advisory"` (same data path, fire callback), or `"enforce"` (drop blocked chunks, deny denied tool calls). The field is inside the signed `policy` block so the posture is tamper-evident: a receipt produced in `receipts_only` cannot be retroactively presented as evidence of enforcement. Additive on the wire: a 2.5.0 receipt without `policy.mode` remains a valid 2.6.0 receipt and verifies byte-identically. |
+| `2.7.0` | **Optional output + signed extensions.** The `output` block is omitted entirely when a receipt is finalized without output text (`finalize(output_text=None)`), so non-LLM receipts (hygiene, tooling, compliance jobs) no longer dress an audit summary up as an LLM output. An optional top-level `extensions` block carries arbitrary structured JSON evidence under the signature, for receipt kinds the per-source claim shape does not fit. Additive on the wire: a receipt built exactly as a 2.6.0 receipt serializes and signs byte-identically to its 2.6.0 form apart from the version string, and older receipts verify unchanged. |
 
 Minor bumps within 2.x are additive (new optional fields, ignored by older verifiers). The next major bump would be 3.0.0.
 
@@ -52,7 +53,7 @@ The schema is intentionally:
 ```json
 {
   "receipt_id": "prx_<32 hex chars>",
-  "schema_version": "2.6.0",
+  "schema_version": "2.7.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
   "issuer": "provenex-core/1.0.0",
   "caller_hash": "sha256:<64 hex chars>",   // optional (schema 2.3.0+)
@@ -84,7 +85,7 @@ The schema is intentionally:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
-| `schema_version` | string | Semver. Always `2.6.0` for receipts produced by this SDK. |
+| `schema_version` | string | Semver. Always `2.7.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
 | `issuer` | string | Software identifier, e.g. `provenex-core/1.0.0`. |
 | `caller_hash` | string | Optional (2.3.0+). `"sha256:<hex>"` over the canonical JSON of `request_context.caller`. Present on every receipt produced from a `RequestContext`; absent on the standalone-builder path. See **Top-level `caller_hash`** below. |

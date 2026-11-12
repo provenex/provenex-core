@@ -26,6 +26,7 @@ One CISO question this answers in plain English: **Can this agent access Jira, S
 | The cryptographic guarantees and threat model | [Cryptographic architecture](#cryptographic-architecture) |
 | The receipt schema and the evidence each call records | [What you declare. What you get back.](#what-you-declare-what-you-get-back) |
 | Integration code | [Easy integration](#easy-integration) |
+| Prove a value is **gone** after a purge | [Deletion attestation (agent hygiene)](#deletion-attestation-agent-hygiene) |
 
 ## What you declare. What you get back.
 
@@ -114,7 +115,7 @@ One signed receipt per retrieval or per tool call. Retrieval receipts carry `sou
 ```json
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
-  "schema_version": "2.6.0",
+  "schema_version": "2.7.0",
   "issuer": "provenex-core/1.0.0",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "request_binding": {
@@ -392,6 +393,36 @@ result = admission_check(..., sink=sink)   # the only line that changes
 
 Sink failures are swallowed and logged via `warnings.warn`. Provenex never breaks the agent's hot path because export is degraded. Receipts also map to **OCSF v1.3** events for cross-vendor SIEM compatibility via `receipt_to_ocsf(...)` and `OCSFAdapter`. Full reference: [`docs/streaming_export.md`](https://github.com/provenex/provenex-core/blob/main/docs/streaming_export.md) and [`docs/ocsf_mapping.md`](https://github.com/provenex/provenex-core/blob/main/docs/ocsf_mapping.md).
 
+## Deletion attestation (agent hygiene)
+
+Agent runtimes often need the opposite proof: not "this content came
+from an approved source" but "**these registered values are no longer
+in these enumerated stores**" — for example after an AI agent's logs
+captured card details during a checkout and the agent purges them.
+`verify_absence` issues that as a native signed receipt
+(`absence_attestation`), verifiable offline from the public key alone:
+
+```bash
+provenex register --config hygiene.json --file logs/checkout.log \
+  --doc-id checkout-1 --value "4242 4242 4242 4242"
+# ... the agent purges its artifacts ...
+provenex verify-absence --config hygiene.json --doc-id checkout-1 --out absent.json
+# exit 0: ABSENT (10: PRESENT, 11: INCOMPLETE — unscanned files are named in the receipt)
+provenex purge-mark --config hygiene.json --receipt absent.json --doc-id checkout-1
+```
+
+The config file names the index, the receipt key, and the **store
+manifest** (`store_id`, `path_globs`, `class`, `owner`, `links`) — the
+enumeration that determines what an absence claim covers. Values are
+registered as fingerprints plus normalized lengths (never content);
+scanning normalizes each store file and looks for exactly those
+lengths, so a short secret embedded in a large log is found. After a
+purge, `purge-mark` records a tombstone per fingerprint, and later
+verification returns `PURGED` (distinct from `UNAUTHORIZED`) if purged
+content is ever presented again. Python API:
+`provenex.verify_absence`, `provenex.register_values`,
+`provenex.verify_absence_receipt`.
+
 ## Worked example: the regulator's seven questions
 
 [`examples/attack_thwarted_demo.py`](https://github.com/provenex/provenex-core/blob/main/examples/attack_thwarted_demo.py) is the in-repo headline demo. It runs end-to-end with real LangChain (`InMemoryVectorStore` + `@tool`, no mocks) and walks four common attack shapes:
@@ -416,18 +447,18 @@ Three denies + 3 UNVERIFIED + 1 forged signature, every attempt captured on a si
 
 The optional Merkle transparency log (`MerkleSQLiteProvenanceIndex`) layers an RFC 6962 tree over the same HMAC-signed rows so insertion or removal of rows by a key-holder is detectable by anyone holding a previous tree head. The OSS `WitnessLog` is the hash-chained, signed checkpoint log operators publish to a store they cannot retroactively edit, closing split-view resistance against a key-holding operator. An operator who holds the signing key cannot silently drop, reorder, or rewrite past receipts without breaking the chain.
 
-The five verification outcomes (`VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED`) are the discrete cryptographic states. They are not graded scores. The receipt records the verification outcome and the policy decision independently for every item, so an auditor can reason about them separately. The fixed precedence (`TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED`) is codified as `OUTCOME_PRECEDENCE` in code so callers reason about it the same way the engine does.
+The verification outcomes (`VERIFIED / STALE / UNAUTHORIZED / UNVERIFIED / TAMPERED`, plus `PURGED` for deletion attestation, below) are the discrete cryptographic states. They are not graded scores. The receipt records the verification outcome and the policy decision independently for every item, so an auditor can reason about them separately. The fixed precedence (`TAMPERED > PURGED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED`) is codified as `OUTCOME_PRECEDENCE` in code so callers reason about it the same way the engine does.
 
 The receipt commits cryptographically to the request that produced it. The top-level `request_binding` block hashes the triggering query and the canonical request context into the signed payload, so a valid receipt cannot be presented as evidence for a different query (the audit-replay attack class). The verbatim query is never recorded; only its hash.
 
-The core is small on purpose: pure-stdlib Python, HMAC-SHA256 default, optional Ed25519 for cross-org receipts, optional Postgres for multi-node deployments. A reviewer can read every load-bearing function in one sitting.
+The core is small on purpose. As of 1.0.0 the default receipt signer is **Ed25519** (asymmetric, so an auditor verifies offline from the public key alone); index rows are separately **HMAC-SHA256**-signed with their own secret; SQLite and Postgres backends store identical canonical rows. Framework integrations cover LangChain, LangGraph, LlamaIndex, CrewAI and MCP, with KMS/HSM signer adapters, drift detection, trajectory auditing, an HTTP server and a CLI. A reviewer can read every load-bearing function in one sitting.
 
 For dive-deep reading:
 
 - [`docs/architecture.md`](https://github.com/provenex/provenex-core/blob/main/docs/architecture.md): the entry point. Points at every other doc and the source map.
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): the algorithm end-to-end. Normalization, Rabin-Karp recurrence over Mersenne prime `2^61 - 1`, sliding-window construction, `entry_kind` promotion rule, Merkle leaf hash `SHA256(0x00 || leaf)`, canonical signing payload, peppered fingerprint mode.
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended and undefended threats, the witness log for split-view resistance.
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): the receipt schema 2.5.0 wire spec and the full schema-history table.
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): the receipt schema 2.7.0 wire spec and the full schema-history table.
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): the YAML DSL, supported operators, worked examples, and the per-decision purity rationale (why the DSL refuses trajectory-level rules, cross-decision aggregation, and external-data lookups).
 - [`docs/benchmarks.md`](https://github.com/provenex/provenex-core/blob/main/docs/benchmarks.md): v1.0.0 headline numbers — verify-side latency, receipt-generation latency end-to-end, standalone-verifier verification latency, memory footprint. Reproducible via `provenex bench`.
 - [`docs/scaling.md`](https://github.com/provenex/provenex-core/blob/main/docs/scaling.md): Merkle-backed (transparency-log) index numbers, Postgres topology, policy-evaluation latency profile.
@@ -509,11 +540,23 @@ Python 3.10+. As of v1.0.0 the core has one runtime dependency (`cryptography`, 
 ```bash
 pip install "provenex-core[policy]"
 git clone https://github.com/provenex/provenex-core.git
-provenex keys generate --output-dir keys/
+provenex keys init --output-dir keys/
 export PROVENEX_RECEIPT_PRIVATE_KEY_PATH=keys/private.pem
-export PROVENEX_INDEX_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+export PROVENEX_INDEX_SECRET_FILE=keys/index_secret
 python provenex-core/examples/standalone_demo.py
 ```
+
+Two secrets, one story. `provenex keys init` generates both: the Ed25519
+receipt keypair (private key signs receipts; the public key is all an
+auditor needs) and the index HMAC secret (signs index rows so tampering
+is detectable). **The index refuses to start without its secret** — that
+is deliberate: an unsigned index cannot prove anything. Resolve it via
+constructor argument, `PROVENEX_INDEX_SECRET`, or
+`PROVENEX_INDEX_SECRET_FILE` (the file `keys init` writes, mode 0600).
+Rotating the receipt key means distributing the new public key; old
+receipts still verify against the old one. Rotating the index secret
+invalidates existing row signatures, so treat it as a re-registration
+event, not a routine rotation.
 
 #### Three operating modes (v1.0.0+)
 
@@ -625,7 +668,7 @@ MIT. See [LICENSE](https://github.com/provenex/provenex-core/blob/main/LICENSE).
 - [`docs/architecture.md`](https://github.com/provenex/provenex-core/blob/main/docs/architecture.md): the technical documentation entry point and source map
 - [`docs/policy.md`](https://github.com/provenex/provenex-core/blob/main/docs/policy.md): unified policy reference (verification + access control + tool-call admission), DSL, worked examples
 - [`docs/how_it_works.md`](https://github.com/provenex/provenex-core/blob/main/docs/how_it_works.md): full algorithm, threat model, and architectural comparison to embedding-based systems
-- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.6.0 specification (current); full version history table inside
+- [`docs/receipt_format.md`](https://github.com/provenex/provenex-core/blob/main/docs/receipt_format.md): receipt schema 2.7.0 specification (current); full version history table inside
 - [`docs/quickstart.md`](https://github.com/provenex/provenex-core/blob/main/docs/quickstart.md): 5-minute getting-started, including a policy-driven retrieval path
 - [`docs/threat_model.md`](https://github.com/provenex/provenex-core/blob/main/docs/threat_model.md): attacker model, defended/undefended threats, trust model for policy decisions
 - [`docs/compliance/`](https://github.com/provenex/provenex-core/blob/main/docs/compliance/): clause-by-clause mappings for EU AI Act Art. 12, DORA Art. 17-19, ISO 42001, SR 11-7

@@ -22,6 +22,7 @@ import threading
 import warnings
 from datetime import datetime, timezone
 from hashlib import sha256
+from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from .base import (
@@ -56,6 +57,15 @@ def _resolve_index_secret() -> bytes:
     env_secret = os.environ.get("PROVENEX_INDEX_SECRET")
     if env_secret:
         return env_secret.encode("utf-8")
+    secret_file = os.environ.get("PROVENEX_INDEX_SECRET_FILE")
+    if secret_file:
+        # Written by ``provenex keys init``: hex of 32 random bytes,
+        # mode 0600. Plain (non-hex) contents are used as-is.
+        raw = Path(secret_file).read_bytes().strip()
+        try:
+            return bytes.fromhex(raw.decode("ascii"))
+        except (ValueError, UnicodeDecodeError):
+            return raw
     env_secret = os.environ.get("PROVENEX_SIGNING_SECRET")
     if env_secret:
         global _warned_about_shared_index_secret
@@ -109,6 +119,16 @@ CREATE TABLE IF NOT EXISTS fingerprints (
 
 CREATE INDEX IF NOT EXISTS idx_fingerprint ON fingerprints(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_doc ON fingerprints(document_id, document_version);
+
+-- Deletion-attestation tombstones (additive; created on open for
+-- pre-existing indexes too). A row here means the operator attested
+-- that copies registered under this fingerprint were purged. The
+-- fingerprint row itself is kept: index history records the purge.
+CREATE TABLE IF NOT EXISTS purged_fingerprints (
+    fingerprint TEXT PRIMARY KEY,
+    purged_at TEXT NOT NULL,
+    receipt_ref TEXT
+);
 """
 
 
@@ -470,10 +490,94 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
             self._conn.commit()
             return cur.rowcount
 
+    # -------------------------------------------------- tombstones (purged)
+
+    def mark_purged(
+        self,
+        fingerprint: str,
+        *,
+        at: str | None = None,
+        receipt_ref: str | None = None,
+    ) -> None:
+        with self._lock:
+            exists = self._conn.execute(
+                "SELECT 1 FROM fingerprints WHERE fingerprint = ? LIMIT 1",
+                (fingerprint,),
+            ).fetchone()
+            if exists is None:
+                raise KeyError(fingerprint)
+            self._conn.execute(
+                "INSERT OR REPLACE INTO purged_fingerprints "
+                "(fingerprint, purged_at, receipt_ref) VALUES (?, ?, ?)",
+                (fingerprint, at or _now_utc_iso(), receipt_ref),
+            )
+            self._conn.commit()
+
+    def purged_info(self, fingerprint: str) -> Optional[dict]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT purged_at, receipt_ref FROM purged_fingerprints "
+                "WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"purged_at": row["purged_at"], "receipt_ref": row["receipt_ref"]}
+
+    def _purged_set(self, fingerprints: Sequence[str]) -> set:
+        if not fingerprints:
+            return set()
+        placeholders = ",".join("?" * len(fingerprints))
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT fingerprint FROM purged_fingerprints "
+                f"WHERE fingerprint IN ({placeholders})",
+                list(fingerprints),
+            ).fetchall()
+        return {r["fingerprint"] for r in rows}
+
+    def _outcome(self, entry: Optional[IndexEntry], purged: bool) -> VerificationOutcome:
+        outcome = _reduce_entry_to_outcome(entry, self._secret)
+        # A validly-signed row with a tombstone is PURGED. TAMPERED still
+        # wins: a forged row must not hide behind a purge record.
+        if purged and entry is not None and outcome != VerificationOutcome.TAMPERED:
+            return VerificationOutcome.PURGED
+        return outcome
+
+    def entries_for_document(self, document_id: str) -> List[IndexEntry]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT f.fingerprint, f.document_id, f.document_version, "
+                "       f.ingested_at, f.chunk_offset, f.chunk_length, "
+                "       f.superseded, f.signature, d.authorized, "
+                "       f.entry_kind "
+                "FROM fingerprints f "
+                "JOIN documents d ON d.document_id = f.document_id "
+                "WHERE f.document_id = ? AND f.superseded = 0 "
+                "ORDER BY f.chunk_offset, f.fingerprint",
+                (document_id,),
+            ).fetchall()
+        return [
+            IndexEntry(
+                fingerprint=r["fingerprint"],
+                document_id=r["document_id"],
+                document_version=r["document_version"],
+                ingested_at=r["ingested_at"],
+                chunk_offset=r["chunk_offset"],
+                chunk_length=r["chunk_length"],
+                authorized=bool(r["authorized"]),
+                superseded=bool(r["superseded"]),
+                signature=r["signature"],
+                entry_kind=r["entry_kind"],
+            )
+            for r in rows
+        ]
+
     # ----------------------------------------------------------- verify
 
     def verify(self, fingerprint: str) -> VerificationOutcome:
-        return _reduce_entry_to_outcome(self.lookup(fingerprint), self._secret)
+        entry = self.lookup(fingerprint)
+        return self._outcome(entry, fingerprint in self._purged_set([fingerprint]))
 
     # ------------------------------------------------------- verify_batch
 
@@ -532,10 +636,11 @@ class SQLiteProvenanceIndex(ProvenanceIndex):
                 entry_kind=row["entry_kind"],
             )
 
+        purged = self._purged_set(unique)
         out: List[Tuple[VerificationOutcome, Optional[IndexEntry]]] = []
         for fp in fingerprints:
             entry = preferred.get(fp)
-            out.append((_reduce_entry_to_outcome(entry, self._secret), entry))
+            out.append((self._outcome(entry, fp in purged), entry))
         return out
 
     # ----------------------------------------------------------- close

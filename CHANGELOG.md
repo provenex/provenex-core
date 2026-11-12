@@ -9,6 +9,18 @@ on-the-wire receipt format follows its own schema-semver, tracked in
 
 ## [Unreleased]
 
+### Added
+- **Deletion attestation** (deletion-attestation fixes F1 to F7, for ShareLess AI-Browser hygiene and other agent runtimes):
+  - `verify_absence(index, fingerprints, stores, signer)` produces a native signed **absence receipt** (`receipt_type: "absence_attestation"`): per fingerprint and per store verdicts, files scanned, any unscanned files named, and the overall verdict (`ABSENT` only when every fingerprint was absent everywhere and nothing was unscanned). Verifiable offline from the public key alone (`verify_absence_receipt`), with the public key embedded in the receipt for Ed25519. No more UNVERIFIED-overload envelopes.
+  - **Store manifests** (`provenex.core.stores.Store` / `StoreManifest`): `{store_id, path_globs, class, owner, links}` as a product concept, so the enumeration an absence claim covers is checkable by an auditor. `verify_absence` reports per-store enumeration and scan counts from the manifest.
+  - `register_value` / `register_values` / `register_file` register short secrets and artifacts (fingerprint + normalized length, never content); scanning normalizes store text and windows at exactly the registered length, so a short value embedded in a large log is found. `FingerprinterConfig.short_secrets()` preset (window 8, stride 1) for the direct fingerprinting path. Whitespace caveat documented in `provenex.core.absence`: values differing only in whitespace runs are the same value to the scanner; register the exact emitted form.
+  - **Purge tombstones**: `index.mark_purged(fingerprint, at=..., receipt_ref=...)` records the deletion attestation in index history (SQLite + Postgres). Verification then returns the new `PURGED` outcome, distinct from `UNAUTHORIZED`, always blocked if presented again; summaries count it only when present.
+  - **CLI**: `provenex keys init` (receipt keypair + index secret together, with rotation guidance), `provenex register`, `provenex verify-absence` (exit 0 ABSENT / 10 PRESENT / 11 INCOMPLETE), and `provenex purge-mark`, all driven by one small hygiene config file. `PROVENEX_INDEX_SECRET_FILE` resolves the index secret from a file.
+  - Receipt schema **2.7.0**: `finalize(output_text=None)` omits the `output` block, and receipts can carry a signed top-level `extensions` block. Additive: output-carrying receipts serialize and sign byte-identically to 2.6.0 apart from the version string; existing fixtures verify unchanged.
+
+### Changed
+- README and docs aligned to the 1.0.0 product (Ed25519 default signer, separate HMAC-signed index rows, current integrations, CLI and HTTP server). The 0.6.x-era PyPI description no longer represents the package.
+
 ## [1.0.0] - 2026-05-25
 
 The first stable release. Two breaking defaults change in this release: the operating posture (was always-block, now record-only) and the default signer (was HMAC, now Ed25519). Receipt schema bumps from 2.5.0 to 2.6.0 additively. Existing 0.x receipts continue to verify under 1.0.0 unchanged.

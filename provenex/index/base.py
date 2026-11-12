@@ -47,6 +47,14 @@ class VerificationOutcome(str, Enum):
     TAMPERED = "TAMPERED"
     """Fingerprint found but its stored metadata signature fails verification."""
 
+    PURGED = "PURGED"
+    """Fingerprint was registered, then attested purged (deletion attestation).
+
+    Distinct from UNAUTHORIZED: the content is not merely disallowed, the
+    operator has recorded that registered copies were deleted and an
+    absence attestation was issued. See :meth:`ProvenanceIndex.mark_purged`.
+    """
+
 
 # Schema 2.4.0 / v0.8.0: index entries are tagged with a "kind". Only
 # ``whole_chunk`` entries are eligible for promotion to VERIFIED at
@@ -69,6 +77,7 @@ VALID_ENTRY_KINDS = (ENTRY_KIND_WHOLE_CHUNK, ENTRY_KIND_WINDOW)
 # fall-through for a row that does not.
 OUTCOME_PRECEDENCE = (
     VerificationOutcome.TAMPERED,
+    VerificationOutcome.PURGED,
     VerificationOutcome.UNAUTHORIZED,
     VerificationOutcome.STALE,
     VerificationOutcome.UNVERIFIED,
@@ -293,6 +302,47 @@ class ProvenanceIndex(ABC):
             input order.
         """
         return [(self.verify(fp), self.lookup(fp)) for fp in fingerprints]
+
+    def mark_purged(
+        self,
+        fingerprint: str,
+        *,
+        at: Optional[str] = None,
+        receipt_ref: Optional[str] = None,
+    ) -> None:
+        """Record that the copies registered under ``fingerprint`` were purged.
+
+        After this transition, :meth:`verify` returns
+        ``VerificationOutcome.PURGED`` for the fingerprint (unless the row
+        itself is TAMPERED, which still wins). The fingerprint row is NOT
+        deleted: the index history itself records the deletion attestation.
+
+        Args:
+            fingerprint: The registered fingerprint that was purged.
+            at: ISO-8601 UTC timestamp of the purge. Defaults to now.
+            receipt_ref: Optional reference (e.g. receipt id) of the
+                absence attestation that evidences the purge.
+
+        Raises:
+            KeyError: If the fingerprint is not registered.
+            NotImplementedError: On backends without tombstone storage.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement mark_purged"
+        )
+
+    def purged_info(self, fingerprint: str) -> Optional[dict]:
+        """Return ``{"purged_at": ..., "receipt_ref": ...}`` if purged, else None."""
+        return None
+
+    def entries_for_document(self, document_id: str) -> List[IndexEntry]:
+        """Return all non-superseded entries registered under ``document_id``.
+
+        Default implementation raises; shipped backends override.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement entries_for_document"
+        )
 
     @abstractmethod
     def close(self) -> None:

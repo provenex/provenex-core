@@ -32,6 +32,15 @@ from .core.witness import WitnessLog, WitnessRecord
 # Ed25519Signer is the v1.0.0 default and is imported alongside the
 # other signers. `cryptography` is now in the base dependencies, so
 # this import always works.
+from .core.absence import (
+    AbsenceReceipt,
+    register_file,
+    register_value,
+    register_values,
+    verify_absence,
+    verify_absence_receipt,
+)
+from .core.stores import Store, StoreManifest
 from .core.ed25519 import Ed25519Signer
 from .core.trajectory import (
     TrajectoryAuditResult,

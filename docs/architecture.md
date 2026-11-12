@@ -25,7 +25,7 @@ the canonical signing payload.
      RFC 6962 Merkle transparency log layered over it
      (`SHA256(0x00 || leaf)`, `SHA256(0x01 || left || right)`).
    - The five verification outcomes and the `OUTCOME_PRECEDENCE` rule
-     (`TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED`).
+     (`TAMPERED > PURGED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED`).
    - Policy evaluation flow, canonical policy hash, and per-chunk decision
      record.
    - Receipt assembly, canonical-JSON signing payload, and the

@@ -113,7 +113,18 @@ from .trajectory import TrajectoryContext
 #       operating posture at decision time is itself tamper-evident.
 #       Additive: pre-1.0.0 receipts without ``policy.mode`` remain
 #       valid 2.5.0 subsets and verify identically.
-SCHEMA_VERSION = "2.6.0"
+#   2.7.0 — ``output`` becomes optional and a signed top-level
+#       ``extensions`` block appears. Non-LLM receipts (hygiene,
+#       tooling, compliance jobs) are no longer forced to dress an
+#       audit summary up as an "LLM output": ``finalize(output_text=None)``
+#       omits the ``output`` block entirely. ``extensions`` carries
+#       arbitrary structured JSON evidence under the signature, for
+#       receipt kinds the per-source Claim shape does not fit. Both
+#       additions are additive: a receipt built exactly as a 2.6.0
+#       receipt (output present, no extensions) serializes and signs
+#       byte-identically to its 2.6.0 form apart from the version
+#       string itself, and older receipts verify unchanged.
+SCHEMA_VERSION = "2.7.0"
 ISSUER = "provenex-core/1.0.0"
 
 
@@ -393,7 +404,9 @@ class ProvenanceReceipt:
 
     receipt_id: str
     issued_at: str
-    output_hash: str
+    # ``None`` on non-LLM receipts finalized without output text
+    # (schema 2.7.0); the ``output`` block is then omitted entirely.
+    output_hash: Optional[str]
     sources: List[SourceRecord]
     policy: VerificationPolicy
     summary: Dict[str, Any]
@@ -440,6 +453,10 @@ class ProvenanceReceipt:
     # from the serialized receipt — preserves byte-identity with 2.5.0
     # receipts when callers haven't migrated yet.
     mode: Optional[str] = None
+    # Schema 2.7.0: signed structured evidence for non-LLM receipts
+    # (hygiene, tooling, compliance jobs). Arbitrary JSON, covered by
+    # the signature like every other block. ``None`` omits the block.
+    extensions: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the receipt to a plain dict in canonical schema order."""
@@ -480,17 +497,23 @@ class ProvenanceReceipt:
             d["request_binding"] = dict(self.request_binding)
         if self.index_status is not None:
             d["index_status"] = dict(self.index_status)
+        # Schema 2.7.0: the output block is omitted entirely when the
+        # receipt was finalized without output text. Receipts that do
+        # carry output serialize exactly as 2.6.0 receipts did.
+        if self.output_hash is not None:
+            d["output"] = {
+                "hash": self.output_hash,
+                "hash_algorithm": "sha256",
+            }
         d.update(
             {
-                "output": {
-                    "hash": self.output_hash,
-                    "hash_algorithm": "sha256",
-                },
                 "sources": [s.to_dict() for s in self.sources],
                 "policy": policy_block,
                 "summary": dict(self.summary),
             }
         )
+        if self.extensions is not None:
+            d["extensions"] = dict(self.extensions)
         # Schema 2.2.0: actions[] is emitted only when the receipt
         # actually carries tool-call records. An empty actions[] on a
         # pure-retrieval receipt would be a noisy addition to the JSON
@@ -1112,7 +1135,18 @@ class ReceiptBuilder:
             "tampered": 0,
         }
         for s in self._sources:
-            counts[s.verification_outcome.value.lower()] += 1
+            key = s.verification_outcome.value.lower()
+            if key in counts:
+                counts[key] += 1
+        # Purged counts appear only when a purged source is present, so
+        # summaries of ordinary receipts keep their pre-2.7.0 shape.
+        purged = sum(
+            1
+            for s in self._sources
+            if s.verification_outcome == VerificationOutcome.PURGED
+        )
+        if purged:
+            counts["purged"] = purged
 
         # Tool-call admission action counts. Always emitted when the receipt carries
         # actions; omitted entirely on pure-retrieval receipts to
@@ -1153,8 +1187,9 @@ class ReceiptBuilder:
 
     def finalize(
         self,
-        output_text: str,
+        output_text: Optional[str] = None,
         signer: Optional[ReceiptSigner] = None,
+        extensions: Optional[Dict[str, Any]] = None,
         transparency_log: Optional[Dict[str, Any]] = None,
         trajectory: Optional[TrajectoryContext] = None,
         access_control: Optional[Dict[str, Any]] = None,
@@ -1221,7 +1256,8 @@ class ReceiptBuilder:
         receipt = ProvenanceReceipt(
             receipt_id=_new_receipt_id(),
             issued_at=_now_utc_iso(),
-            output_hash=_hash_output(output_text),
+            output_hash=_hash_output(output_text) if output_text is not None else None,
+            extensions=dict(extensions) if extensions is not None else None,
             sources=list(self._sources),
             policy=self._policy,
             mode=self._mode,
