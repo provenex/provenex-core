@@ -98,6 +98,10 @@ class VerificationPolicy:
             VerificationOutcome.UNAUTHORIZED: self.block_unauthorized,
             VerificationOutcome.UNVERIFIED: self.block_unverified,
             VerificationOutcome.TAMPERED: self.block_tampered,
+            # A purged chunk presented again is always blocked: the
+            # operator attested its copies deleted. Not a policy knob,
+            # so the signed policy block shape is unchanged.
+            VerificationOutcome.PURGED: True,
         }[outcome]
 
     def should_flag(self, outcome: VerificationOutcome) -> bool:
@@ -115,6 +119,7 @@ class VerificationPolicy:
             VerificationOutcome.UNAUTHORIZED: self.flag_unauthorized,
             VerificationOutcome.UNVERIFIED: self.flag_unverified,
             VerificationOutcome.TAMPERED: self.flag_tampered,
+            VerificationOutcome.PURGED: True,
         }[outcome]
 
 

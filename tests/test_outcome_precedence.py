@@ -36,6 +36,7 @@ def test_precedence_constant_matches_the_documented_order():
     """The constant is what the docs and how_it_works.md cite."""
     assert OUTCOME_PRECEDENCE == (
         VerificationOutcome.TAMPERED,
+        VerificationOutcome.PURGED,
         VerificationOutcome.UNAUTHORIZED,
         VerificationOutcome.STALE,
         VerificationOutcome.UNVERIFIED,

@@ -111,7 +111,7 @@ themselves are unchanged.
       "name": "provenex-core",
       "version": "1.0.0",
       "vendor_name": "Provenex",
-      "feature": { "name": "provenex-receipt", "version": "2.6.0" }
+      "feature": { "name": "provenex-receipt", "version": "2.7.0" }
     },
     "correlation_uid": "trj_…",
     "session_uid": "session-2026-002",

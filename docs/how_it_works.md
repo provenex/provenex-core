@@ -95,12 +95,13 @@ When a retriever returns a chunk, Provenex:
 4. Reads the document's current authorization state.
 5. Checks whether the row is superseded.
 
-The result is one of five outcomes:
+The result is one of six outcomes:
 
 | Outcome | Condition |
 | --- | --- |
 | `UNVERIFIED` | Fingerprint not in index. Chunk was not ingested through Provenex. |
 | `TAMPERED` | Fingerprint in index, signature check failed. Index was modified outside Provenex. |
+| `PURGED` | Fingerprint in index, signature OK, and the operator recorded a purge tombstone (deletion attestation). |
 | `UNAUTHORIZED` | Fingerprint in index, signature OK, but document is not authorized for retrieval. |
 | `STALE` | Fingerprint in index, signature OK, document authorized, but row is superseded by a newer version. |
 | `VERIFIED` | All checks pass. |
@@ -110,7 +111,7 @@ A configurable `verification` gate (the verification half of the unified `Policy
 **Precedence among outcomes when several could apply.** A row may satisfy more than one outcome condition simultaneously: the signature is broken AND the document is unauthorized, the document is unauthorized AND the row is superseded, and so on. The engine picks a single dominant outcome via a fixed precedence:
 
 ```
-TAMPERED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED
+TAMPERED > PURGED > UNAUTHORIZED > STALE > UNVERIFIED > VERIFIED
 ```
 
 The order encodes a defensive priority: an integrity break is the most important thing to surface, an authorisation revocation outranks a version-supersession concern, and `VERIFIED` is the only "all clear" state. UNVERIFIED is the absent-entry sentinel; it applies only when no row matched at all, so it cannot shadow any other outcome. The precedence is exposed as `OUTCOME_PRECEDENCE` and `reduce_outcomes()` in [`provenex.index.base`](../provenex/index/base.py) so callers and downstream tools reason about it the same way the engine does. The corresponding red-team coverage lives in [`tests/test_outcome_precedence.py`](../tests/test_outcome_precedence.py).
@@ -146,7 +147,7 @@ See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator prot
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `2.6.0`) and `issuer` (`provenex-core/1.0.0`)
+- `schema_version` (currently `2.7.0`) and `issuer` (`provenex-core/1.0.0`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
 - The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied, `entry_kind`)

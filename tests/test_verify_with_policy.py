@@ -88,7 +88,7 @@ def test_no_policy_argument_uses_default(tmp_path):
         index=index,
         signer=HmacSha256Signer(),
     )
-    assert result.receipt.schema_version == "2.6.0"
+    assert result.receipt.schema_version == "2.7.0"
     # No access control configured → block omitted.
     assert result.receipt.access_control is None
     d = result.receipt.to_dict()
@@ -123,7 +123,7 @@ def test_policy_blocks_some_chunks_and_records_decisions(tmp_path):
     assert texts[1] in result.blocked
 
     receipt = result.receipt
-    assert receipt.schema_version == "2.6.0"
+    assert receipt.schema_version == "2.7.0"
     d = receipt.to_dict()
     ac = d["policy"]["access_control"]
     assert ac["evaluator"] == "native_yaml"
@@ -306,7 +306,7 @@ def test_bare_verification_policy_is_accepted_for_backcompat(tmp_path):
         signer=HmacSha256Signer(),
         policy=VerificationPolicy(block_stale=True),
     )
-    assert result.receipt.schema_version == "2.6.0"
+    assert result.receipt.schema_version == "2.7.0"
     d = result.receipt.to_dict()
     assert d["policy"]["verification"]["block_stale"] is True
     index.close()

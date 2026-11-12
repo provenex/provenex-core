@@ -97,6 +97,13 @@ CREATE INDEX IF NOT EXISTS idx_provenex_fingerprint
     ON provenex_fingerprints(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_provenex_doc
     ON provenex_fingerprints(document_id, document_version);
+
+-- Deletion-attestation tombstones (mirror of the SQLite table).
+CREATE TABLE IF NOT EXISTS provenex_purged_fingerprints (
+    fingerprint TEXT PRIMARY KEY,
+    purged_at TEXT NOT NULL,
+    receipt_ref TEXT
+);
 """
 
 
@@ -410,10 +417,99 @@ class PostgresProvenanceIndex(ProvenanceIndex):
             conn.commit()
             return rowcount
 
+    # -------------------------------------------------- tombstones (purged)
+
+    def mark_purged(
+        self,
+        fingerprint: str,
+        *,
+        at: str | None = None,
+        receipt_ref: str | None = None,
+    ) -> None:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM provenex_fingerprints WHERE fingerprint = %s LIMIT 1",
+                    (fingerprint,),
+                )
+                if cur.fetchone() is None:
+                    raise KeyError(fingerprint)
+                cur.execute(
+                    "INSERT INTO provenex_purged_fingerprints "
+                    "(fingerprint, purged_at, receipt_ref) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (fingerprint) DO UPDATE SET "
+                    "purged_at = EXCLUDED.purged_at, receipt_ref = EXCLUDED.receipt_ref",
+                    (fingerprint, at or _now_utc_iso(), receipt_ref),
+                )
+            conn.commit()
+
+    def purged_info(self, fingerprint: str) -> Optional[dict]:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT purged_at, receipt_ref FROM provenex_purged_fingerprints "
+                    "WHERE fingerprint = %s",
+                    (fingerprint,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        return {"purged_at": row[0], "receipt_ref": row[1]}
+
+    def _purged_set(self, fingerprints: Sequence[str]) -> set:
+        if not fingerprints:
+            return set()
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT fingerprint FROM provenex_purged_fingerprints "
+                    "WHERE fingerprint = ANY(%s)",
+                    (list(fingerprints),),
+                )
+                return {r[0] for r in cur.fetchall()}
+
+    def _outcome(self, entry: Optional[IndexEntry], purged: bool) -> VerificationOutcome:
+        outcome = _reduce_entry_to_outcome(entry, self._secret)
+        if purged and entry is not None and outcome != VerificationOutcome.TAMPERED:
+            return VerificationOutcome.PURGED
+        return outcome
+
+    def entries_for_document(self, document_id: str) -> List[IndexEntry]:
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT f.fingerprint, f.document_id, f.document_version, "
+                    "       f.ingested_at, f.chunk_offset, f.chunk_length, "
+                    "       f.superseded, f.signature, d.authorized, "
+                    "       f.entry_kind "
+                    "FROM provenex_fingerprints f "
+                    "JOIN provenex_documents d ON d.document_id = f.document_id "
+                    "WHERE f.document_id = %s AND f.superseded = FALSE "
+                    "ORDER BY f.chunk_offset, f.fingerprint",
+                    (document_id,),
+                )
+                rows = cur.fetchall()
+        return [
+            IndexEntry(
+                fingerprint=r[0],
+                document_id=r[1],
+                document_version=r[2],
+                ingested_at=r[3],
+                chunk_offset=r[4],
+                chunk_length=r[5],
+                authorized=bool(r[8]),
+                superseded=bool(r[6]),
+                signature=r[7],
+                entry_kind=r[9],
+            )
+            for r in rows
+        ]
+
     # ----------------------------------------------------------- verify
 
     def verify(self, fingerprint: str) -> VerificationOutcome:
-        return _reduce_entry_to_outcome(self.lookup(fingerprint), self._secret)
+        entry = self.lookup(fingerprint)
+        return self._outcome(entry, fingerprint in self._purged_set([fingerprint]))
 
     # ------------------------------------------------------- verify_batch
 
@@ -466,10 +562,11 @@ class PostgresProvenanceIndex(ProvenanceIndex):
                 entry_kind=row[9],
             )
 
+        purged = self._purged_set(unique)
         out: List[Tuple[VerificationOutcome, Optional[IndexEntry]]] = []
         for fp in fingerprints:
             entry = preferred.get(fp)
-            out.append((_reduce_entry_to_outcome(entry, self._secret), entry))
+            out.append((self._outcome(entry, fp in purged), entry))
         return out
 
     # ----------------------------------------------------------- close

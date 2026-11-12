@@ -85,7 +85,7 @@ def test_stdout_jsonl_emits_one_line_per_receipt():
     lines = [line for line in buf.getvalue().splitlines() if line]
     assert len(lines) == 1
     d = json.loads(lines[0])
-    assert d["schema_version"] == "2.6.0"
+    assert d["schema_version"] == "2.7.0"
     assert d["receipt_id"].startswith("prx_")
 
 
@@ -121,7 +121,7 @@ def test_file_jsonl_appends_one_line_per_receipt(tmp_path):
     lines = [line for line in files[0].read_text().splitlines() if line]
     assert len(lines) == 3
     for line in lines:
-        assert json.loads(line)["schema_version"] == "2.6.0"
+        assert json.loads(line)["schema_version"] == "2.7.0"
 
 
 def test_file_jsonl_custom_prefix(tmp_path):
