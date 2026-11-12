@@ -88,9 +88,9 @@ Provenex is in active development. Security fixes are issued for:
 
 | Version | Supported |
 | --- | --- |
-| 1.0.x (current minor) | Yes |
-| 0.10.x | Critical fixes only |
-| <= 0.9.x | No |
+| 1.1.x (current minor) | Yes |
+| 1.0.x | Critical fixes only |
+| <= 0.10.x | No |
 
 Receipts produced under any version remain verifiable: rotation does not invalidate prior receipts, and the signature primitives (HMAC-SHA256, Ed25519) are not version-gated. The "supported" column governs which version we will publish a patched release of, not which receipts remain auditable.
 

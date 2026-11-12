@@ -125,7 +125,7 @@ from .trajectory import TrajectoryContext
 #       byte-identically to its 2.6.0 form apart from the version
 #       string itself, and older receipts verify unchanged.
 SCHEMA_VERSION = "2.7.0"
-ISSUER = "provenex-core/1.0.0"
+ISSUER = "provenex-core/1.1.0"
 
 
 # --------------------------------------------------------------------------- #

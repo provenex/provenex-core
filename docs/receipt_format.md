@@ -55,7 +55,7 @@ The schema is intentionally:
   "receipt_id": "prx_<32 hex chars>",
   "schema_version": "2.7.0",
   "issued_at": "2026-05-13T14:32:07.441Z",
-  "issuer": "provenex-core/1.0.0",
+  "issuer": "provenex-core/1.1.0",
   "caller_hash": "sha256:<64 hex chars>",   // optional (schema 2.3.0+)
   "request_binding": {                       // optional (schema 2.4.0+)
     "algorithm": "sha256",
@@ -87,7 +87,7 @@ The schema is intentionally:
 | `receipt_id` | string | Globally unique. Prefix `prx_` plus 32 hex characters (16 random bytes). |
 | `schema_version` | string | Semver. Always `2.7.0` for receipts produced by this SDK. |
 | `issued_at` | string | ISO-8601 UTC with millisecond precision, `Z` suffix. |
-| `issuer` | string | Software identifier, e.g. `provenex-core/1.0.0`. |
+| `issuer` | string | Software identifier, e.g. `provenex-core/1.1.0`. |
 | `caller_hash` | string | Optional (2.3.0+). `"sha256:<hex>"` over the canonical JSON of `request_context.caller`. Present on every receipt produced from a `RequestContext`; absent on the standalone-builder path. See **Top-level `caller_hash`** below. |
 | `request_binding` | object | Optional (2.4.0+). Cryptographically ties this receipt to the triggering query / prompt + request_context. Present when `verify_chunks(..., request_text=...)` or `admission_check(..., request_text=...)` is called with at least one of `request_text` or `request_context` supplied. See **Top-level `request_binding`** below. |
 | `index_status` | object | Optional (2.5.0+). Present only when this receipt was produced in `on_index_error="degrade"` mode AND the provenance index was actually unavailable for this call. Shape: `{ "available": false, "error_class": "timeout" \| "connection" \| "breaker_open" \| "other" }`. Distinguishes a "we tried to verify but could not reach the index" receipt from a receipt where every chunk happened to be a genuine miss. Covered by the receipt signature. See **Top-level `index_status`** below. |

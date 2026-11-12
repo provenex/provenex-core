@@ -7,7 +7,7 @@ Package versions follow [Semantic Versioning](https://semver.org/); the
 on-the-wire receipt format follows its own schema-semver, tracked in
 [docs/receipt_format.md](docs/receipt_format.md).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-12
 
 ### Added
 - **Deletion attestation** (deletion-attestation fixes F1 to F7, for ShareLess AI-Browser hygiene and other agent runtimes):
