@@ -147,7 +147,7 @@ See [`docs/policy.md`](policy.md) for the full DSL reference, the evaluator prot
 After verification, a `ReceiptBuilder` assembles a `ProvenanceReceipt`:
 
 - A fresh `receipt_id`
-- `schema_version` (currently `2.7.0`) and `issuer` (`provenex-core/1.0.0`)
+- `schema_version` (currently `2.7.0`) and `issuer` (`provenex-core/1.1.0`)
 - `issued_at` UTC timestamp
 - SHA-256 of the LLM output text (the text itself is not stored, just its hash)
 - The per-chunk source records (fingerprint, document metadata, verification outcome, normalization applied, `entry_kind`)
