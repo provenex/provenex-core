@@ -203,6 +203,17 @@ class Fingerprinter:
         """Apply this engine's normalization (the form fingerprints cover)."""
         return self._normalizer.normalize(text).text
 
+    def digest_normalized(self, normalized_text: str) -> str:
+        """Hash text that is already normalized.
+
+        Registration hashes a value after normalization
+        (:meth:`fingerprint_chunk`). An absence scan normalizes a store
+        file once, then hashes each window of that text. Both must call
+        this so a configured ``pepper`` keys every fingerprint the same
+        way. Without a pepper the result is plain SHA-256.
+        """
+        return self._hash_bytes(normalized_text.encode("utf-8"))
+
     def fingerprint_chunk(self, text: str) -> str:
         """Compute a single fingerprint over a chunk of text (no windowing).
 
@@ -221,4 +232,4 @@ class Fingerprinter:
             tooling reads the same.
         """
         norm = self._normalizer.normalize(text)
-        return self._hash_bytes(norm.text.encode("utf-8"))
+        return self.digest_normalized(norm.text)

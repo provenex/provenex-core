@@ -7,6 +7,11 @@ Package versions follow [Semantic Versioning](https://semver.org/); the
 on-the-wire receipt format follows its own schema-semver, tracked in
 [docs/receipt_format.md](docs/receipt_format.md).
 
+## [1.1.1] - 2026-11-16
+
+### Added
+- Absence scans honor a `Fingerprinter` pepper. Registration and `verify_absence` must be given the same pepper; the fingerprint is then HMAC-SHA256 and a card number cannot be recovered from the receipt by trying candidates. The CLI and the default fingerprinter stay on plain SHA-256, and an unkeyed receipt keeps the 1.1.0 fields, so ShareLess 1.1.0 is unchanged.
+
 ## [1.1.0] - 2026-11-12
 
 ### Added

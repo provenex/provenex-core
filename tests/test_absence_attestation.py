@@ -83,6 +83,13 @@ def test_register_present_purge_absent_verifies_offline(tmp_path):
     assert verify_absence_receipt(absent.to_dict(), verifier)
     # And from the public key embedded in the receipt itself.
     assert verify_absence_receipt(absent.to_dict())
+    # ShareLess 1.1.0 checks this shape. A pepper must not add a field
+    # to the unkeyed receipt.
+    assert set(absent.to_dict()) == {
+        "receipt_type", "schema_version", "receipt_id", "issued_at",
+        "verdict", "results", "stores", "files_scanned", "unscanned_files",
+        "signer", "signature",
+    }
     # Tampering with the verdict breaks the signature.
     forged = absent.to_dict()
     forged["verdict"] = "PRESENT"
@@ -146,6 +153,57 @@ def test_short_secret_preset_and_supported_scan(tmp_path):
         f.fingerprint for f in exact.fingerprint(text).fingerprints
     }
     assert len(fingerprints) > len(text) // 8
+
+
+def test_pepper_keys_the_fingerprint_and_still_finds_the_value(tmp_path):
+    """A pepper keeps a card number from being readable off the receipt.
+
+    Registration and the scan must share that pepper. The unkeyed
+    scanner, which is what the CLI and ShareLess 1.1.0 run, looks for
+    plain SHA-256 and therefore does not see a keyed registration.
+    That miss is ABSENT, so a keyed registration must not be scanned
+    with the default fingerprinter.
+    """
+    pepper = b"phone-held-pepper-not-on-the-receipt"
+    keyed = Fingerprinter(FingerprinterConfig(pepper=pepper))
+    plain = Fingerprinter()
+    card = "4242 4242 4242 4242"
+    idx = _index(tmp_path)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "a.log").write_text(f"card {card}\n")
+    fps = register_values(idx, [card], "checkout-1", fingerprinter=keyed)
+    assert fps[0].startswith("sha256:")
+    assert fps[0] != plain.fingerprint_chunk(card)
+    signer = Ed25519Signer.generate()
+    present = verify_absence(
+        idx, fps, [_store(tmp_path)], signer, fingerprinter=keyed
+    )
+    assert present.verdict == "PRESENT"
+    assert present.results[0]["fingerprint"] == fps[0]
+    assert set(present.to_dict()) == {
+        "receipt_type", "schema_version", "receipt_id", "issued_at",
+        "verdict", "results", "stores", "files_scanned", "unscanned_files",
+        "signer", "signature",
+    }
+    assert verify_absence_receipt(present.to_dict())
+    missed = verify_absence(idx, fps, [_store(tmp_path)], signer)
+    assert missed.verdict == "ABSENT"
+
+
+def test_standalone_verifier_accepts_absence_receipt(tmp_path):
+    """provenex-verifier checks this signature without provenex-core."""
+    pytest.importorskip("provenex_verifier")
+    from provenex_verifier import verify_receipt
+
+    idx = _index(tmp_path)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    fps = register_values(idx, ["SECRET-42-XYZ"], "checkout-1")
+    signer = Ed25519Signer.generate()
+    receipt = verify_absence(idx, fps, [_store(tmp_path)], signer)
+    result = verify_receipt(receipt.to_dict(), signer.public_key_pem())
+    assert result.valid, result.errors
 
 
 # ----------------------------------------------------------------- tombstones

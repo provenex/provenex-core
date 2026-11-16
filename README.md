@@ -1,9 +1,9 @@
 # provenex-core
 
 [![test](https://github.com/provenex/provenex-core/actions/workflows/test.yml/badge.svg)](https://github.com/provenex/provenex-core/actions/workflows/test.yml)
-[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=1.1.0)](https://pypi.org/project/provenex-core/)
+[![PyPI](https://img.shields.io/pypi/v/provenex-core.svg?cacheSeconds=300&v=1.1.1)](https://pypi.org/project/provenex-core/)
 [![Downloads](https://img.shields.io/pypi/dm/provenex-core.svg?cacheSeconds=3600)](https://pypistats.org/packages/provenex-core)
-[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=1.1.0)](https://pypi.org/project/provenex-core/)
+[![Python](https://img.shields.io/pypi/pyversions/provenex-core.svg?cacheSeconds=300&v=1.1.1)](https://pypi.org/project/provenex-core/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/provenex/provenex-core/blob/main/LICENSE)
 [![SBOM](https://img.shields.io/badge/SBOM-CycloneDX-blue.svg)](https://github.com/provenex/provenex-core/blob/main/docs/supply_chain.md)
 [![Sigstore](https://img.shields.io/badge/PyPI-Sigstore--signed-blueviolet.svg)](https://docs.pypi.org/attestations/)
@@ -116,7 +116,7 @@ One signed receipt per retrieval or per tool call. Retrieval receipts carry `sou
 {
   "receipt_id": "prx_f2de431dc125ccfc6b57e6ca327fa504",
   "schema_version": "2.7.0",
-  "issuer": "provenex-core/1.1.0",
+  "issuer": "provenex-core/1.1.1",
   "caller_hash": "sha256:7a2bf01571c43f...",
   "request_binding": {
     "algorithm": "sha256",
@@ -416,12 +416,23 @@ manifest** (`store_id`, `path_globs`, `class`, `owner`, `links`) — the
 enumeration that determines what an absence claim covers. Values are
 registered as fingerprints plus normalized lengths (never content);
 scanning normalizes each store file and looks for exactly those
-lengths, so a short secret embedded in a large log is found. After a
+lengths, so a short secret embedded in a large log is found. The CLI
+fingerprint is plain SHA-256 of that normalized text. A card number can
+be recovered from that fingerprint by trying candidates, which is the
+ShareLess 1.1.0 contract and is unchanged. To key the fingerprint,
+pass one `Fingerprinter` built with a `pepper` to both `register_values`
+and `verify_absence`. The receipt keeps the same fields. Registration
+and the scan have to use that same pepper: a scan with a different one
+will not see the value. After a
 purge, `purge-mark` records a tombstone per fingerprint, and later
 verification returns `PURGED` (distinct from `UNAUTHORIZED`) if purged
 content is ever presented again. Python API:
 `provenex.verify_absence`, `provenex.register_values`,
-`provenex.verify_absence_receipt`.
+`provenex.verify_absence_receipt`. The signature alone, with no policy
+engine installed, is checked by
+[`provenex-verifier`](https://github.com/provenex/provenex-verifier-python).
+That library does not check current engine evidence; that is
+[`provenex-verify`](https://github.com/provenex/provenex-verify).
 
 ## Worked example: the regulator's seven questions
 

@@ -25,6 +25,17 @@ intersects with the registered set. A registered value embedded
 anywhere in a larger file (the runtime-log case) is found; its absence
 across every enrolled store is what the receipt attests.
 
+The default fingerprint is plain SHA-256 of the normalized value. That
+is what the CLI and the ShareLess 1.1.0 registrar use, and a low-entropy
+value such as a card number can be recovered from it by trying every
+candidate. Pass the same :class:`~provenex.core.fingerprinter.Fingerprinter`
+with a ``pepper`` to registration and to :func:`verify_absence` to key
+the fingerprint (HMAC-SHA256). The receipt still says ``sha256:`` and
+gains no new field, so an existing 1.1.0 checker keeps reading it. A
+scan that uses a different pepper than registration will not find the
+value and can report ``ABSENT`` while the bytes are still on disk, so
+the two calls must share one pepper.
+
 Normalization caveat (read before relying on short-secret scans):
 fingerprints are taken over normalized text (whitespace runs collapsed,
 case folded by default). Scanning therefore treats values that differ
@@ -40,7 +51,6 @@ file. Fine for log-sized stores; not a full-text search engine.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -196,8 +206,15 @@ def register_file(
 def _scan_text(
     normalized_text: str,
     targets_by_length: Dict[int, Set[str]],
+    fingerprinter: Fingerprinter,
 ) -> Set[str]:
-    """Fingerprints from ``targets_by_length`` found in normalized text."""
+    """Fingerprints from ``targets_by_length`` found in normalized text.
+
+    Windows are hashed with the same function registration used
+    (:meth:`Fingerprinter.digest_normalized`), so a pepper set on
+    ``fingerprinter`` is applied here too. Without a pepper this is
+    plain SHA-256, identical to the 1.1.0 scanner.
+    """
     found: Set[str] = set()
     for length, targets in targets_by_length.items():
         if length <= 0 or length > len(normalized_text):
@@ -207,8 +224,7 @@ def _scan_text(
                 continue
         for i in range(0, len(normalized_text) - length + 1):
             window = normalized_text[i : i + length]
-            digest = hashlib.sha256(window.encode("utf-8")).digest()
-            fp = "sha256:" + digest.hex()
+            fp = fingerprinter.digest_normalized(window)
             if fp in targets:
                 found.add(fp)
     return found
@@ -295,7 +311,7 @@ def verify_absence(
                 )
                 continue
             normalized = fp_engine.normalize(text)
-            for fp in _scan_text(normalized, targets_by_length):
+            for fp in _scan_text(normalized, targets_by_length, fp_engine):
                 found_in[fp].add(store.store_id)
             scanned_here += 1
         files_scanned += scanned_here
